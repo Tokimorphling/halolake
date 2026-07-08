@@ -1,0 +1,35 @@
+[package]
+name = "halolake-gateway-monoio"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+halolake-api-contract = { workspace = true }
+halolake-protocol = { workspace = true }
+halolake-router-core = { workspace = true }
+
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+bytes = { workspace = true }
+certain-map = { workspace = true }
+clap = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+monoio = { workspace = true }
+monoio-compat = { workspace = true }
+monoio-http = { workspace = true }
+monoio-native-tls = { workspace = true }
+monoio-transports = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+service-async = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }

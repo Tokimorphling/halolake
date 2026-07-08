@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "apps/gateway-monoio",
+    "crates/api-contract",
+    "crates/protocol",
+    "crates/router-core",
+]
+resolver = "2"
+
+[workspace.package]
+authors = ["halolake contributors"]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/halolake/halolake"
+
+[workspace.dependencies]
+halolake-api-contract = { path = "crates/api-contract" }
+halolake-protocol = { path = "crates/protocol" }
+halolake-router-core = { path = "crates/router-core" }
+
+anyhow = "1"
+async-stream = "0.3"
+bytes = "1"
+certain-map = "0.3.1"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server", "client"] }
+monoio = { version = "0.2.4", features = ["sync"] }
+monoio-compat = { version = "0.2.2", features = ["hyper"] }
+monoio-http = { version = "0.3.5", features = ["encoding"] }
+monoio-native-tls = "0.3.0"
+monoio-transports = { version = "0.5.3", features = ["logging", "rustls-unsafe-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+service-async = "0.2.3"
+thiserror = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+[profile.release-lto]
+inherits = "release"
+lto = true
