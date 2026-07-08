@@ -10,7 +10,9 @@ struct Args {
 
 #[monoio::main(timer_enabled = true)]
 async fn main() -> Result<()> {
+    let (log_writer, _log_flush_guard) = tracing_appender::non_blocking(std::io::stderr());
     tracing_subscriber::fmt()
+        .with_writer(log_writer)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     monoio_native_tls::init();
