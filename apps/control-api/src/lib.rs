@@ -132,6 +132,14 @@ const TOKEN_STATUS_EXHAUSTED: i32 = 4;
 const DEFAULT_MODEL_RATIO_JSON: &str = "{}";
 const DEFAULT_CHANNEL_AFFINITY_RULES_JSON: &str = r#"[{"name":"codex cli trace","model_regex":["^gpt-.*$"],"path_regex":["/v1/responses"],"key_sources":[{"type":"gjson","path":"prompt_cache_key"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["Originator","Session_id","User-Agent","X-Codex-Beta-Features","X-Codex-Turn-Metadata"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true},{"name":"claude cli trace","model_regex":["^claude-.*$"],"path_regex":["/v1/messages"],"key_sources":[{"type":"gjson","path":"metadata.user_id"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["X-Stainless-Arch","X-Stainless-Lang","X-Stainless-Os","X-Stainless-Package-Version","X-Stainless-Retry-Count","X-Stainless-Runtime","X-Stainless-Runtime-Version","X-Stainless-Timeout","User-Agent","X-App","Anthropic-Beta","Anthropic-Dangerous-Direct-Browser-Access","Anthropic-Version"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true}]"#;
 
+#[derive(Debug, Clone, Copy)]
+struct EmbeddedAsset {
+    path: &'static str,
+    bytes: &'static [u8],
+}
+
+include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ControlApiConfig {
     #[serde(default)]
@@ -1465,7 +1473,7 @@ async fn api_status(State(state): State<AppState>) -> Response {
         "setup": setup,
         "database_type": storage_backend_name(state.storage_backend),
         "system_name": option_str(&option_values, "SystemName", state.system_name.as_ref()),
-        "theme": option_str(&option_values, "theme.frontend", "default"),
+        "theme": option_str(&option_values, "theme.frontend", state.web.theme.as_str()),
         "server_address": option_str(&option_values, "ServerAddress", ""),
         "quota_per_unit": option_f64(&option_values, "QuotaPerUnit", 500000.0),
         "display_in_currency": option_bool(&option_values, "DisplayInCurrencyEnabled", false),
@@ -4941,7 +4949,8 @@ async fn web_fallback(State(state): State<AppState>, method: Method, uri: Uri) -
     if is_control_or_relay_path(path) {
         return json_error(StatusCode::NOT_FOUND, "not found");
     }
-    let root = selected_web_dist(&state);
+    let selected = selected_web_dist(&state);
+    let root = &selected.root;
     let Some(candidate) = safe_static_file_path(&root, path) else {
         return json_error(StatusCode::BAD_REQUEST, "invalid static path");
     };
@@ -4952,22 +4961,70 @@ async fn web_fallback(State(state): State<AppState>, method: Method, uri: Uri) -
         }
         _ => {}
     }
+    if let Some(asset_path) = static_asset_path(path) {
+        if let Some(asset) = selected.embedded(asset_path.as_str()) {
+            return embedded_file_response(asset, method == Method::HEAD, is_index_file(path));
+        }
+    }
     if is_static_asset_request(path) {
         return json_error(StatusCode::NOT_FOUND, "static asset not found");
     }
-    static_file_response(root.join("index.html"), method == Method::HEAD, true).await
+    let index_path = root.join("index.html");
+    match tokio::fs::metadata(&index_path).await {
+        Ok(metadata) if metadata.is_file() => {
+            static_file_response(index_path, method == Method::HEAD, true).await
+        }
+        _ => {
+            if let Some(asset) = selected.embedded("index.html") {
+                embedded_file_response(asset, method == Method::HEAD, true)
+            } else {
+                json_error(StatusCode::NOT_FOUND, "web asset not found")
+            }
+        }
+    }
 }
 
-fn selected_web_dist(state: &AppState) -> PathBuf {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebTheme {
+    Default,
+    Classic,
+}
+
+#[derive(Debug, Clone)]
+struct SelectedWebDist {
+    theme: WebTheme,
+    root: PathBuf,
+}
+
+impl SelectedWebDist {
+    fn embedded(&self, path: &str) -> Option<&'static EmbeddedAsset> {
+        let assets = match self.theme {
+            WebTheme::Default => DEFAULT_WEB_ASSETS,
+            WebTheme::Classic => CLASSIC_WEB_ASSETS,
+        };
+        assets
+            .binary_search_by_key(&path, |asset| asset.path)
+            .ok()
+            .and_then(|index| assets.get(index))
+    }
+}
+
+fn selected_web_dist(state: &AppState) -> SelectedWebDist {
     let options = state.options.values().unwrap_or_default();
     let theme = options
         .get("theme.frontend")
         .map(String::as_str)
         .unwrap_or(state.web.theme.as_str());
     if theme == "classic" {
-        state.web.classic_dist.clone()
+        SelectedWebDist {
+            theme: WebTheme::Classic,
+            root: state.web.classic_dist.clone(),
+        }
     } else {
-        state.web.default_dist.clone()
+        SelectedWebDist {
+            theme: WebTheme::Default,
+            root: state.web.default_dist.clone(),
+        }
     }
 }
 
@@ -4981,6 +5038,22 @@ fn is_static_asset_request(path: &str) -> bool {
 
 fn is_index_file(path: &str) -> bool {
     path == "/" || path.ends_with("/index.html")
+}
+
+fn static_asset_path(request_path: &str) -> Option<String> {
+    let relative = request_path.trim_start_matches('/');
+    let normalized = if relative.is_empty() {
+        "index.html"
+    } else {
+        relative
+    };
+    for component in FsPath::new(normalized).components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized.to_string())
 }
 
 fn safe_static_file_path(root: &FsPath, request_path: &str) -> Option<PathBuf> {
@@ -5000,11 +5073,16 @@ fn safe_static_file_path(root: &FsPath, request_path: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-async fn static_file_response(path: PathBuf, _head: bool, no_cache: bool) -> Response {
+async fn static_file_response(path: PathBuf, head: bool, no_cache: bool) -> Response {
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
             let content_length = bytes.len().to_string();
-            let mut response = Response::new(Body::from(bytes));
+            let body = if head {
+                Body::empty()
+            } else {
+                Body::from(bytes)
+            };
+            let mut response = Response::new(body);
             response.headers_mut().insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static(static_content_type(&path)),
@@ -5027,6 +5105,32 @@ async fn static_file_response(path: PathBuf, _head: bool, no_cache: bool) -> Res
             json_error(StatusCode::NOT_FOUND, "web asset not found")
         }
     }
+}
+
+fn embedded_file_response(asset: &EmbeddedAsset, head: bool, no_cache: bool) -> Response {
+    let content_length = asset.bytes.len().to_string();
+    let body = if head {
+        Body::empty()
+    } else {
+        Body::from(asset.bytes)
+    };
+    let mut response = Response::new(body);
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(static_content_type(FsPath::new(asset.path))),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(if no_cache {
+            "no-cache"
+        } else {
+            "public, max-age=31536000, immutable"
+        }),
+    );
+    if let Ok(value) = HeaderValue::from_str(&content_length) {
+        response.headers_mut().insert(CONTENT_LENGTH, value);
+    }
+    response
 }
 
 fn static_content_type(path: &FsPath) -> &'static str {

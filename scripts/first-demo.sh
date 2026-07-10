@@ -6,6 +6,7 @@ CONTROL_CONFIG="${CONTROL_CONFIG:-examples/control-api.toml}"
 GATEWAY_CONFIG="${GATEWAY_CONFIG:-examples/gateway-control.toml}"
 ENV_FILE="${ENV_FILE:-.env}"
 BUILD_WEB=auto
+WEB_BUILD_ID="${HALOLAKE_WEB_BUILD_ID:-}"
 
 usage() {
   cat <<'USAGE'
@@ -14,7 +15,7 @@ Usage: scripts/first-demo.sh [--rebuild-web] [--skip-web-build]
 Starts the first demo stack:
   - control-api on 127.0.0.1:9090
   - gateway-monoio on 127.0.0.1:8082
-  - web served by control-api from web/new-api/default/dist
+  - web served by control-api from disk dist, with embedded assets as fallback
 
 Environment:
   ENV_FILE=.env
@@ -100,6 +101,7 @@ if [[ "$BUILD_WEB" == yes || ( "$BUILD_WEB" == auto && "$dist_missing" == true )
     (cd default && VITE_REACT_APP_VERSION=halolake-demo bun run build)
     (cd classic && VITE_REACT_APP_VERSION=halolake-demo bun run build)
   )
+  WEB_BUILD_ID="${WEB_BUILD_ID:-$(date +%s)}"
 elif [[ "$BUILD_WEB" == auto ]]; then
   echo "[demo] web dist exists; use --rebuild-web to rebuild"
 fi
@@ -140,7 +142,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[demo] starting control-api with $CONTROL_CONFIG"
-RUST_LOG="${RUST_LOG:-info}" cargo run -p halolake-control-api -- --config "$CONTROL_CONFIG" &
+if [[ -n "$WEB_BUILD_ID" ]]; then
+  HALOLAKE_WEB_BUILD_ID="$WEB_BUILD_ID" RUST_LOG="${RUST_LOG:-info}" cargo run -p halolake-control-api -- --config "$CONTROL_CONFIG" &
+else
+  RUST_LOG="${RUST_LOG:-info}" cargo run -p halolake-control-api -- --config "$CONTROL_CONFIG" &
+fi
 CONTROL_PID=$!
 
 wait_for_http "http://127.0.0.1:9090/healthz" "control-api"

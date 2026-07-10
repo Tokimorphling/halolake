@@ -15,6 +15,7 @@
 - control-api 作为 gateway 控制面的最小闭环，已经有可用基础。
 - control-api 还不能替换完整 new-api backend。
 - web 前端本身可构建、可被 control-api 静态托管；但完整使用会大量 404。
+- web dist 现在可以打包进 `control-api` 二进制；运行时优先读磁盘 dist，缺失时回退到内置资源。
 - 基础后台管理可用度粗估约 50%-60%。
 - 支付/订阅/OAuth/deployment/异步任务等产品能力仍是明显缺口。
 
@@ -45,6 +46,7 @@
 - `/api/status` 返回 200 且 `success=true`
 - `/` 返回 SPA `index.html`
 - 静态 JS chunk 可返回
+- 从非仓库工作目录启动时，磁盘 dist 相对路径不可用，`/` 仍可通过内置 web 资源返回 SPA `index.html`
 - `POST /api/user/login` 使用 `root` / `halolake-root-dev` 登录成功
 - `GET /api/user/self` 返回 root 用户信息
 - `/api/deployments/settings` 返回 404
@@ -193,27 +195,13 @@ rsync -a --delete \
 
 如果希望 `web/new-api` 与 upstream 完全零差异，需要改为在依赖层固定 classic 的 `date-fns@2.x` 解析，或者等 upstream 处理 classic/default workspace 的依赖冲突。
 
-### P2: `[web].theme = "classic"` 时 `/api/status` 可能仍返回 default
+### 已修复: `[web].theme = "classic"` 时 `/api/status` 可能仍返回 default
 
 静态文件选择：
 
 - `selected_web_dist()` 会用 option `theme.frontend`，否则 fallback 到 `[web].theme`
 
-`/api/status`：
-
-- `theme` 字段只用 option，硬编码 fallback `"default"`
-
-如果只在 TOML 配：
-
-```toml
-[web]
-theme = "classic"
-```
-
-则可能出现：
-
-- 静态资源发 classic
-- `/api/status.theme` 仍告诉前端 default
+`/api/status.theme` 已改为同样 fallback 到 `[web].theme`，避免只在 TOML 配 classic 时前后端主题不一致。
 
 ## 完成度分层
 
@@ -248,7 +236,7 @@ theme = "classic"
 ### 前端本身
 
 - default / classic 两套主题源码可构建
-- control-api 支持按主题托管静态资源与 SPA fallback
+- control-api 支持按主题托管静态资源、SPA fallback，以及编译期内置 web dist fallback
 - frontend 不是阻塞点；阻塞点在 control-api 兼容面
 
 ## 建议优先级

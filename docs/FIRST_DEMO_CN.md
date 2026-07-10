@@ -8,6 +8,7 @@
   - 监听：`127.0.0.1:9090`
   - 配置：`examples/control-api.toml`
   - 职责：后台 API、web 静态托管、内部 snapshot、usage/log/data 回写
+  - web：优先读取磁盘 `dist`；编译时存在的 `dist` 会被打包进二进制作为 fallback
 - `halolake-gateway-monoio`
   - 监听：`127.0.0.1:8082`
   - 配置：`examples/gateway-control.toml`
@@ -41,13 +42,18 @@ models = ["deepseek-v4-pro"]
 安装前端依赖并构建静态资源：
 
 ```sh
-cd web/new-api
-bun install
-(cd default && VITE_REACT_APP_VERSION=halolake-demo bun run build)
-(cd classic && VITE_REACT_APP_VERSION=halolake-demo bun run build)
+make build-web
 ```
 
 classic 构建有一个本地兼容处理：`classic/rsbuild.config.ts` 将 `date-fns` alias 到 Semi UI 自带的 `date-fns@2.30.0`，避免 classic 的 `date-fns-tz@1.3.8` 解析到 workspace 根部 `date-fns@4.x`。
+
+如果要生成一个已经内置当前 web dist 的 `control-api` 二进制：
+
+```sh
+make build-control-web
+```
+
+内置资源不是替代开发时的磁盘 `dist`。运行时会先查 `[web].default_dist` / `[web].classic_dist`，文件不存在时才回退到编译进二进制的资源。
 
 ## 启动
 
@@ -68,6 +74,7 @@ make demo
 - 读取 `.env`
 - 检查 `OPENAI_API_KEY`
 - 在缺少前端 dist 时自动构建 default/classic web
+- 如果本次构建了前端，会强制刷新 control-api 的内置 web 资源
 - 启动 control-api 和 gateway
 - 等待 `9090`、`8082` 就绪
 - 按 `Ctrl-C` 时同时清理两个子进程
@@ -192,6 +199,16 @@ curl -sS -b /tmp/halolake-control.cookie \
 - `token_id = "dev-token"`
 - 有 prompt/completion token 和 quota
 
+本轮实测：
+
+- `make demo` 成功启动 control-api 和 gateway。
+- `GET /healthz`、`GET /api/status`、`GET /`、`GET /v1/models` 均正常。
+- snapshot 中 `openai-main` 使用 `base_url = "https://ioll.pp.ua"` 和 `api_key_env = "OPENAI_API_KEY"`，启动时已解析真实 key。
+- `POST /v1/chat/completions` 经 gateway 重试后稳定返回 `pong`。
+- control-api `/api/log` 能看到成功请求的 `consume quota` 记录。
+- 观察到一次 upstream TLS handshake EOF；同一 upstream 直接 `curl` 也出现过 SSL syscall，后续经 gateway 重试成功，优先按 upstream 边缘偶发连接问题处理。
+- 从 `/tmp` 启动 `target/debug/halolake-control-api` 时，配置里的相对 dist 路径不可用，`/` 和 `/logo.png` 仍能通过内置 web 资源返回。
+
 ## 调试
 
 确认端口：
@@ -225,7 +242,8 @@ cargo run -p halolake-gateway-monoio -- --config examples/gateway-control.toml
 - gateway 返回 `model is not allowed for this token`
   - 请求模型必须在 `examples/control-api.toml` 的 `[[tokens]].allowed_models` 中。
 - web 404 或静态资源旧
-  - 重新构建 `web/new-api/default`，control-api 默认托管 `web/new-api/default/dist`。
+  - 重新执行 `make build-web` 或 `./scripts/first-demo.sh --rebuild-web`。
+  - 如果要确认内置资源已刷新，执行 `make build-control-web`。
 
 ## 纯 gateway 对照启动
 
@@ -250,6 +268,7 @@ cargo run -p halolake-gateway-monoio -- --config examples/gateway.toml
 - OpenAI-compatible chat 转发成功
 - usage/log 回写到 control-api
 - new-api web 静态托管
+- web dist 可被打包进 `control-api`，作为磁盘 dist 缺失时的 fallback
 
 仍未完成或需要优先补齐：
 
