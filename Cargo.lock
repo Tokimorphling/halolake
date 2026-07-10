@@ -1389,6 +1389,7 @@ dependencies = [
  "monoio-http",
  "monoio-native-tls",
  "monoio-transports",
+ "rustls 0.23.41",
  "serde",
  "serde_json",
  "service-async",

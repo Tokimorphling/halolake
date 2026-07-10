@@ -320,6 +320,68 @@ struct ChannelAffinityCacheEntry {
     expires_at: Instant,
 }
 
+/// Mutable channel-affinity cache, deliberately kept OUTSIDE `IndexedSnapshot`.
+///
+/// The snapshot is an immutable, atomically-swapped structure: a new one is
+/// built and swapped in on every control-plane poll. Embedding this cache in it
+/// (as an earlier version did) meant the cache was silently discarded on every
+/// refresh — so any affinity TTL longer than the poll interval never took
+/// effect — and put a mutable lock inside the "read-only" hot-path snapshot.
+///
+/// Owning it separately lets a worker keep one cache alive across snapshot
+/// swaps. It is `Send + Sync` so it can also be shared behind an `Arc`.
+#[derive(Debug, Default)]
+pub struct ChannelAffinityCache {
+    entries: RwLock<HashMap<String, ChannelAffinityCacheEntry>>,
+}
+
+impl ChannelAffinityCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn get(&self, cache_key: &str) -> Option<String> {
+        let now = Instant::now();
+        let mut cache = self.entries.write().ok()?;
+        let entry = cache.get(cache_key)?;
+        if entry.expires_at <= now {
+            cache.remove(cache_key);
+            return None;
+        }
+        Some(entry.channel_id.clone())
+    }
+
+    fn clear(&self, cache_key: &str) {
+        if let Ok(mut cache) = self.entries.write() {
+            cache.remove(cache_key);
+        }
+    }
+
+    fn record(&self, affinity: &ChannelAffinityCandidate, channel_id: &str, max_entries: usize) {
+        let ttl = Duration::from_secs(affinity.ttl_seconds.max(1));
+        let mut cache = match self.entries.write() {
+            Ok(cache) => cache,
+            Err(_) => return,
+        };
+        if cache.len() >= max_entries.max(1)
+            && !cache.contains_key(&affinity.cache_key)
+            && let Some(expired_key) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.expires_at)
+                .map(|(key, _)| key.clone())
+        {
+            cache.remove(&expired_key);
+        }
+        cache.insert(
+            affinity.cache_key.clone(),
+            ChannelAffinityCacheEntry {
+                channel_id: channel_id.to_string(),
+                expires_at: Instant::now() + ttl,
+            },
+        );
+    }
+}
+
 #[derive(Debug)]
 pub struct IndexedSnapshot {
     version: u64,
@@ -327,7 +389,6 @@ pub struct IndexedSnapshot {
     channels: HashMap<String, ChannelConfig>,
     mappings: HashMap<String, Vec<ModelMapping>>,
     affinity: IndexedChannelAffinity,
-    affinity_cache: RwLock<HashMap<String, ChannelAffinityCacheEntry>>,
 }
 
 #[derive(Debug, Clone)]
@@ -507,8 +568,18 @@ impl IndexedSnapshot {
         requested_model: &'a str,
         seed: u64,
     ) -> Result<RouteDecision<'a>, RouteError> {
-        self.route_with_affinity_seed(auth, requested_model, None, seed)
-            .map(|(route, _)| route)
+        // No affinity candidate, so the affinity cache is never consulted; go
+        // straight to weighted routing rather than requiring a cache handle.
+        if !auth.token.allowed_models().is_empty()
+            && !auth
+                .token
+                .allowed_models()
+                .iter()
+                .any(|model| model == requested_model)
+        {
+            return Err(RouteError::ModelForbidden);
+        }
+        self.route_weighted(auth, requested_model, seed)
     }
 
     pub fn route_with_affinity_seed<'a>(
@@ -516,6 +587,7 @@ impl IndexedSnapshot {
         auth: &AuthContext<'a>,
         requested_model: &'a str,
         affinity: Option<&ChannelAffinityCandidate>,
+        cache: &ChannelAffinityCache,
         seed: u64,
     ) -> Result<(RouteDecision<'a>, bool), RouteError> {
         if !auth.token.allowed_models().is_empty()
@@ -535,7 +607,7 @@ impl IndexedSnapshot {
                 return Ok((route, true));
             }
             if !self.affinity.config.keep_on_channel_disabled {
-                self.clear_affinity(&candidate.cache_key);
+                cache.clear(&candidate.cache_key);
             }
         }
 
@@ -550,6 +622,7 @@ impl IndexedSnapshot {
         user_agent: &str,
         using_group: &str,
         body: &[u8],
+        cache: &ChannelAffinityCache,
         mut header_value: F,
     ) -> Option<ChannelAffinityCandidate>
     where
@@ -610,7 +683,7 @@ impl IndexedSnapshot {
                 self.affinity.config.default_ttl_seconds.max(1)
             };
             let cache_key = affinity_cache_key(rule, requested_model, using_group, &affinity_value);
-            let cached_channel_id = self.affinity_cached_channel(&cache_key);
+            let cached_channel_id = cache.get(&cache_key);
             return Some(ChannelAffinityCandidate {
                 cache_key,
                 ttl_seconds,
@@ -621,30 +694,24 @@ impl IndexedSnapshot {
         None
     }
 
-    pub fn record_affinity(&self, affinity: &ChannelAffinityCandidate, channel_id: &str) {
+    /// Records a successful affinity decision into the caller-owned cache.
+    ///
+    /// The cache lives outside the snapshot (see [`ChannelAffinityCache`]) so it
+    /// survives atomic snapshot swaps; the snapshot only contributes the
+    /// enabled flag and the max-entries bound from its config.
+    pub fn record_affinity(
+        &self,
+        cache: &ChannelAffinityCache,
+        affinity: &ChannelAffinityCandidate,
+        channel_id: &str,
+    ) {
         if !self.affinity.config.enabled || channel_id.is_empty() {
             return;
         }
-        let ttl = Duration::from_secs(affinity.ttl_seconds.max(1));
-        let mut cache = match self.affinity_cache.write() {
-            Ok(cache) => cache,
-            Err(_) => return,
-        };
-        if cache.len() >= self.affinity.config.max_entries.max(1)
-            && !cache.contains_key(&affinity.cache_key)
-            && let Some(expired_key) = cache
-                .iter()
-                .min_by_key(|(_, entry)| entry.expires_at)
-                .map(|(key, _)| key.clone())
-        {
-            cache.remove(&expired_key);
-        }
-        cache.insert(
-            affinity.cache_key.clone(),
-            ChannelAffinityCacheEntry {
-                channel_id: channel_id.to_string(),
-                expires_at: Instant::now() + ttl,
-            },
+        cache.record(
+            affinity,
+            channel_id,
+            self.affinity.config.max_entries.max(1),
         );
     }
 
@@ -747,25 +814,6 @@ impl IndexedSnapshot {
         }
         None
     }
-
-    fn affinity_cached_channel(&self, cache_key: &str) -> Option<String> {
-        let now = Instant::now();
-        let mut cache = self.affinity_cache.write().ok()?;
-        let Some(entry) = cache.get(cache_key) else {
-            return None;
-        };
-        if entry.expires_at <= now {
-            cache.remove(cache_key);
-            return None;
-        }
-        Some(entry.channel_id.clone())
-    }
-
-    fn clear_affinity(&self, cache_key: &str) {
-        if let Ok(mut cache) = self.affinity_cache.write() {
-            cache.remove(cache_key);
-        }
-    }
 }
 
 impl TryFrom<GatewaySnapshot> for IndexedSnapshot {
@@ -810,7 +858,6 @@ impl TryFrom<GatewaySnapshot> for IndexedSnapshot {
             channels,
             mappings,
             affinity,
-            affinity_cache: RwLock::new(HashMap::new()),
         })
     }
 }
@@ -1255,29 +1302,39 @@ mod tests {
             },
             group_routing: Default::default(),
         };
+        let snapshot_clone = snapshot.clone();
         let indexed = snapshot.index().expect("snapshot should index");
         let auth = indexed.authenticate("token-a").expect("auth");
+        let cache = ChannelAffinityCache::new();
         let body = br#"{"prompt_cache_key":"session-a"}"#;
         let candidate = indexed
-            .resolve_affinity("gpt-4o", "/v1/responses", "", "default", body, |_| None)
+            .resolve_affinity("gpt-4o", "/v1/responses", "", "default", body, &cache, |_| None)
             .expect("affinity candidate");
         assert_eq!(candidate.cached_channel_id, None);
         let (route, hit) = indexed
-            .route_with_affinity_seed(&auth, "gpt-4o", Some(&candidate), 1)
+            .route_with_affinity_seed(&auth, "gpt-4o", Some(&candidate), &cache, 1)
             .expect("route");
         assert!(!hit);
         assert_eq!(route.channel.id, "channel-b");
-        indexed.record_affinity(&candidate, route.channel.id.as_str());
+        indexed.record_affinity(&cache, &candidate, route.channel.id.as_str());
 
         let candidate = indexed
-            .resolve_affinity("gpt-4o", "/v1/responses", "", "default", body, |_| None)
+            .resolve_affinity("gpt-4o", "/v1/responses", "", "default", body, &cache, |_| None)
             .expect("affinity candidate");
         assert_eq!(candidate.cached_channel_id.as_deref(), Some("channel-b"));
         let (route, hit) = indexed
-            .route_with_affinity_seed(&auth, "gpt-4o", Some(&candidate), 0)
+            .route_with_affinity_seed(&auth, "gpt-4o", Some(&candidate), &cache, 0)
             .expect("route");
         assert!(hit);
         assert_eq!(route.channel.id, "channel-b");
+
+        // The cache is independent of the snapshot: re-indexing (as the gateway
+        // does on every poll) must not wipe a recorded affinity.
+        let reindexed = snapshot_clone.index().expect("snapshot should re-index");
+        let candidate = reindexed
+            .resolve_affinity("gpt-4o", "/v1/responses", "", "default", body, &cache, |_| None)
+            .expect("affinity candidate");
+        assert_eq!(candidate.cached_channel_id.as_deref(), Some("channel-b"));
     }
 
     #[test]

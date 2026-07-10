@@ -52,6 +52,23 @@ impl ManagementStore {
             Self::Sqlite(store) => store.current_data(),
         }
     }
+
+    /// Bumps the management snapshot version without other data changes.
+    /// Used when options-derived config (affinity/group routing) changes so the
+    /// gateway poll does not treat the republish as NotModified.
+    pub(crate) async fn bump_version(&self) -> Result<u64, ManagementError> {
+        match self {
+            Self::Memory(store) => store.bump_version(),
+            Self::Sqlite(store) => {
+                let version = store.memory.bump_version()?;
+                // Persist so the bumped version survives a restart; otherwise the
+                // DB would still hold the old version and the gateway could see a
+                // lower version after control-api restarts.
+                store.persist().await?;
+                Ok(version)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

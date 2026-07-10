@@ -589,6 +589,9 @@ impl Service<RouteLookup> for AuthRouteService {
     async fn call(&self, lookup: RouteLookup) -> Result<Self::Response, Self::Error> {
         let state = self.snapshots.load();
         let snapshot = &state.snapshot;
+        // The affinity cache is owned by the SnapshotStore, not the snapshot, so
+        // it survives snapshot swaps.
+        let affinity_cache = self.snapshots.affinity_cache();
         let auth = snapshot.authenticate(&lookup.token)?;
         snapshot.authorize_ip(&auth, lookup.peer_ip)?;
         let key_seed = self.next_key.fetch_add(1, Ordering::Relaxed);
@@ -603,6 +606,7 @@ impl Service<RouteLookup> for AuthRouteService {
             user_agent,
             auth.token.group(),
             &lookup.body,
+            affinity_cache,
             |name| {
                 lookup
                     .headers
@@ -617,6 +621,7 @@ impl Service<RouteLookup> for AuthRouteService {
             &auth,
             &lookup.requested_model,
             affinity.as_ref(),
+            affinity_cache,
             key_seed,
         )?;
         if affinity_hit {
@@ -660,7 +665,9 @@ impl AuthRouteService {
         let Some(affinity) = affinity else {
             return;
         };
-        self.snapshots.load().snapshot.record_affinity(
+        let state = self.snapshots.load();
+        state.snapshot.record_affinity(
+            self.snapshots.affinity_cache(),
             &ChannelAffinityCandidate {
                 cache_key: affinity.cache_key.clone(),
                 ttl_seconds: affinity.ttl_seconds,

@@ -204,7 +204,7 @@ pub(crate) fn now_unix_ms_i64() -> i64 {
 
 #[derive(Default)]
 pub(crate) struct SseBuffer {
-    pending: String,
+    pending: Vec<u8>,
 }
 
 impl SseBuffer {
@@ -213,13 +213,18 @@ impl SseBuffer {
     }
 
     pub(crate) fn push_with_done(&mut self, bytes: &[u8], include_done: bool) -> Vec<String> {
-        let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
-        self.pending.push_str(&text);
+        // Buffer raw bytes and only decode complete events. Decoding each
+        // network chunk eagerly (the previous `from_utf8_lossy` per chunk) turned
+        // any multi-byte scalar split across a chunk boundary into U+FFFD, which
+        // could never be reassembled since the buffer held already-decoded text.
+        // Event boundaries are blank lines whose bytes (`\n`/`\r`) never appear
+        // inside a UTF-8 scalar, so a complete event always holds whole scalars.
+        self.pending.extend_from_slice(bytes);
         let mut payloads = Vec::new();
 
-        while let Some(pos) = self.pending.find("\n\n") {
-            let event = self.pending[..pos].to_string();
-            self.pending.drain(..pos + 2);
+        while let Some((content_end, sep_len)) = find_event_boundary(&self.pending) {
+            let event: Vec<u8> = self.pending.drain(..content_end + sep_len).collect();
+            let event = String::from_utf8_lossy(&event[..content_end]);
             for payload in sse_event_payloads(&event) {
                 if include_done || payload != "[DONE]" {
                     payloads.push(payload);
@@ -231,16 +236,76 @@ impl SseBuffer {
     }
 }
 
+/// Finds the first event separator (a blank line) in `buf`, returning the byte
+/// offset where the event content ends and the length of the separator.
+/// Recognizes LF (`\n\n`) and CRLF (`\r\n\r\n`) blank lines, plus the mixed
+/// endings a CRLF/LF boundary can produce.
+fn find_event_boundary(buf: &[u8]) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < buf.len() {
+        if buf[i] == b'\n' {
+            let mut j = i + 1;
+            if buf.get(j) == Some(&b'\r') {
+                j += 1;
+            }
+            if buf.get(j) == Some(&b'\n') {
+                return Some((i, j + 1 - i));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 fn sse_event_payloads(event: &str) -> Vec<String> {
     let mut data = Vec::new();
     for line in event.lines() {
         if let Some(payload) = line.strip_prefix("data:") {
-            data.push(payload.trim_start());
+            // Trim a trailing CR: `str::lines()` strips interior `\r\n`, but the
+            // event's final line keeps its `\r` when the separator was `\r\n\r\n`.
+            data.push(payload.trim_start().trim_end_matches('\r'));
         }
     }
     if data.is_empty() {
         Vec::new()
     } else {
         vec![data.join("\n")]
+    }
+}
+
+#[cfg(test)]
+mod sse_buffer_tests {
+    use super::SseBuffer;
+
+    #[test]
+    fn reassembles_multibyte_scalar_split_across_chunks() {
+        // "你好" is 6 UTF-8 bytes; split the first scalar across two pushes.
+        let event = b"data: {\"text\":\"\xe4\xbd\xa0\xe5\xa5\xbd\"}\n\n";
+        let (head, tail) = event.split_at(9); // mid-way through the first scalar
+
+        let mut buffer = SseBuffer::default();
+        assert!(buffer.push(head).is_empty());
+        let payloads = buffer.push(tail);
+
+        assert_eq!(payloads, vec!["{\"text\":\"你好\"}".to_string()]);
+    }
+
+    #[test]
+    fn handles_crlf_blank_line_separators() {
+        let mut buffer = SseBuffer::default();
+        let payloads = buffer.push(b"data: one\r\n\r\ndata: two\r\n\r\n");
+        assert_eq!(payloads, vec!["one".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn filters_done_sentinel_unless_requested() {
+        let mut buffer = SseBuffer::default();
+        assert!(buffer.push(b"data: [DONE]\n\n").is_empty());
+
+        let mut buffer = SseBuffer::default();
+        assert_eq!(
+            buffer.push_with_done(b"data: [DONE]\n\n", true),
+            vec!["[DONE]".to_string()]
+        );
     }
 }

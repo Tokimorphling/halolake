@@ -26,6 +26,11 @@ pub(crate) struct AppParams {
 #[derive(Clone)]
 pub(crate) struct SnapshotStore {
     inner: Arc<ArcSwap<SnapshotState>>,
+    // The affinity cache lives here, NOT inside the atomically-swapped
+    // SnapshotState, so recorded affinities survive snapshot refresh. Held
+    // behind an Arc so a future per-worker/shared deployment can decide the
+    // sharing model without touching the routing code.
+    affinity_cache: Arc<ChannelAffinityCache>,
 }
 
 pub(crate) struct SnapshotState {
@@ -37,11 +42,16 @@ impl SnapshotStore {
     fn new(snapshot: GatewaySnapshot) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(ArcSwap::from_pointee(SnapshotState::new(snapshot)?)),
+            affinity_cache: Arc::new(ChannelAffinityCache::new()),
         })
     }
 
     pub(crate) fn load(&self) -> arc_swap::Guard<Arc<SnapshotState>> {
         self.inner.load()
+    }
+
+    pub(crate) fn affinity_cache(&self) -> &Arc<ChannelAffinityCache> {
+        &self.affinity_cache
     }
 
     fn version(&self) -> u64 {
@@ -92,12 +102,87 @@ pub(crate) struct RequestBodyLimit(pub(crate) usize);
 #[derive(Clone, Copy)]
 pub(crate) struct GatewayAuthPolicy(pub(crate) AuthConfig);
 
-pub async fn run_from_config_file(path: &str) -> Result<()> {
-    let mut config = GatewayConfig::load(path)?;
+/// Loads the config and runs the gateway as a thread-per-core fleet.
+///
+/// Monoio is a thread-per-core runtime: each worker owns its own single-threaded
+/// runtime, its own `Gateway` (and therefore its own snapshot store + affinity
+/// cache), and its own listener socket bound with `SO_REUSEPORT`. The kernel load
+/// -balances accepted connections across the sockets, so workers share nothing on
+/// the request hot path — matching the shared-nothing data-plane design.
+///
+/// This function is synchronous on purpose: it must run OUTSIDE any monoio runtime
+/// so it can spawn the per-core runtimes itself. `main` therefore calls it directly
+/// rather than from `#[monoio::main]`.
+pub fn run_from_config_file(path: &str) -> Result<()> {
+    let config = GatewayConfig::load(path)?;
+    let worker_count = resolve_worker_count(config.server.workers);
+    let listen = config.server.listen;
+    info!(
+        %listen,
+        worker_count,
+        token_count = config.tokens.len(),
+        channel_count = config.channels.len(),
+        mapping_count = config.model_mappings.len(),
+        "starting halolake monoio gateway (thread-per-core)"
+    );
+
+    let mut handles = Vec::with_capacity(worker_count);
+    for worker_id in 0..worker_count {
+        // Each worker gets an independent config clone so nothing is shared across
+        // cores; the Arc-backed state inside Gateway is rebuilt per worker.
+        let worker_config = config.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("halolake-gw-{worker_id}"))
+            .spawn(move || run_worker(worker_id, worker_config))
+            .with_context(|| format!("spawn gateway worker {worker_id}"))?;
+        handles.push(handle);
+    }
+
+    // If any worker's bootstrap fails (e.g. initial snapshot load), surface the
+    // first error. Workers that entered their serve loop never return.
+    let mut first_error = None;
+    for handle in handles {
+        match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                error!(?err, "gateway worker exited with error");
+                first_error.get_or_insert(err);
+            }
+            Err(_) => {
+                error!("gateway worker thread panicked");
+            }
+        }
+    }
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+fn resolve_worker_count(configured: usize) -> usize {
+    if configured > 0 {
+        return configured;
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+/// Entry point for a single worker thread: builds a dedicated monoio runtime and
+/// drives the async bootstrap (initial snapshot load, polling, serve loop).
+fn run_worker(worker_id: usize, config: GatewayConfig) -> Result<()> {
+    let mut rt = monoio::RuntimeBuilder::<monoio::FusionDriver>::new()
+        .enable_timer()
+        .build()
+        .with_context(|| format!("build monoio runtime for worker {worker_id}"))?;
+    rt.block_on(run_worker_async(worker_id, config))
+}
+
+async fn run_worker_async(worker_id: usize, mut config: GatewayConfig) -> Result<()> {
     let snapshot_source = MonoioHttpSnapshotSource::from_config(&config.control)?;
     if let Some(source) = &snapshot_source {
         let snapshot_url = config.control.snapshot_url.as_deref().unwrap_or_default();
-        info!(%snapshot_url, "loading gateway snapshot from control api");
+        debug!(worker_id, %snapshot_url, "loading gateway snapshot from control api");
         match source
             .clone()
             .call(SnapshotRequest {
@@ -106,17 +191,16 @@ pub async fn run_from_config_file(path: &str) -> Result<()> {
             .await
         {
             Ok(SnapshotResponse::Updated { snapshot }) => {
-                info!(
+                debug!(
+                    worker_id,
                     snapshot_version = snapshot.version,
-                    token_count = snapshot.tokens.len(),
-                    channel_count = snapshot.channels.len(),
-                    mapping_count = snapshot.model_mappings.len(),
                     "loaded gateway snapshot from control api"
                 );
                 config.replace_snapshot(snapshot);
             }
             Ok(SnapshotResponse::NotModified { version }) => {
                 warn!(
+                    worker_id,
                     snapshot_version = version,
                     "control api returned not-modified for initial snapshot load"
                 );
@@ -132,26 +216,17 @@ pub async fn run_from_config_file(path: &str) -> Result<()> {
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(5));
     let listen = config.server.listen;
-    let connect_timeout_ms = config.upstream.connect_timeout_ms;
-    let read_timeout_ms = config.upstream.read_timeout_ms;
-    let token_count = config.tokens.len();
-    let channel_count = config.channels.len();
-    let mapping_count = config.model_mappings.len();
     let gateway = Gateway::try_from_config(config)?;
     if let Some(source) = snapshot_source
         && !snapshot_poll_interval.is_zero()
     {
         spawn_snapshot_polling(source, gateway.snapshots.clone(), snapshot_poll_interval);
     }
-    info!(
+    debug!(
+        worker_id,
         %listen,
         snapshot_version = gateway.snapshots.version(),
-        ?connect_timeout_ms,
-        ?read_timeout_ms,
-        token_count,
-        channel_count,
-        mapping_count,
-        "starting halolake monoio gateway"
+        "gateway worker listening"
     );
     serve(listen, gateway).await
 }
@@ -199,7 +274,11 @@ fn spawn_snapshot_polling(
 }
 
 pub async fn serve(addr: SocketAddr, gateway: Gateway) -> Result<()> {
-    let listener = TcpListener::bind(addr).context("bind gateway listener")?;
+    // reuse_port lets every worker thread bind the same address so the kernel
+    // load-balances accepted connections across the per-core runtimes.
+    let opts = ListenerOpts::new().reuse_port(true).reuse_addr(true);
+    let listener =
+        TcpListener::bind_with_config(addr, &opts).context("bind gateway listener")?;
     loop {
         let (stream, peer) = listener.accept().await.context("accept connection")?;
         debug!(%peer, "accepted downstream connection");

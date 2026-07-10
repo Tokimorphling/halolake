@@ -8,8 +8,14 @@ struct Args {
     config: String,
 }
 
-#[monoio::main(timer_enabled = true)]
-async fn main() -> Result<()> {
+// Not `#[monoio::main]`: the gateway is thread-per-core. `run_from_config_file`
+// spawns one OS thread per worker, each building its own monoio runtime and
+// binding the listener with SO_REUSEPORT, so the main thread stays runtime-free.
+fn main() -> Result<()> {
+    // rustls 0.23 requires an explicit process-level CryptoProvider when
+    // multiple providers may be linked via workspace deps.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let (log_writer, _log_flush_guard) = tracing_appender::non_blocking(std::io::stderr());
     tracing_subscriber::fmt()
         .with_writer(log_writer)
@@ -18,5 +24,5 @@ async fn main() -> Result<()> {
     monoio_native_tls::init();
 
     let args = Args::parse();
-    halolake_gateway_monoio::run_from_config_file(&args.config).await
+    halolake_gateway_monoio::run_from_config_file(&args.config)
 }

@@ -32,6 +32,12 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     #[serde(default = "default_body_limit")]
     pub request_body_limit_bytes: usize,
+    /// Number of thread-per-core workers. Each worker runs its own monoio
+    /// runtime and binds the listen address with SO_REUSEPORT, so the kernel
+    /// load-balances connections across cores with no shared accept lock.
+    /// `0` (the default) means "one per available core".
+    #[serde(default)]
+    pub workers: usize,
 }
 
 impl Default for ServerConfig {
@@ -39,6 +45,7 @@ impl Default for ServerConfig {
         Self {
             listen: default_listen(),
             request_body_limit_bytes: default_body_limit(),
+            workers: 0,
         }
     }
 }

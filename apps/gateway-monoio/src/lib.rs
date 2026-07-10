@@ -33,7 +33,8 @@ use halolake_protocol::{
     openai_chat_to_gemini_response, openai_image_to_gemini_imagen_request,
 };
 use halolake_router_core::{
-    ChannelAffinityCandidate, ChannelConfig, GatewaySnapshot, IndexedSnapshot, Provider, RouteError,
+    ChannelAffinityCache, ChannelAffinityCandidate, ChannelConfig, GatewaySnapshot, IndexedSnapshot,
+    Provider, RouteError,
 };
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use http_body::{Body as HttpBodyTrait, SizeHint};
@@ -41,7 +42,7 @@ use http_body_util::{BodyExt, Full, StreamBody, combinators::UnsyncBoxBody};
 use hyper::{body::Frame, body::Incoming, server::conn::http1, service::service_fn};
 use monoio::{
     io::IntoPollIo,
-    net::{TcpListener, TcpStream},
+    net::{ListenerOpts, TcpListener, TcpStream},
 };
 use monoio_compat::hyper::MonoioIo;
 use monoio_http::common::body::{Body as MonoioBody, FixedBody, HttpBody, HttpBodyStream};

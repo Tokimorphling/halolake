@@ -28,7 +28,8 @@ use halolake_control_plane::{
     CreateUserRequest, DeleteChannelRequest, DeleteDisabledChannelsRequest, DeleteTokenRequest,
     DeleteUserRequest, GetChannelRequest, GetTokenRequest, GetUserRequest, ListChannelsRequest,
     ListTokensRequest, ListUsersRequest, LoginUserRequest, ManageUserRequest, ManagementData,
-    ManagementError, MemorySnapshotBus, PublishSnapshotRequest, RegisterUserRequest,
+    ManagementError, MemorySnapshotBus, PublishSnapshotRequest,
+    RegisterUserRequest,
     RevealChannelKeyRequest, RevealTokenKeyRequest, SearchChannelsRequest, SearchTokensRequest,
     SearchUsersRequest, SettleUsageRequest, SnapshotRequest, SnapshotResponse,
     UpdateChannelRequest, UpdateChannelsByTagRequest, UpdateTokenRequest,
@@ -57,7 +58,9 @@ mod channel_probe;
 mod channel_special;
 mod channel_task;
 mod checkin;
+mod compat;
 mod model_sync;
+mod playground;
 mod ratio_sync;
 mod security;
 mod storage;
@@ -129,6 +132,8 @@ const SESSION_COOKIE_NAME: &str = "session";
 const MAX_RECENT_TOKEN_LOGS: usize = 1000;
 const TOKEN_STATUS_EXPIRED: i32 = 3;
 const TOKEN_STATUS_EXHAUSTED: i32 = 4;
+/// Matches new-api SecureVerificationTimeout (5 minutes).
+const SECURE_VERIFICATION_TIMEOUT_SECS: i64 = 300;
 const DEFAULT_MODEL_RATIO_JSON: &str = "{}";
 const DEFAULT_CHANNEL_AFFINITY_RULES_JSON: &str = r#"[{"name":"codex cli trace","model_regex":["^gpt-.*$"],"path_regex":["/v1/responses"],"key_sources":[{"type":"gjson","path":"prompt_cache_key"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["Originator","Session_id","User-Agent","X-Codex-Beta-Features","X-Codex-Turn-Metadata"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true},{"name":"claude cli trace","model_regex":["^claude-.*$"],"path_regex":["/v1/messages"],"key_sources":[{"type":"gjson","path":"metadata.user_id"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["X-Stainless-Arch","X-Stainless-Lang","X-Stainless-Os","X-Stainless-Package-Version","X-Stainless-Retry-Count","X-Stainless-Runtime","X-Stainless-Runtime-Version","X-Stainless-Timeout","User-Agent","X-App","Anthropic-Beta","Anthropic-Dangerous-Direct-Browser-Access","Anthropic-Version"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true}]"#;
 
@@ -184,6 +189,10 @@ impl Default for ServerConfig {
 pub struct InternalConfig {
     #[serde(default)]
     pub secret: Option<String>,
+    /// Base URL of the gateway data plane used by the playground proxy
+    /// (`/pg/chat/completions`). Defaults to `http://127.0.0.1:8082`.
+    #[serde(default)]
+    pub gateway_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -303,6 +312,7 @@ struct AppState {
     sessions: MemorySessionStore,
     web: WebConfig,
     internal_secret: Option<Arc<str>>,
+    gateway_base_url: Option<String>,
     start_time_unix: i64,
     system_name: Arc<str>,
     storage_backend: StorageBackend,
@@ -317,6 +327,10 @@ struct MemorySessionStore {
 struct SessionRecord {
     user_id: Option<u64>,
     pending_user_id: Option<u64>,
+    /// Unix timestamp of last successful `/api/verify` (2FA/passkey).
+    /// Used by sensitive ops such as channel key reveal, matching new-api
+    /// `secure_verified_at` session middleware (5 minute TTL).
+    secure_verified_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -779,6 +793,25 @@ impl ControlApi {
         ensure_supported_storage_backend(&config.storage)?;
         let start_time_unix = now_unix();
         let internal_secret = config.internal.secret.as_deref().map(Arc::<str>::from);
+        let gateway_base_url = config
+            .internal
+            .gateway_base_url
+            .as_ref()
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .or_else(|| {
+                std::env::var("HALOLAKE_GATEWAY_BASE_URL")
+                    .ok()
+                    .map(|url| url.trim().to_string())
+                    .filter(|url| !url.is_empty())
+            });
+        if internal_secret.is_none() {
+            warn!(
+                "internal.secret is not configured; /internal/gateway/* endpoints will \
+                 reject every request (default-deny). Set internal.secret to enable the \
+                 gateway snapshot/usage/channel-feedback APIs."
+            );
+        }
         let system_name = Arc::from(config.system.name.as_str());
         let option_defaults = default_options(&config);
         let mut snapshot = config.snapshot();
@@ -935,6 +968,7 @@ impl ControlApi {
                 sessions: MemorySessionStore::default(),
                 web: config.web,
                 internal_secret,
+                gateway_base_url,
                 start_time_unix,
                 system_name,
                 storage_backend: config.storage.backend,
@@ -943,7 +977,7 @@ impl ControlApi {
     }
 
     pub fn router(self) -> Router {
-        Router::new()
+        let router = Router::new()
             .route("/healthz", get(healthz))
             .route("/api/setup", get(api_setup).post(post_setup))
             .route("/api/setup/", get(api_setup).post(post_setup))
@@ -1241,7 +1275,9 @@ impl ControlApi {
             .route(
                 "/internal/gateway/channel-feedback",
                 post(gateway_channel_feedback),
-            )
+            );
+        let router = playground::mount(router);
+        compat::mount(router)
             .fallback(web_fallback)
             .with_state(self.state)
     }
@@ -1675,6 +1711,12 @@ async fn update_option(
                 if let Err(err) = state.options.call(UpdateOptionRequest { key, value }).await {
                     return management_error(err);
                 }
+            }
+            // Options feed channel_affinity / group_routing in the published
+            // snapshot, so republish (which bumps the version) to push the change
+            // to the gateway. Without this the data plane keeps stale config.
+            if let Err(err) = publish_management_snapshot(&state).await {
+                return management_error(err);
             }
             api_ok()
         }
@@ -2699,7 +2741,14 @@ async fn universal_verify(
         })
         .await
     {
-        Ok(status) => api_success_with_message("验证成功", status),
+        Ok(status) => {
+            // Persist step-up verification on the login session so subsequent
+            // sensitive endpoints (channel key reveal) can enforce it.
+            if let Some(session_id) = session_id_from_headers(&headers) {
+                let _ = state.sessions.mark_secure_verified(session_id);
+            }
+            api_success_with_message("验证成功", status)
+        }
         Err(err) => security_error(err),
     }
 }
@@ -3192,15 +3241,31 @@ async fn do_checkin(State(state): State<AppState>, headers: HeaderMap) -> Respon
 async fn update_self(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(mut user): Json<UserRecord>,
+    Json(patch): Json<UserRecord>,
 ) -> Response {
     let current = match current_user(&state, &headers).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    user.id = current.id;
-    if user.username.is_empty() {
-        user.username = current.username;
+    // Build the update from the current record and overlay only the fields a
+    // user is allowed to change on themselves. Never trust quota/used_quota/
+    // group/role/status/username from a self-service payload — accepting those
+    // let any common user grant themselves unlimited quota or a privileged
+    // group. `actor_role` stays ROLE_ROOT_USER only because the record is now
+    // fully server-constructed and cannot carry an escalation.
+    let mut user = current.clone();
+    user.password = patch.password;
+    if !patch.display_name.is_empty() {
+        user.display_name = patch.display_name;
+    }
+    if !patch.email.is_empty() {
+        user.email = patch.email;
+    }
+    if !patch.setting.is_empty() {
+        user.setting = patch.setting;
+    }
+    if !patch.remark.is_empty() {
+        user.remark = patch.remark;
     }
     match state
         .management
@@ -3292,7 +3357,10 @@ async fn list_users(
         .call(ListUsersRequest { page: query.into() })
         .await
     {
-        Ok(page) => api_success(page),
+        Ok(mut page) => {
+            page.items = page.items.into_iter().map(UserRecord::sanitized).collect();
+            api_success(page)
+        }
         Err(err) => management_error(err),
     }
 }
@@ -3322,7 +3390,10 @@ async fn search_users(
         })
         .await
     {
-        Ok(page) => api_success(page),
+        Ok(mut page) => {
+            page.items = page.items.into_iter().map(UserRecord::sanitized).collect();
+            api_success(page)
+        }
         Err(err) => management_error(err),
     }
 }
@@ -3337,7 +3408,7 @@ async fn get_user(
         Err(resp) => return resp,
     };
     match state.management.call(GetUserRequest { id }).await {
-        Ok(user) => api_success(user),
+        Ok(user) => api_success(user.sanitized()),
         Err(err) => management_error(err),
     }
 }
@@ -3547,7 +3618,11 @@ async fn reveal_token_keys_batch(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let mut keys = Vec::with_capacity(req.ids.len());
+    if req.ids.len() > 100 {
+        return api_error_status(StatusCode::OK, "too many ids (max 100)");
+    }
+    // new-api returns `{ keys: { "<id>": "<key>", ... } }` for the bulk copy UI.
+    let mut keys = serde_json::Map::new();
     for id in req.ids {
         match state
             .management
@@ -3557,11 +3632,13 @@ async fn reveal_token_keys_batch(
             })
             .await
         {
-            Ok(key) => keys.push(json!({ "id": id, "key": key.key })),
+            Ok(key) => {
+                keys.insert(id.to_string(), json!(key.key));
+            }
             Err(err) => return management_error(err),
         }
     }
-    api_success(keys)
+    api_success(json!({ "keys": keys }))
 }
 
 async fn create_token(
@@ -3573,6 +3650,10 @@ async fn create_token(
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    // Force ownership to the authenticated caller. Trusting a client-supplied
+    // user_id let any common user mint a token attributed to another account
+    // and spend that account's quota.
+    token.user_id = user.id;
     fill_new_token_defaults(&mut token, user.id);
     match state.management.call(CreateTokenRequest { token }).await {
         Ok(_) => match publish_management_snapshot(&state).await {
@@ -4102,10 +4183,14 @@ async fn reveal_channel_key(
     headers: HeaderMap,
     Path(id): Path<u64>,
 ) -> Response {
+    // new-api: RootAuth + SecureVerificationRequired before returning plaintext key.
     let _actor = match require_role(&state, &headers, ROLE_ROOT_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_secure_verification(&state, &headers) {
+        return resp;
+    }
     match state.management.call(RevealChannelKeyRequest { id }).await {
         Ok(key) => api_success(json!({ "key": key.key })),
         Err(err) => management_error(err),
@@ -5029,7 +5114,10 @@ fn selected_web_dist(state: &AppState) -> SelectedWebDist {
 }
 
 fn is_control_or_relay_path(path: &str) -> bool {
-    path.starts_with("/api") || path.starts_with("/internal") || path.starts_with("/v1")
+    path.starts_with("/api")
+        || path.starts_with("/internal")
+        || path.starts_with("/v1")
+        || path.starts_with("/pg")
 }
 
 fn is_static_asset_request(path: &str) -> bool {
@@ -5164,15 +5252,32 @@ fn static_content_type(path: &FsPath) -> &'static str {
     }
 }
 
+/// Length-independent, byte-by-byte comparison that avoids the early-exit
+/// timing signal of `==`. Not a substitute for a constant-time-length
+/// primitive, but adequate for a shared-secret header check.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 impl AppState {
     fn authorized(&self, headers: &HeaderMap) -> bool {
+        // Default-deny: an unset internal secret must never expose the
+        // `/internal/*` endpoints, which return plaintext channel keys and
+        // gateway tokens. Startup logs a loud warning in this case.
         let Some(secret) = &self.internal_secret else {
-            return true;
+            return false;
         };
         headers
             .get(INTERNAL_KEY_HEADER)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value == secret.as_ref())
+            .is_some_and(|value| constant_time_eq(value.as_bytes(), secret.as_bytes()))
     }
 }
 
@@ -5187,6 +5292,7 @@ impl MemorySessionStore {
                 SessionRecord {
                     user_id: None,
                     pending_user_id: None,
+                    secure_verified_at: None,
                 },
             );
         Ok(session_id)
@@ -5202,6 +5308,7 @@ impl MemorySessionStore {
                 SessionRecord {
                     user_id: Some(user_id),
                     pending_user_id: None,
+                    secure_verified_at: None,
                 },
             );
         Ok(session_id)
@@ -5217,6 +5324,7 @@ impl MemorySessionStore {
                 SessionRecord {
                     user_id: None,
                     pending_user_id: Some(user_id),
+                    secure_verified_at: None,
                 },
             );
         Ok(session_id)
@@ -5234,6 +5342,38 @@ impl MemorySessionStore {
             .read()
             .map(|sessions| sessions.contains_key(session_id))
             .map_err(|_| ManagementError::Poisoned("sessions"))
+    }
+
+    fn mark_secure_verified(&self, session_id: &str) -> Result<(), ManagementError> {
+        let mut sessions = self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("sessions"))?;
+        if let Some(record) = sessions.get_mut(session_id) {
+            record.secure_verified_at = Some(now_unix());
+        }
+        Ok(())
+    }
+
+    /// Returns Ok(()) when the session has a non-expired secure verification.
+    /// Clears expired markers, matching new-api SecureVerificationRequired.
+    fn require_secure_verified(&self, session_id: &str) -> Result<(), SecureVerificationError> {
+        let mut sessions = self
+            .inner
+            .write()
+            .map_err(|_| SecureVerificationError::Unavailable)?;
+        let Some(record) = sessions.get_mut(session_id) else {
+            return Err(SecureVerificationError::Required);
+        };
+        let Some(verified_at) = record.secure_verified_at else {
+            return Err(SecureVerificationError::Required);
+        };
+        let elapsed = now_unix().saturating_sub(verified_at);
+        if elapsed >= SECURE_VERIFICATION_TIMEOUT_SECS {
+            record.secure_verified_at = None;
+            return Err(SecureVerificationError::Expired);
+        }
+        Ok(())
     }
 
     fn passkey_session_id_from_headers(
@@ -5312,6 +5452,44 @@ impl MemorySessionStore {
             let _ = self.remove(session_id);
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SecureVerificationError {
+    Required,
+    Expired,
+    Unavailable,
+}
+
+fn require_secure_verification(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+    let Some(session_id) = session_id_from_headers(headers) else {
+        return Err(secure_verification_response(SecureVerificationError::Required));
+    };
+    match state.sessions.require_secure_verified(session_id) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(secure_verification_response(err)),
+    }
+}
+
+fn secure_verification_response(err: SecureVerificationError) -> Response {
+    // Frontend `isVerificationRequiredError` reads `response.data.code` at the
+    // top level of the JSON body (not nested under `data`).
+    let (message, code) = match err {
+        SecureVerificationError::Required => ("需要安全验证", "VERIFICATION_REQUIRED"),
+        SecureVerificationError::Expired => ("验证已过期，请重新验证", "VERIFICATION_EXPIRED"),
+        SecureVerificationError::Unavailable => {
+            return api_error_status(StatusCode::INTERNAL_SERVER_ERROR, "session unavailable");
+        }
+    };
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "success": false,
+            "message": message,
+            "code": code,
+        })),
+    )
+        .into_response()
 }
 
 async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<UserRecord, Response> {
@@ -7639,6 +7817,12 @@ pub(crate) async fn publish_enriched_management_snapshot(
     options: &OptionStore,
     snapshots: &MemorySnapshotBus,
 ) -> Result<(), ManagementError> {
+    // Bump version on every publish. Options-derived config (channel_affinity /
+    // group_routing) is enriched onto the snapshot at publish time and does not
+    // flow through ManagementData mutations, so without bumping an options-only
+    // change would republish an identical version and the gateway's
+    // `since_version >= version` poll would treat it as NotModified.
+    management.bump_version().await?;
     let mut snapshot = management.current_data()?.build_snapshot()?;
     let option_values = options.values()?;
     snapshot.channel_affinity = channel_affinity_config_from_options(&option_values);
@@ -7659,6 +7843,8 @@ fn channel_balance_price(state: &AppState) -> f64 {
 }
 
 fn fill_new_token_defaults(token: &mut TokenRecord, user_id: u64) {
+    // Callers must already have pinned token.user_id to the authenticated user
+    // for self-service creation; this only backfills when left unset.
     if token.user_id == 0 {
         token.user_id = user_id;
     }

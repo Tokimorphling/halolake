@@ -354,7 +354,11 @@ impl GeminiSseToOpenAiTranslator {
             .candidates
             .into_iter()
             .map(|candidate| {
-                if candidate.finish_reason.as_deref() == Some("STOP") {
+                // Gemini never emits a native `[DONE]`; the stream ends on any
+                // finish_reason (STOP, MAX_TOKENS, SAFETY, RECITATION, ...).
+                // Keying only on "STOP" left the OpenAI/Claude client blocking
+                // until socket close on every other (common) terminal reason.
+                if candidate.finish_reason.is_some() {
                     finished = true;
                 }
                 gemini_candidate_to_openai_chunk_choice(candidate)
@@ -1043,5 +1047,32 @@ mod tests {
         assert_eq!(openai.created, 123);
         assert_eq!(openai.data.len(), 1);
         assert_eq!(openai.data[0].b64_json, "image-1");
+    }
+
+    #[test]
+    fn gemini_stream_terminates_on_non_stop_finish_reason() {
+        let mut translator = GeminiSseToOpenAiTranslator::new("gemini-1.5-pro");
+        let payload = json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hi"}]},
+                "finishReason": "MAX_TOKENS"
+            }]
+        })
+        .to_string();
+
+        let events = translator.translate_sse_payload(&payload).expect("translate");
+        // Gemini never sends a native [DONE]; a MAX_TOKENS finish must still
+        // terminate the stream or the downstream client blocks until close.
+        assert_eq!(events.last().map(String::as_str), Some("[DONE]"));
+        let chunk: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(chunk["choices"][0]["finish_reason"], "length");
+
+        // Further payloads after termination are ignored.
+        assert!(
+            translator
+                .translate_sse_payload(&payload)
+                .expect("translate")
+                .is_empty()
+        );
     }
 }

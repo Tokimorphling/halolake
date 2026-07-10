@@ -528,6 +528,15 @@ impl MemoryManagementStore {
             .map_err(|_| ManagementError::Poisoned("management"))
     }
 
+    /// Advances the snapshot version without any other change. Options-derived
+    /// config (channel_affinity / group_routing) is enriched onto the snapshot
+    /// at publish time and does not flow through `mutate`, so an options-only
+    /// change would otherwise republish an identical version and the gateway's
+    /// `since_version >= version` poll would treat it as NotModified.
+    pub fn bump_version(&self) -> Result<u64, ManagementError> {
+        self.mutate(|data| Ok(data.version))
+    }
+
     fn mutate<F, T>(&self, f: F) -> Result<T, ManagementError>
     where
         F: FnOnce(&mut ManagementData) -> Result<T, ManagementError>,
@@ -1441,7 +1450,13 @@ where
         &self,
         req: PublishManagementSnapshotRequest<P>,
     ) -> Result<Self::Response, Self::Error> {
-        let snapshot = self.current_data()?.build_snapshot()?;
+        // Bump the version on every publish. Options-derived config
+        // (channel_affinity / group_routing) is enriched onto the snapshot after
+        // this call and never flows through `mutate`, so without bumping here an
+        // options-only change would republish an identical version and the
+        // gateway's `since_version >= version` poll would treat it as
+        // NotModified, leaving the data plane on stale routing/affinity config.
+        let snapshot = self.mutate(|data| data.build_snapshot())?;
         req.publisher
             .call(PublishSnapshotRequest { snapshot })
             .await
