@@ -938,15 +938,41 @@ fn convert_usage(usage: claude::Usage) -> openai::Usage {
         prompt_tokens,
         completion_tokens: usage.output_tokens,
         total_tokens: prompt_tokens + usage.output_tokens,
+        prompt_tokens_details: openai::TokenUsageDetails {
+            cached_tokens: usage.cache_read_input_tokens,
+            cached_creation_tokens: usage.cache_creation_input_tokens,
+            ..openai::TokenUsageDetails::default()
+        },
+        input_tokens_details: None,
+        cached_tokens: usage.cache_read_input_tokens,
     }
 }
 
 fn openai_usage_to_claude(usage: openai::Usage) -> claude::Usage {
+    let cache_read = usage
+        .prompt_tokens_details
+        .cached_tokens
+        .max(usage.cached_tokens)
+        .max(
+            usage
+                .input_tokens_details
+                .map(|details| details.cached_tokens)
+                .unwrap_or(0),
+        );
+    let cache_creation = usage.prompt_tokens_details.cached_creation_tokens.max(
+        usage
+            .input_tokens_details
+            .map(|details| details.cached_creation_tokens)
+            .unwrap_or(0),
+    );
     claude::Usage {
-        input_tokens: usage.prompt_tokens,
+        input_tokens: usage
+            .prompt_tokens
+            .saturating_sub(cache_read)
+            .saturating_sub(cache_creation),
         output_tokens: usage.completion_tokens,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: cache_creation,
+        cache_read_input_tokens: cache_read,
     }
 }
 

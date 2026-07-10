@@ -17,6 +17,17 @@ read_timeout_ms = 300000
 accept_bearer = true
 accept_x_api_key = true
 
+# Uncomment to load the initial gateway snapshot from control-api instead of
+# the local tokens/channels/model_mappings below.
+# [control]
+# snapshot_url = "http://127.0.0.1:9090/internal/gateway/snapshot"
+# usage_url = "http://127.0.0.1:9090/internal/gateway/usage"
+# channel_feedback_url = "http://127.0.0.1:9090/internal/gateway/channel-feedback"
+# internal_key = "dev-internal-secret"
+# connect_timeout_ms = 10000
+# read_timeout_ms = 30000
+# snapshot_poll_interval_ms = 5000
+
 [[tokens]]
 id = "dev-token"
 token = "dev-token"

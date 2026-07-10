@@ -1,7 +1,10 @@
 [workspace]
 members = [
+    "apps/control-api",
     "apps/gateway-monoio",
     "crates/api-contract",
+    "crates/control-plane",
+    "crates/domain",
     "crates/protocol",
     "crates/router-core",
 ]
@@ -15,18 +18,30 @@ repository = "https://github.com/halolake/halolake"
 
 [workspace.dependencies]
 halolake-api-contract = { path = "crates/api-contract" }
+halolake-control-plane = { path = "crates/control-plane" }
+halolake-domain = { path = "crates/domain" }
 halolake-protocol = { path = "crates/protocol" }
 halolake-router-core = { path = "crates/router-core" }
 
 anyhow = "1"
+arc-swap = "1"
 async-stream = "0.3"
+axum = "0.8"
+bcrypt = "0.19.2"
 bytes = "1"
 certain-map = "0.3.1"
 clap = { version = "4", features = ["derive", "env"] }
+data-encoding = "2"
 futures-util = "0.3"
+futures-channel = "0.3"
+hmac = "0.12"
 http = "1"
+http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server", "client"] }
+ipnet = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+regex = "1"
 monoio = { version = "0.2.4", features = ["sync"] }
 monoio-compat = { version = "0.2.2", features = ["hyper"] }
 monoio-http = { version = "0.3.5", features = ["encoding"] }
@@ -35,12 +50,16 @@ monoio-transports = { version = "0.5.3", features = ["logging", "rustls-unsafe-i
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 service-async = "0.2.3"
+sha1 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 thiserror = "1"
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
+webauthn-rs = { version = "0.6.1-dev", default-features = false, features = ["conditional-ui", "danger-allow-state-serialisation"] }
 
 [profile.release-lto]
 inherits = "release"

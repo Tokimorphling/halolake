@@ -828,6 +828,12 @@ fn gemini_usage_to_openai(usage: gemini::GeminiUsageMetadata) -> openai::Usage {
         prompt_tokens: usage.prompt_token_count + usage.cached_content_token_count,
         completion_tokens: completion,
         total_tokens: total,
+        prompt_tokens_details: openai::TokenUsageDetails {
+            cached_tokens: usage.cached_content_token_count,
+            ..openai::TokenUsageDetails::default()
+        },
+        input_tokens_details: None,
+        cached_tokens: usage.cached_content_token_count,
     }
 }
 

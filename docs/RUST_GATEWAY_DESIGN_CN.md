@@ -146,6 +146,130 @@ control-api
 - 支持增量更新，但第一版可以全量替换
 - 每个 Monoio worker 持有自己的只读副本
 - 更新时用原子替换，避免热路径加锁
+- 当前 monoio gateway 使用 `arc-swap` 持有当前 `SnapshotState`，后台
+  `SnapshotSource` polling 拿到新版本后整块替换；请求热路径只做 atomic load。
+
+## Control Plane 与 Snapshot 边界
+
+`control-api` 应该作为独立服务实现，但 gateway 不应该直接依赖这个 app。
+两者之间通过小而稳定的 service trait 通信：
+
+```text
+SnapshotSource
+  gateway 从这里获取最新 GatewaySnapshot
+
+SnapshotPublisher
+  control-api 构建快照后发布到这里
+
+UsageEventSink
+  gateway 将 usage / billing / audit 事件上报到这里
+
+ChannelFeedbackSink
+  gateway 将 upstream status/transport failure 上报到这里，由控制面决定是否
+  自动禁用 channel 或 multi-key 中的单个 key
+```
+
+这样同一套核心逻辑可以支持不同部署形态：
+
+```text
+单进程嵌入:
+  control-api + gateway
+  -> MemorySnapshotBus
+
+多进程部署:
+  control-api
+  -> HTTP internal API
+  -> gateway polling / long-poll
+
+测试:
+  gateway
+  -> Static/File/Memory SnapshotSource
+```
+
+第一版推荐使用 HTTP internal API 做进程间通信：
+
+- `GET /internal/gateway/snapshot?since_version=N`
+- `POST /internal/gateway/usage`
+- `POST /internal/gateway/channel-feedback`
+- 未变化时返回 not-modified 语义
+- 有变化时返回完整 `GatewaySnapshot`
+- 之后可以升级为 long-poll、SSE 或增量 patch
+- 内部接口需要 shared secret / HMAC，生产部署再考虑 mTLS
+
+Memory 模式只用于同进程嵌入和测试。两个独立进程之间不做普通 memory
+共享，避免为了过早优化引入 shared memory 的复杂度。
+
+## Control Plane Service 风格
+
+`control-api` 使用 Tokio + axum，但 axum handler 只作为 HTTP adapter。
+业务逻辑仍然按 `service_async::Service` 组织，避免把所有逻辑写进 handler。
+
+```text
+axum handler
+  -> 构建 ControlContext(certain_map)
+  -> 调用 command/query service
+  -> 映射 HTTP response
+```
+
+`certain_map` 用于表达每层 service 需要的上下文能力，例如：
+
+```text
+RequestId
+Actor/AdminAuth
+DbPool
+PermissionSet
+AuditSink
+SnapshotPublisher
+```
+
+不要设计一个巨大的 `ControlApiClient` 或一个巨大的 `ControlPlaneService`
+来承载所有操作。更合适的是按能力拆小 service：
+
+```text
+CreateTokenService
+UpdateChannelService
+BuildSnapshotService
+PublishSnapshotService
+RecordUsageBatchService
+```
+
+DB transaction 应由具体 command service 创建、提交或回滚，不建议长期放在
+全局 context 中跨多个业务层传递。
+
+## Snapshot Provider 抽象
+
+gateway 侧只依赖 snapshot provider 抽象，不关心快照来自配置文件、内存、
+control-api HTTP，还是未来的消息队列。
+
+推荐请求和响应模型：
+
+```text
+SnapshotRequest {
+  since_version: Option<u64>
+}
+
+SnapshotResponse {
+  NotModified { version }
+  Updated(GatewaySnapshot)
+}
+```
+
+推荐实现：
+
+```text
+StaticSnapshotSource
+  从本地配置构建，适合开发和最小部署
+
+MemorySnapshotSource
+  同进程共享，适合嵌入式部署和单元测试
+
+HttpSnapshotSource
+  通过 control-api internal API 拉取，适合生产多进程部署
+```
+
+这些 provider 不进入请求热路径，只在后台同步任务中运行。请求热路径只读取
+已经索引好的 `IndexedSnapshot`。更新时采用版本化全量替换和 atomic swap，
+后续再考虑增量。
 
 ## 计费与日志
 
@@ -271,6 +395,10 @@ Claude /v1/messages         -> OpenAI /v1/chat/completions
 - billing worker 幂等消费
 - quota 扣减
 - usage logs 查询
+
+channel health/auto-ban 不放进 gateway 热路径做持久化。gateway 只发送
+`ChannelFeedbackEvent`，包含 request/channel/key index/status/reason；control-api
+读取 options 和 channel `auto_ban` 后按 new-api 规则更新管理数据并发布新 snapshot。
 
 ## 风险
 

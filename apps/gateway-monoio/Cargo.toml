@@ -8,16 +8,21 @@ repository.workspace = true
 
 [dependencies]
 halolake-api-contract = { workspace = true }
+halolake-control-plane = { workspace = true }
+halolake-domain = { workspace = true }
 halolake-protocol = { workspace = true }
 halolake-router-core = { workspace = true }
 
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 async-stream = { workspace = true }
 bytes = { workspace = true }
 certain-map = { workspace = true }
 clap = { workspace = true }
+futures-channel = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
+http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 monoio = { workspace = true }

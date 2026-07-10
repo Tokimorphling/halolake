@@ -254,6 +254,18 @@ pub struct ChatChunkDelta {
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+pub struct TokenUsageDetails {
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cached_tokens: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cached_creation_tokens: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub audio_tokens: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub image_tokens: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct Usage {
     #[serde(default)]
     pub prompt_tokens: u32,
@@ -261,6 +273,25 @@ pub struct Usage {
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
+    #[serde(default, skip_serializing_if = "TokenUsageDetails::is_empty")]
+    pub prompt_tokens_details: TokenUsageDetails,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens_details: Option<TokenUsageDetails>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cached_tokens: u32,
+}
+
+impl TokenUsageDetails {
+    pub fn is_empty(&self) -> bool {
+        self.cached_tokens == 0
+            && self.cached_creation_tokens == 0
+            && self.audio_tokens == 0
+            && self.image_tokens == 0
+    }
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

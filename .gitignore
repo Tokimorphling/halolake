@@ -1,5 +1,9 @@
 /target/
 /ref/
+/web/new-api/node_modules/
+/web/new-api/**/node_modules/
+/web/new-api/default/dist/
+/web/new-api/classic/dist/
 .env
 .env.*
 !.env.example
