@@ -1,0 +1,128 @@
+# Publish multi-arch (when possible) image to GHCR for one-shot deploy.
+#
+# Triggers:
+#   - push tags v*  → ghcr.io/<owner>/halolake:<tag> + :latest
+#   - push main     → ghcr.io/<owner>/halolake:main + :sha-...
+#   - workflow_dispatch
+#
+# Deploy (Linux host network recommended):
+#   docker pull ghcr.io/<owner>/halolake:latest
+#   docker run -d --name halolake --network host \
+#     -e SESSION_SECRET=... \
+#     -v ./data:/data \
+#     ghcr.io/<owner>/halolake:latest
+#
+# Or: docker compose -f docker-compose.host.yml up -d
+# (set image: ghcr.io/<owner>/halolake:latest and remove build:)
+
+name: Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR requires lowercase image names
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image name (lowercase)
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Single platform keeps CI time/cost reasonable for a fat Rust+web image.
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+  # Optional smoke: only after push to main/tags (image must exist on GHCR)
+  smoke:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and run healthcheck
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          if ! docker pull "${IMAGE}:${TAG}" 2>/dev/null; then
+            if ! docker pull "${IMAGE}:main" 2>/dev/null; then
+              docker pull "${IMAGE}:latest"
+              TAG=latest
+            else
+              TAG=main
+            fi
+          fi
+          docker run -d --name hl-smoke \
+            -e SESSION_SECRET=ci-smoke-secret \
+            -e RUST_LOG=info \
+            -p 19090:9090 -p 18082:8082 \
+            "${IMAGE}:${TAG}"
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:19090/healthz" >/dev/null; then
+              echo "control-api healthy"
+              docker rm -f hl-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs hl-smoke || true
+          docker rm -f hl-smoke
+          exit 1
