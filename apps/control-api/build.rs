@@ -66,7 +66,7 @@ fn collect_assets_inner(
 }
 
 fn write_assets(file: &mut fs::File, name: &str, assets: &[(String, PathBuf)]) -> io::Result<()> {
-    writeln!(file, "static {name}: &[EmbeddedAsset] = &[")?;
+    writeln!(file, "pub(crate) static {name}: &[EmbeddedAsset] = &[")?;
     for (relative, path) in assets {
         writeln!(
             file,
