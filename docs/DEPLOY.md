@@ -9,23 +9,44 @@
 
 ---
 
-## 1. 最快：拉镜像启动
+## 1. 最快：不 clone 仓库，只下 compose
 
-GitHub Actions（`.github/workflows/docker.yml`）在推送 `main` 或 tag `v*` 时发布镜像到 GHCR：
+镜像由 GitHub Actions 推到 GHCR：
 
 ```text
-ghcr.io/<github-owner>/<repo>:latest   # 打 v* tag 时
-ghcr.io/<github-owner>/<repo>:main     # 推 main 时
+ghcr.io/tokimorphling/halolake:main     # 推 main
+ghcr.io/tokimorphling/halolake:latest   # 打 v* tag
 ```
 
-### 1.1 拉取并运行（推荐 bridge 端口映射）
+**前提**：机器已装 Docker + Compose；GHCR 包需 **Public**，或先 `docker login ghcr.io`。
+
+### 1.1 一键（推荐）
 
 ```bash
-export HALOLAKE_IMAGE=ghcr.io/<owner>/<repo>:latest
-# 私有包需要：echo $GHCR_TOKEN | docker login ghcr.io -u USER --password-stdin
+mkdir -p ~/halolake && cd ~/halolake
+curl -fsSL -o docker-compose.yml \
+  https://raw.githubusercontent.com/Tokimorphling/halolake/main/docker-compose.pull.yml
+docker compose up -d
+# 首次启动后读取管理员账号（密码不会打到 docker logs）
+sleep 3 && cat data/halolake-credentials.txt
+```
 
+等价纯 `docker run`：
+
+```bash
 mkdir -p data
-docker compose -f docker-compose.pull.yml up -d
+docker run -d --name halolake --restart unless-stopped \
+  -p 9090:9090 -p 8082:8082 \
+  -v "$PWD/data:/data" \
+  ghcr.io/tokimorphling/halolake:main
+cat data/halolake-credentials.txt
+```
+
+私有镜像：
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
+# 可选覆盖镜像：export HALOLAKE_IMAGE=ghcr.io/tokimorphling/halolake:main
 ```
 
 ### 1.2 首次登录凭据（必看）
