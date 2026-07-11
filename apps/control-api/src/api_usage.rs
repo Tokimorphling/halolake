@@ -806,7 +806,9 @@ pub(crate) fn usage_log_record(
         quota,
         prompt_tokens,
         completion_tokens,
-        use_time: event.latency_ms,
+        // new-api Log.UseTime is seconds (model/log.go UseTimeSeconds).
+        // Gateway stores latency_ms; convert so UI timing and t/s match new-api.
+        use_time: event.latency_ms.div_ceil(1000),
         is_stream: event.is_stream,
         channel: event.channel_id.clone(),
         channel_name: channel_names
