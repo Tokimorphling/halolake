@@ -1,60 +1,70 @@
-# Self-hosted one-shot deploy (Halolake)
+# Halolake 部署指南
 
-## Image
+面向自用 / 单机：一个 Docker 镜像同时跑 **control-api**（管理面 + Web）和 **gateway**（API 中继）。
 
-GitHub Actions builds and pushes:
+| 组件 | 默认端口 | 作用 |
+|------|----------|------|
+| control-api | **9090** | 管理 UI、用户/渠道/代理、snapshot、用量回写 |
+| gateway | **8082** | OpenAI / Claude / Gemini 兼容入口 → 上游 |
 
-`ghcr.io/<github-owner>/<repo>:latest` (on version tags `v*`)  
-`ghcr.io/<github-owner>/<repo>:main` (on push to main)
+---
 
-Workflow: `.github/workflows/docker.yml`
+## 1. 最快：拉镜像启动
 
-Make the package public (or `docker login ghcr.io`) before pull.
+GitHub Actions（`.github/workflows/docker.yml`）在推送 `main` 或 tag `v*` 时发布镜像到 GHCR：
 
-## Quick start
+```text
+ghcr.io/<github-owner>/<repo>:latest   # 打 v* tag 时
+ghcr.io/<github-owner>/<repo>:main     # 推 main 时
+```
+
+### 1.1 拉取并运行（推荐 bridge 端口映射）
 
 ```bash
 export HALOLAKE_IMAGE=ghcr.io/<owner>/<repo>:latest
+# 私有包需要：echo $GHCR_TOKEN | docker login ghcr.io -u USER --password-stdin
 
 mkdir -p data
 docker compose -f docker-compose.pull.yml up -d
 ```
 
-- Admin UI / control-api: http://localhost:9090  
-- Gateway: http://localhost:8082  
+### 1.2 首次登录凭据（必看）
 
-### First-boot credentials (important)
+**空库首次启动**会自动生成强密码与密钥，写入：
 
-On **first start with an empty database**, Halolake generates:
-
-| Key | Where |
-|-----|--------|
-| Admin **username** (default `admin`) | `/data/halolake-credentials.txt` |
-| Strong random **password** | same file |
-| `session_secret` | same file (+ used for cookie signing) |
-| `internal_secret` | same file (control ↔ gateway) |
-
-```bash
-# After the container is up:
-docker exec halolake cat /data/halolake-credentials.txt
-# or on the host if you mounted ./data:
-cat data/halolake-credentials.txt
+```text
+./data/halolake-credentials.txt    # 宿主机（已挂载 ./data:/data）
+/data/halolake-credentials.txt     # 容器内
 ```
 
-File mode is `0600`. **Password is never printed to container logs** (only a path notice).  
-Change the password after first login and enable 2FA.
+```bash
+# 启动后立刻查看（密码不会出现在 docker logs 里）
+cat data/halolake-credentials.txt
+# 或
+docker exec halolake cat /data/halolake-credentials.txt
+```
 
-Env overrides:
+示例内容：
 
-| Env | Effect |
-|-----|--------|
-| `HALOLAKE_CREDENTIALS_FILE` | Path for the credentials file (default `/data/halolake-credentials.txt`) |
-| `HALOLAKE_ADMIN_USERNAME` | Admin username when auto-creating root (default `admin`, max 12 chars) |
-| `HALOLAKE_AUTO_BOOTSTRAP` | `0`/`false` disables auto root + uses config `[[users]]` seed instead |
-| `SESSION_SECRET` | If set, used instead of generating/writing a new session secret |
-| `HALOLAKE_INTERNAL_SECRET` / `HALOLAKE_INTERNAL_KEY` | Shared internal API key for gateway |
+```text
+# Halolake bootstrap credentials (generated once)
+username=admin
+password=<约43位随机串>
+session_secret=...
+internal_secret=...
+role=root
+generated_at=unix:...
+```
 
-Host-network (Linux):
+| 字段 | 含义 |
+|------|------|
+| `username` / `password` | Web 登录（登录框是 **用户名**，不是邮箱） |
+| `session_secret` | Cookie HMAC |
+| `internal_secret` | control ↔ gateway 内部 API 密钥 |
+
+文件权限 `0600`。登录后请立刻改密并开启 **2FA**。
+
+### 1.3 Host 网络（Linux）
 
 ```bash
 docker run -d --name halolake --network host \
@@ -63,21 +73,124 @@ docker run -d --name halolake --network host \
 cat data/halolake-credentials.txt
 ```
 
-## Local build
+macOS Docker Desktop 的 host 网络能力有限，优先用 `docker-compose.pull.yml` 端口映射。
+
+---
+
+## 2. 本地构建
 
 ```bash
-docker compose -f docker-compose.host.yml up --build
+mkdir -p data
+docker compose -f docker-compose.host.yml up --build -d
 cat data/halolake-credentials.txt
 ```
 
-## Optional OTEL
+镜像内会：bun 构建 `web/new-api` → cargo release 编入 control-api / gateway。
 
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
-export OTEL_SERVICE_NAME=halolake
-# add to compose environment or docker run -e
+---
+
+## 3. 环境变量
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `HALOLAKE_CREDENTIALS_FILE` | `/data/halolake-credentials.txt` | 凭据文件路径 |
+| `HALOLAKE_ADMIN_USERNAME` | `admin` | 自动创建 root 时的用户名（≤12 字符） |
+| `HALOLAKE_AUTO_BOOTSTRAP` | 开启 | 设为 `0`/`false` 时禁用自动 root，改用配置 `[[users]]` |
+| `SESSION_SECRET` | 自动生成 | 若已设置则不再写入新 session_secret |
+| `HALOLAKE_INTERNAL_SECRET` / `HALOLAKE_INTERNAL_KEY` | 自动生成 | 网关读 internal key |
+| `HALOLAKE_CONTROL_CONFIG` | `/app/config/control-api.toml` | control 配置 |
+| `HALOLAKE_GATEWAY_CONFIG` | `/app/config/gateway.toml` | gateway 配置 |
+| `RUST_LOG` | `info` | 日志级别；请求体预览需 `debug` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 设置后导出 OTLP（如 `http://127.0.0.1:4317`） |
+| `OTEL_SERVICE_NAME` | 进程名 | OTEL service name |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | 或 `http/protobuf` |
+
+覆盖配置（不重建镜像）：
+
+```yaml
+# docker-compose.pull.yml volumes 示例
+volumes:
+  - ./data:/data
+  - ./my-control.toml:/app/config/control-api.toml:ro
+  - ./my-gateway.toml:/app/config/gateway.toml:ro
 ```
 
-## Auth import
+---
 
-See [AUTH_IMPORT.md](./AUTH_IMPORT.md) for Sub2API / CLIProxyAPI / Codex imports.
+## 4. 上线检查清单
+
+1. `cat data/halolake-credentials.txt` 保存好用户名/密码  
+2. 打开 http://&lt;host&gt;:9090 登录  
+3. 修改密码 + 开启 2FA  
+4. 配置渠道 / 导入 auth（见 [AUTH_IMPORT.md](./AUTH_IMPORT.md)）  
+5. 客户端 API Base URL 指向 gateway：`http://&lt;host&gt;:8082`  
+6. 用 Token 调 `/v1/chat/completions` 等做一次冒烟  
+7. （可选）配置 OTEL endpoint  
+
+数据目录 `./data` 含 SQLite 与凭据文件，**备份与权限务必管好**。
+
+---
+
+## 5. Auth 导入（特色能力）
+
+管理 UI：**Channels → ⋯ → Import credentials**
+
+或 API：
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| `POST` | `/api/channel/import/auth` | JSON：`content` / `contents[]`，`format=auto` |
+| `POST` | `/api/channel/import/auth/upload` | multipart 多文件（类 CLIProxyAPI） |
+| `POST` | `/api/channel/import/sub2api-data` | 仅 Sub2API 备份 JSON |
+| `POST` | `/api/channel/import/codex-auth` | 仅 Codex session |
+
+支持：
+
+- **Sub2API** `sub2api-data` 导出（proxies + accounts）  
+- **CLIProxyAPI** `auths/*.json`（`type: codex|claude|gemini`）  
+- **Codex / ChatGPT OAuth** session JSON 或 access token  
+
+详情：[AUTH_IMPORT.md](./AUTH_IMPORT.md)
+
+---
+
+## 6. 架构（单容器）
+
+```text
+客户端 ──:8082──► gateway-monoio ──► 上游 API
+                      │
+                      │ internal (snapshot / usage / feedback)
+                      ▼
+用户浏览器 ──:9090──► control-api (+ 嵌入 Web)
+                      │
+                      ▼
+                   /data/*.db + credentials.txt
+```
+
+entrypoint 会启动两个进程，并把凭据文件里的 `internal_secret` 注入 gateway。
+
+---
+
+## 7. 排障
+
+| 现象 | 处理 |
+|------|------|
+| 打不开 9090 | `docker logs halolake`；确认端口映射 / 防火墙 |
+| 忘记密码 | 空库可删 `data/*.db` 与 credentials 后重建（**会丢数据**）；或 DB 里改用户哈希 |
+| gateway 拉不到 snapshot | 确认同一容器内 `internal_secret` 一致；看 credentials 与 entrypoint 日志 |
+| 管理 UI 空白 | 镜像需包含前端 dist（正式 Dockerfile 会 build web）；确认用 GHCR / 完整 build |
+| 登录框要用邮箱 | 当前字段是 **username**；可把 username 设成邮箱字符串 |
+
+---
+
+## 8. 相关文件
+
+| 文件 | 说明 |
+|------|------|
+| `Dockerfile` | 多阶段：web + rust + runtime |
+| `docker-compose.pull.yml` | 拉镜像一键起 |
+| `docker-compose.host.yml` | 本地 build + host 网络 |
+| `docker/entrypoint.sh` | 双进程 + 凭据注入 |
+| `examples/docker/*.toml` | 镜像内默认配置（无弱密码种子用户） |
+| `.github/workflows/docker.yml` | GHCR 发布 |
+| [AUTH_IMPORT.md](./AUTH_IMPORT.md) | 凭证导入 |
