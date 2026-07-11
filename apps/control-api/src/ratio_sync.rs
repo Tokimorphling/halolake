@@ -1106,6 +1106,7 @@ mod tests {
             param_override: None,
             header_override: None,
             remark: None,
+            proxy_id: None,
         }
     }
 }

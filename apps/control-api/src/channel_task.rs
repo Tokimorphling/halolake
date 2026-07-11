@@ -12,6 +12,7 @@ use crate::{
         ChannelOpsProgress, ChannelOpsService, DetectAllChannelUpstreamModelUpdatesRequest,
         TestAllChannelsRequest,
     },
+    proxy::ProxyStore,
     publish_enriched_management_snapshot,
     storage::{ManagementStore, OptionStore},
     system_task::{
@@ -27,35 +28,37 @@ const PROGRESS_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 pub(crate) struct ChannelTestTaskPayload {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) mode: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) notify: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stream: bool,
 }
 
 impl ChannelTestTaskPayload {
     pub(crate) fn manual(stream: bool) -> Self {
         Self {
-            mode: "scheduled_all".to_string(),
-            notify: true,
+            mode: "manual".to_string(),
+            notify: false,
             stream,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ModelUpdateTaskPayload {
-    #[serde(default)]
-    pub(crate) manual: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) mode: String,
 }
 
 impl ModelUpdateTaskPayload {
     pub(crate) fn manual() -> Self {
-        Self { manual: true }
+        Self {
+            mode: "manual".to_string(),
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SystemTaskProgressState {
     pub(crate) total: usize,
     pub(crate) processed: usize,
@@ -73,6 +76,7 @@ pub(crate) fn spawn_channel_task_scheduler(
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     config: ChannelTaskSchedulerConfig,
 ) {
     if let Some(interval) = config
@@ -84,6 +88,7 @@ pub(crate) fn spawn_channel_task_scheduler(
             management.clone(),
             options.clone(),
             snapshots.clone(),
+            proxies.clone(),
             interval,
         );
     }
@@ -91,7 +96,7 @@ pub(crate) fn spawn_channel_task_scheduler(
         .model_update_interval
         .filter(|interval| !interval.is_zero())
     {
-        spawn_periodic_model_update_task(tasks, management, options, snapshots, interval);
+        spawn_periodic_model_update_task(tasks, management, options, snapshots, proxies, interval);
     }
 }
 
@@ -100,11 +105,12 @@ pub(crate) fn spawn_channel_test_task(
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     task_id: String,
 ) {
     tokio::spawn(async move {
         let logged_task_id = task_id.clone();
-        let runner = ChannelTestTaskRunner::new(tasks, management, options, snapshots);
+        let runner = ChannelTestTaskRunner::new(tasks, management, options, snapshots, proxies);
         if let Err(err) = runner.call(RunChannelTestTaskRequest { task_id }).await {
             warn!(%logged_task_id, ?err, "channel test system task failed");
         }
@@ -116,6 +122,7 @@ fn spawn_periodic_channel_test_task(
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     period: Duration,
 ) {
     tokio::spawn(async move {
@@ -132,6 +139,7 @@ fn spawn_periodic_channel_test_task(
                         management.clone(),
                         options.clone(),
                         snapshots.clone(),
+                        proxies.clone(),
                         task_id,
                     );
                 }
@@ -147,11 +155,12 @@ pub(crate) fn spawn_model_update_task(
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     task_id: String,
 ) {
     tokio::spawn(async move {
         let logged_task_id = task_id.clone();
-        let runner = ModelUpdateTaskRunner::new(tasks, management, options, snapshots);
+        let runner = ModelUpdateTaskRunner::new(tasks, management, options, snapshots, proxies);
         if let Err(err) = runner.call(RunModelUpdateTaskRequest { task_id }).await {
             warn!(%logged_task_id, ?err, "model update system task failed");
         }
@@ -163,6 +172,7 @@ fn spawn_periodic_model_update_task(
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     period: Duration,
 ) {
     tokio::spawn(async move {
@@ -179,6 +189,7 @@ fn spawn_periodic_model_update_task(
                         management.clone(),
                         options.clone(),
                         snapshots.clone(),
+                        proxies.clone(),
                         task_id,
                     );
                 }
@@ -239,6 +250,7 @@ struct ChannelTestTaskRunner {
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     runner_id: String,
 }
 
@@ -248,12 +260,14 @@ impl ChannelTestTaskRunner {
         management: ManagementStore,
         options: OptionStore,
         snapshots: MemorySnapshotBus,
+        proxies: ProxyStore,
     ) -> Self {
         Self {
             tasks,
             management,
             options,
             snapshots,
+            proxies,
             runner_id: format!("halolake-{}", Uuid::new_v4().simple()),
         }
     }
@@ -304,8 +318,13 @@ impl ChannelTestTaskRunner {
                 &mut progress,
             )
             .await?;
-        publish_enriched_management_snapshot(&self.management, &self.options, &self.snapshots)
-            .await?;
+        publish_enriched_management_snapshot(
+            &self.management,
+            &self.options,
+            &self.snapshots,
+            &self.proxies,
+        )
+        .await?;
         self.finish_succeeded(&task.task_id, json!(result)).await?;
         Ok(())
     }
@@ -347,6 +366,7 @@ struct ModelUpdateTaskRunner {
     management: ManagementStore,
     options: OptionStore,
     snapshots: MemorySnapshotBus,
+    proxies: ProxyStore,
     runner_id: String,
 }
 
@@ -356,12 +376,14 @@ impl ModelUpdateTaskRunner {
         management: ManagementStore,
         options: OptionStore,
         snapshots: MemorySnapshotBus,
+        proxies: ProxyStore,
     ) -> Self {
         Self {
             tasks,
             management,
             options,
             snapshots,
+            proxies,
             runner_id: format!("halolake-{}", Uuid::new_v4().simple()),
         }
     }
@@ -410,8 +432,13 @@ impl ModelUpdateTaskRunner {
                 &mut progress,
             )
             .await?;
-        publish_enriched_management_snapshot(&self.management, &self.options, &self.snapshots)
-            .await?;
+        publish_enriched_management_snapshot(
+            &self.management,
+            &self.options,
+            &self.snapshots,
+            &self.proxies,
+        )
+        .await?;
         self.finish_succeeded(&task.task_id, json!(result)).await?;
         Ok(())
     }
@@ -529,6 +556,14 @@ impl Default for ChannelTestTaskPayload {
             mode: String::new(),
             notify: false,
             stream: false,
+        }
+    }
+}
+
+impl Default for ModelUpdateTaskPayload {
+    fn default() -> Self {
+        Self {
+            mode: String::new(),
         }
     }
 }

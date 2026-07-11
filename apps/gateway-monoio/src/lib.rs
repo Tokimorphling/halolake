@@ -35,13 +35,23 @@ use halolake_router_core::{
     Provider, RouteError,
 };
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, header};
-use monoio::net::{ListenerOpts, TcpListener, TcpStream};
+use monoio::{
+    io::{
+        sink::SinkExt,
+        stream::Stream,
+        AsyncReadRent, AsyncWriteRent,
+    },
+    net::{ListenerOpts, TcpListener, TcpStream},
+};
 use monoio_http::{
     common::{
         body::{Body as MonoioBody, FixedBody, HttpBody, HttpBodyStream},
         error::HttpError,
     },
-    h1::payload::{stream_payload_pair, Payload},
+    h1::{
+        codec::ClientCodec,
+        payload::{stream_payload_pair, Payload},
+    },
 };
 use monoio_transports::{
     connectors::{Connector, TcpConnector, TcpTlsAddr, TlsConnector, TlsStream},
@@ -175,6 +185,7 @@ mod relay;
 mod request;
 mod response;
 mod services;
+mod upstream_proxy;
 mod util;
 
 pub use config::{

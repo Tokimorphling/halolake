@@ -38,7 +38,12 @@ impl RelayService {
         }
     }
 
-    async fn send_upstream(&self, uri: Uri, req: Request<HttpBody>) -> Result<Response<HttpBody>> {
+    async fn send_upstream(
+        &self,
+        uri: Uri,
+        req: Request<HttpBody>,
+        proxy: Option<&str>,
+    ) -> Result<Response<HttpBody>> {
         let method = req.method().clone();
         let path = req.uri().to_string();
         let version = req.version();
@@ -54,9 +59,17 @@ impl RelayService {
             %path,
             ?version,
             ?body_hint,
+            proxy = proxy.unwrap_or(""),
             connect_timeout_ms = ?self.connect_timeout.map(|d| d.as_millis()),
             "upstream request prepared"
         );
+
+        if let Some(proxy_url) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
+            return self
+                .send_upstream_via_proxy(uri, req, proxy_url)
+                .await;
+        }
+
         if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
             let key: TcpTlsAddr = uri.try_into().context("invalid https upstream uri")?;
             debug!(%host, ?port, "acquiring https upstream connection");
@@ -140,6 +153,106 @@ impl RelayService {
             );
             Ok(resp)
         }
+    }
+
+    async fn send_upstream_via_proxy(
+        &self,
+        uri: Uri,
+        req: Request<HttpBody>,
+        proxy_url: &str,
+    ) -> Result<Response<HttpBody>> {
+        let proxy = crate::upstream_proxy::parse_proxy_endpoint(proxy_url)?;
+        let target_host = uri.host().context("upstream uri missing host")?.to_string();
+        let target_port = uri
+            .port_u16()
+            .unwrap_or(if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
+                443
+            } else {
+                80
+            });
+
+        debug!(
+            proxy = %proxy.canonical,
+            %target_host,
+            target_port,
+            "connecting upstream via proxy"
+        );
+
+        let stream = crate::upstream_proxy::dial_via_proxy(
+            &proxy,
+            &target_host,
+            target_port,
+            self.connect_timeout,
+        )
+        .await?;
+
+        let path = req.uri().to_string();
+        if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
+            let native =
+                native_tls::TlsConnector::new().context("build native-tls connector")?;
+            let tls_connector = monoio_native_tls::TlsConnector::from(native);
+            let tls_stream = tls_connector
+                .connect(&target_host, stream)
+                .await
+                .context("TLS handshake through proxy")?;
+            proxy_send_request(tls_stream, req)
+                .await
+                .with_context(|| format!("send https via proxy {target_host}{path}"))
+        } else {
+            proxy_send_request(stream, req)
+                .await
+                .with_context(|| format!("send http via proxy {target_host}{path}"))
+        }
+    }
+}
+
+async fn proxy_send_request<IO>(stream: IO, req: Request<HttpBody>) -> Result<Response<HttpBody>>
+where
+    IO: AsyncReadRent + AsyncWriteRent + monoio::io::Split + Unpin + 'static,
+{
+    use monoio_http::common::body::Body as MonoioBodyTrait;
+    use monoio_http::h1::codec::decoder::PayloadDecoder;
+    use monoio_http::h1::payload::{fixed_payload_pair, stream_payload_pair, Payload};
+
+    let mut codec = ClientCodec::new(stream);
+    if let Err(err) = codec.send_and_flush(req).await {
+        anyhow::bail!("send upstream request via proxy: {err:?}");
+    }
+    match codec.next().await {
+        Some(Ok(resp)) => {
+            let (parts, payload_decoder) = resp.into_parts();
+            let body = match payload_decoder {
+                PayloadDecoder::None => HttpBody::from(Payload::None),
+                PayloadDecoder::Fixed(_) => {
+                    let mut framed_payload = payload_decoder.with_io(&mut codec);
+                    let (payload, payload_sender) = fixed_payload_pair();
+                    if let Some(data) = MonoioBodyTrait::next_data(&mut framed_payload).await {
+                        payload_sender.feed(data);
+                    }
+                    HttpBody::from(Payload::Fixed(payload))
+                }
+                PayloadDecoder::Streamed(_) => {
+                    let mut framed_payload = payload_decoder.with_io(&mut codec);
+                    let (payload, mut payload_sender) = stream_payload_pair();
+                    loop {
+                        match MonoioBodyTrait::next_data(&mut framed_payload).await {
+                            Some(Ok(data)) => payload_sender.feed_data(Some(data)),
+                            Some(Err(err)) => {
+                                anyhow::bail!("decode streamed upstream body via proxy: {err}");
+                            }
+                            None => {
+                                payload_sender.feed_data(None);
+                                break;
+                            }
+                        }
+                    }
+                    HttpBody::from(Payload::Stream(payload))
+                }
+            };
+            Ok(Response::from_parts(parts, body))
+        }
+        Some(Err(err)) => anyhow::bail!("decode upstream response via proxy: {err}"),
+        None => anyhow::bail!("proxy upstream closed without response"),
     }
 }
 
@@ -769,7 +882,7 @@ impl RelayService {
         let req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Claude upstream request")?;
-        self.send_upstream(uri, req).await
+        self.send_upstream(uri, req, route.proxy.as_deref()).await
     }
 
     async fn send_openai_json<T: Serialize>(
@@ -832,7 +945,7 @@ impl RelayService {
         let req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build OpenAI upstream request")?;
-        self.send_upstream(uri, req).await
+        self.send_upstream(uri, req, route.proxy.as_deref()).await
     }
 
     fn gemini_generate_content_path(&self, model: &str, stream: bool) -> String {
@@ -895,7 +1008,7 @@ impl RelayService {
         let req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Gemini upstream request")?;
-        self.send_upstream(uri, req).await
+        self.send_upstream(uri, req, route.proxy.as_deref()).await
     }
 
     async fn openai_passthrough(

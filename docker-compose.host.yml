@@ -1,0 +1,22 @@
+# One-shot host-network deploy (Linux recommended; Docker Desktop macOS host mode is limited).
+#
+#   docker compose -f docker-compose.host.yml up --build
+#
+# control-api :9090  |  gateway :8082
+# data: ./data (sqlite)
+
+services:
+  halolake:
+    build: .
+    image: halolake:local
+    container_name: halolake
+    network_mode: host
+    environment:
+      RUST_LOG: info
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret}
+      HALOLAKE_CONTROL_CONFIG: /app/config/control-api.toml
+      HALOLAKE_GATEWAY_CONFIG: /app/config/gateway.toml
+    volumes:
+      - ./data:/data
+      - ./examples/docker:/app/config:ro
+    restart: unless-stopped

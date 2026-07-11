@@ -144,6 +144,8 @@ pub struct ChannelConfig {
     pub models: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 impl ChannelConfig {
@@ -1087,6 +1089,7 @@ mod tests {
             weight: 1,
             models: vec!["gpt-4o".to_string()],
             groups: Vec::new(),
+            proxy: None,
         });
 
         let indexed = snapshot.index().expect("snapshot should index");
@@ -1116,6 +1119,7 @@ mod tests {
             weight: 1,
             models: vec!["gpt-4o".to_string()],
             groups: Vec::new(),
+            proxy: None,
         });
 
         let indexed = snapshot.index().expect("snapshot should index");
@@ -1161,6 +1165,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: Vec::new(),
+                    proxy: None,
                 },
                 ChannelConfig {
                     id: "channel-b".to_string(),
@@ -1174,6 +1179,7 @@ mod tests {
                     weight: 2,
                     models: vec!["gpt-4o".to_string()],
                     groups: Vec::new(),
+                    proxy: None,
                 },
             ],
             model_mappings: vec![
@@ -1256,6 +1262,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: Vec::new(),
+                    proxy: None,
                 },
                 ChannelConfig {
                     id: "channel-b".to_string(),
@@ -1269,6 +1276,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: Vec::new(),
+                    proxy: None,
                 },
             ],
             model_mappings: vec![
@@ -1351,6 +1359,7 @@ mod tests {
             weight: 1,
             models: vec!["gpt-4o".to_string()],
             groups: Vec::new(),
+            proxy: None,
         });
         snapshot.tokens[0].allowed_ips =
             vec!["203.0.113.7".to_string(), "2001:db8::/32".to_string()];
@@ -1383,6 +1392,7 @@ mod tests {
             weight: 1,
             models: vec!["gpt-4o".to_string()],
             groups: Vec::new(),
+            proxy: None,
         });
         snapshot.tokens[0].allowed_ips = vec!["not-an-ip".to_string()];
 
@@ -1422,6 +1432,7 @@ mod tests {
                     weight: 100,
                     models: vec!["gpt-4o".to_string()],
                     groups: vec!["default".to_string()],
+                    proxy: None,
                 },
                 ChannelConfig {
                     id: "paid-channel".to_string(),
@@ -1435,6 +1446,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: vec!["paid".to_string()],
+                    proxy: None,
                 },
             ],
             model_mappings: Vec::new(),
@@ -1485,6 +1497,7 @@ mod tests {
                     weight: 100,
                     models: vec!["gpt-4o".to_string()],
                     groups: vec!["default".to_string()],
+                    proxy: None,
                 },
                 ChannelConfig {
                     id: "paid-channel".to_string(),
@@ -1498,6 +1511,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: vec!["paid".to_string()],
+                    proxy: None,
                 },
             ],
             model_mappings: Vec::new(),
@@ -1545,6 +1559,7 @@ mod tests {
             weight: 1,
             models: vec!["gpt-4o".to_string()],
             groups: vec!["paid".to_string()],
+            proxy: None,
         });
         snapshot.tokens[0].user_group = "default".to_string();
         snapshot.tokens[0].token_group = "paid".to_string();

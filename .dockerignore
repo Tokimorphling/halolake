@@ -1,0 +1,15 @@
+target
+.git
+**/.git
+**/node_modules
+web/new-api/**/node_modules
+web/new-api/default/src
+web/new-api/classic/src
+web/new-api/default/public
+web/new-api/classic/public
+ref
+docs
+data
+.env
+*.md
+!README.md

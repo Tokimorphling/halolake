@@ -159,6 +159,8 @@ pub struct ChannelRecord {
     pub header_override: Option<String>,
     #[serde(default)]
     pub remark: Option<String>,
+    #[serde(default)]
+    pub proxy_id: Option<u64>,
 }
 
 impl ChannelRecord {

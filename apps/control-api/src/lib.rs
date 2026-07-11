@@ -62,6 +62,7 @@ mod compat;
 mod model_sync;
 mod playground;
 mod prefill;
+mod proxy;
 mod ratio_sync;
 mod security;
 mod session;
@@ -104,6 +105,10 @@ use channel_task::{
 };
 use checkin::{CheckinStore, CreateCheckinRequest, GetCheckinStatsRequest};
 use prefill::PrefillStore;
+use proxy::{
+    CreateProxyRequest, DeleteProxyRequest, GetProxyRequest, ListProxiesRequest, ProxyRecord,
+    ProxyStore, UpdateProxyRequest,
+};
 use model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest};
 use ratio_sync::{FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService};
 use session::{SecureVerificationError, SessionSigner, SessionStore};
@@ -318,6 +323,7 @@ struct AppState {
     billing: BillingStore,
     checkins: CheckinStore,
     prefill: PrefillStore,
+    proxies: ProxyStore,
     security: SecurityService,
     system_tasks: SystemTaskStore,
     system_instances: SystemInstanceStore,
@@ -1049,6 +1055,34 @@ impl ControlApi {
                 PrefillStore::mysql(&database_url).await?
             }
         };
+        let proxies = match config.storage.backend {
+            StorageBackend::Memory => ProxyStore::memory(),
+            StorageBackend::Sqlite => {
+                let sqlite_url = config
+                    .storage
+                    .sqlite_url
+                    .as_deref()
+                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
+                ProxyStore::sqlite(sqlite_url).await?
+            }
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                ProxyStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                ProxyStore::mysql(&database_url).await?
+            }
+        };
         let system_tasks = match config.storage.backend {
             StorageBackend::Memory => SystemTaskStore::memory(),
             StorageBackend::Sqlite => {
@@ -1154,6 +1188,7 @@ impl ControlApi {
                 management.clone(),
                 options.clone(),
                 snapshots.clone(),
+                proxies.clone(),
                 ChannelTaskSchedulerConfig {
                     channel_test_interval: Some(Duration::from_secs(
                         config.system.channel_test_interval_seconds,
@@ -1175,6 +1210,7 @@ impl ControlApi {
                 billing,
                 checkins,
                 prefill,
+                proxies,
                 security,
                 system_tasks,
                 system_instances,
@@ -1387,6 +1423,15 @@ impl ControlApi {
             .route("/api/data/self", get(data_self_quota))
             .route("/api/data/flow", get(data_all_flow))
             .route("/api/data/flow/self", get(data_self_flow))
+            .route(
+                "/api/proxy",
+                get(list_proxies).post(create_proxy).put(update_proxy),
+            )
+            .route(
+                "/api/proxy/",
+                get(list_proxies).post(create_proxy).put(update_proxy),
+            )
+            .route("/api/proxy/{id}", get(get_proxy).delete(delete_proxy))
             .route(
                 "/api/channel",
                 get(list_channels).post(create_channel).put(update_channel),
@@ -4789,6 +4834,7 @@ async fn test_all_channels(
                 state.management.clone(),
                 state.options.clone(),
                 state.snapshots.clone(),
+                state.proxies.clone(),
                 task.task_id.clone(),
             );
             api_success(json!({
@@ -4862,6 +4908,7 @@ async fn detect_all_channel_upstream_model_updates(
                 state.management.clone(),
                 state.options.clone(),
                 state.snapshots.clone(),
+                state.proxies.clone(),
                 task.task_id.clone(),
             );
             api_success(json!({
@@ -7893,19 +7940,115 @@ fn channel_feedback_error(err: ChannelFeedbackError) -> Response {
     api_error_status(status, &err.to_string())
 }
 
+
+async fn list_proxies(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match state.proxies.call(ListProxiesRequest).await {
+        Ok(items) => api_success(items),
+        Err(err) => management_error(err),
+    }
+}
+
+async fn get_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match state.proxies.call(GetProxyRequest { id }).await {
+        Ok(item) => api_success(item),
+        Err(err) => management_error(err),
+    }
+}
+
+async fn create_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(proxy): Json<ProxyRecord>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match state.proxies.call(CreateProxyRequest { proxy }).await {
+        Ok(item) => {
+            if let Err(err) = publish_management_snapshot(&state).await {
+                return management_error(err);
+            }
+            api_success(item)
+        }
+        Err(err) => management_error(err),
+    }
+}
+
+async fn update_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(proxy): Json<ProxyRecord>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match state.proxies.call(UpdateProxyRequest { proxy }).await {
+        Ok(item) => {
+            if let Err(err) = publish_management_snapshot(&state).await {
+                return management_error(err);
+            }
+            api_success(item)
+        }
+        Err(err) => management_error(err),
+    }
+}
+
+async fn delete_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match state.proxies.call(DeleteProxyRequest { id }).await {
+        Ok(()) => {
+            if let Err(err) = publish_management_snapshot(&state).await {
+                return management_error(err);
+            }
+            api_ok()
+        }
+        Err(err) => management_error(err),
+    }
+}
+
 async fn publish_management_snapshot(state: &AppState) -> Result<(), ManagementError> {
-    publish_enriched_management_snapshot(&state.management, &state.options, &state.snapshots).await
+    publish_enriched_management_snapshot(
+        &state.management,
+        &state.options,
+        &state.snapshots,
+        &state.proxies,
+    )
+    .await
 }
 
 pub(crate) async fn publish_enriched_management_snapshot(
     management: &ManagementStore,
     options: &OptionStore,
     snapshots: &MemorySnapshotBus,
+    proxies: &ProxyStore,
 ) -> Result<(), ManagementError> {
     // Do NOT bump here. Write paths already advanced the version via
     // `mutate()`. Options-only changes must call `bump_version()` before this
     // helper so the gateway does not treat the republish as NotModified.
-    let mut snapshot = management.current_data()?.build_snapshot()?;
+    let data = management.current_data()?;
+    let mut snapshot = data.build_snapshot()?;
+    apply_channel_proxies(&mut snapshot, &data, proxies);
     let option_values = options.values()?;
     snapshot.channel_affinity = channel_affinity_config_from_options(&option_values);
     snapshot.group_routing = group_routing_config_from_options(&option_values);
@@ -7914,6 +8057,29 @@ pub(crate) async fn publish_enriched_management_snapshot(
         .await
         .map_err(ManagementError::Snapshot)?;
     Ok(())
+}
+
+fn apply_channel_proxies(
+    snapshot: &mut GatewaySnapshot,
+    management: &ManagementData,
+    proxies: &ProxyStore,
+) {
+    for ch in &mut snapshot.channels {
+        let Some(rec) = management.channels.iter().find(|c| {
+            c.snapshot_id
+                .as_deref()
+                .unwrap_or(&c.id.to_string())
+                == ch.id.as_str()
+                || c.id.to_string() == ch.id
+        }) else {
+            continue;
+        };
+        if let Some(pid) = rec.proxy_id {
+            if let Some(url) = proxies.resolve_url(Some(pid)) {
+                ch.proxy = Some(url);
+            }
+        }
+    }
 }
 
 fn channel_balance_price(state: &AppState) -> f64 {

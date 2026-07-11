@@ -45,4 +45,5 @@ pub struct RouteContext {
     pub using_group: String,
     pub requested_model: String,
     pub upstream_model: String,
+    pub proxy: Option<String>,
 }

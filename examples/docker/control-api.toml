@@ -1,0 +1,44 @@
+version = 1
+
+[server]
+# host network: bind all interfaces for LAN access
+listen = "0.0.0.0:9090"
+
+[internal]
+secret = "dev-internal-secret"
+gateway_base_url = "http://127.0.0.1:8082"
+
+[session]
+# Prefer env SESSION_SECRET in production
+secret = "dev-session-secret"
+
+[system]
+name = "Halolake"
+
+[web]
+# Prefer embedded assets baked at compile time when dist paths are missing.
+enabled = true
+default_dist = "/app/web/default"
+classic_dist = "/app/web/classic"
+theme = "default"
+
+[storage]
+backend = "sqlite"
+sqlite_url = "sqlite:///data/halolake-control.db?mode=rwc"
+
+[[users]]
+id = 1
+username = "root"
+password = "halolake-root-dev"
+display_name = "Root"
+role = 100
+status = 1
+group = "default"
+quota = 100000000
+
+[[tokens]]
+id = "dev-token"
+token = "dev-token"
+user_id = "1"
+enabled = true
+allowed_models = []

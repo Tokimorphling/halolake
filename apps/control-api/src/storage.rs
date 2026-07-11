@@ -481,7 +481,8 @@ async fn migrate(pool: &SqlitePool) -> Result<(), ManagementError> {
             setting TEXT,
             param_override TEXT,
             header_override TEXT,
-            remark TEXT
+            remark TEXT,
+            proxy_id INTEGER
         )",
         "CREATE TABLE IF NOT EXISTS model_mappings (
             requested_model TEXT PRIMARY KEY,
@@ -491,6 +492,8 @@ async fn migrate(pool: &SqlitePool) -> Result<(), ManagementError> {
     ] {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
     }
+    // Best-effort migration for existing DBs.
+    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id INTEGER").execute(pool).await;
     Ok(())
 }
 
@@ -558,7 +561,8 @@ async fn migrate_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
             setting TEXT,
             param_override TEXT,
             header_override TEXT,
-            remark TEXT
+            remark TEXT,
+            proxy_id BIGINT
         )",
         "CREATE TABLE IF NOT EXISTS model_mappings (
             requested_model TEXT PRIMARY KEY,
@@ -568,6 +572,8 @@ async fn migrate_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
     ] {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
     }
+    // Best-effort migration for existing DBs.
+    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id BIGINT").execute(pool).await;
     Ok(())
 }
 
@@ -664,7 +670,7 @@ async fn load_data(pool: &SqlitePool) -> Result<ManagementData, ManagementError>
         "SELECT id, snapshot_id, channel_type, key, status, name, weight, created_time, test_time,
             response_time, base_url, balance, balance_updated_time, models, channel_group,
             used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
-            header_override, remark
+            header_override, remark, proxy_id
          FROM channels ORDER BY id",
     )
     .fetch_all(pool)
@@ -697,6 +703,7 @@ async fn load_data(pool: &SqlitePool) -> Result<ManagementData, ManagementError>
             param_override: opt_string_col(&row, "param_override")?,
             header_override: opt_string_col(&row, "header_override")?,
             remark: opt_string_col(&row, "remark")?,
+            proxy_id: opt_u64_col(&row, "proxy_id")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -803,7 +810,7 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
         "SELECT id, snapshot_id, channel_type, key, status, name, weight, created_time, test_time,
             response_time, base_url, balance, balance_updated_time, models, channel_group,
             used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
-            header_override, remark
+            header_override, remark, proxy_id
          FROM channels ORDER BY id",
     )
     .fetch_all(pool)
@@ -836,6 +843,7 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
             param_override: opt_string_col_mysql(&row, "param_override")?,
             header_override: opt_string_col_mysql(&row, "header_override")?,
             remark: opt_string_col_mysql(&row, "remark")?,
+            proxy_id: opt_u64_col_mysql(&row, "proxy_id")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -995,8 +1003,8 @@ async fn save_data_tx(
                 id, snapshot_id, channel_type, key, status, name, weight, created_time, test_time,
                 response_time, base_url, balance, balance_updated_time, models, channel_group,
                 used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
-                header_override, remark
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                header_override, remark, proxy_id
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 snapshot_id = excluded.snapshot_id,
                 channel_type = excluded.channel_type,
@@ -1020,7 +1028,8 @@ async fn save_data_tx(
                 setting = excluded.setting,
                 param_override = excluded.param_override,
                 header_override = excluded.header_override,
-                remark = excluded.remark",
+                remark = excluded.remark,
+                proxy_id = excluded.proxy_id",
         )
         .bind(channel.id as i64)
         .bind(&channel.snapshot_id)
@@ -1046,6 +1055,7 @@ async fn save_data_tx(
         .bind(&channel.param_override)
         .bind(&channel.header_override)
         .bind(&channel.remark)
+        .bind(channel.proxy_id.map(|v| v as i64))
         .execute(&mut **tx)
         .await
         .map_err(storage_err)?;
@@ -1238,8 +1248,8 @@ async fn save_data_tx_mysql(
                 id, snapshot_id, channel_type, `key`, status, name, weight, created_time, test_time,
                 response_time, base_url, balance, balance_updated_time, models, channel_group,
                 used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
-                header_override, remark
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                header_override, remark, proxy_id
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                 snapshot_id = VALUES(snapshot_id),
                 channel_type = VALUES(channel_type),
@@ -1263,7 +1273,8 @@ async fn save_data_tx_mysql(
                 setting = VALUES(setting),
                 param_override = VALUES(param_override),
                 header_override = VALUES(header_override),
-                remark = VALUES(remark)",
+                remark = VALUES(remark),
+                proxy_id = VALUES(proxy_id)",
         )
         .bind(channel.id as i64)
         .bind(&channel.snapshot_id)
@@ -1289,6 +1300,7 @@ async fn save_data_tx_mysql(
         .bind(&channel.param_override)
         .bind(&channel.header_override)
         .bind(&channel.remark)
+        .bind(channel.proxy_id.map(|v| v as i64))
         .execute(&mut **tx)
         .await
         .map_err(storage_err)?;
@@ -1429,8 +1441,16 @@ fn opt_u32_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option<u32>,
     opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u32))
 }
 
+fn opt_u64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option<u64>, ManagementError> {
+    opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u64))
+}
+
 fn opt_u32_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<u32>, ManagementError> {
     opt_i64_col_mysql(row, name).map(|value| value.map(|value| value.max(0) as u32))
+}
+
+fn opt_u64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<u64>, ManagementError> {
+    opt_i64_col_mysql(row, name).map(|value| value.map(|value| value.max(0) as u64))
 }
 
 fn f64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<f64, ManagementError> {
@@ -1522,7 +1542,8 @@ async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
             setting TEXT,
             param_override TEXT,
             header_override TEXT,
-            remark TEXT
+            remark TEXT,
+            proxy_id BIGINT
         )",
         "CREATE TABLE IF NOT EXISTS model_mappings (
             requested_model TEXT PRIMARY KEY,
@@ -1532,6 +1553,8 @@ async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
     ] {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
     }
+    // Best-effort migration for existing DBs.
+    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id BIGINT").execute(pool).await;
     Ok(())
 }
 
@@ -1620,7 +1643,7 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
         "SELECT id, snapshot_id, channel_type, key, status, name, weight, created_time, test_time,
             response_time, base_url, balance, balance_updated_time, models, channel_group,
             used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
-            header_override, remark
+            header_override, remark, proxy_id
          FROM channels ORDER BY id",
     )
     .fetch_all(pool)
@@ -1653,6 +1676,7 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
             param_override: pg_opt_string_col(&row, "param_override")?,
             header_override: pg_opt_string_col(&row, "header_override")?,
             remark: pg_opt_string_col(&row, "remark")?,
+            proxy_id: pg_opt_u64_col(&row, "proxy_id")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1799,8 +1823,8 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
                 id, snapshot_id, channel_type, key, status, name, weight, created_time, test_time,
                 response_time, base_url, balance, balance_updated_time, models, channel_group,
                 used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
-                header_override, remark
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+                header_override, remark, proxy_id
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
              ON CONFLICT (id) DO UPDATE SET
                 snapshot_id = EXCLUDED.snapshot_id,
                 channel_type = EXCLUDED.channel_type,
@@ -1824,7 +1848,8 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
                 setting = EXCLUDED.setting,
                 param_override = EXCLUDED.param_override,
                 header_override = EXCLUDED.header_override,
-                remark = EXCLUDED.remark",
+                remark = EXCLUDED.remark,
+                proxy_id = EXCLUDED.proxy_id",
         )
         .bind(channel.id as i64)
         .bind(&channel.snapshot_id)
@@ -1850,6 +1875,7 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
         .bind(&channel.param_override)
         .bind(&channel.header_override)
         .bind(&channel.remark)
+        .bind(channel.proxy_id.map(|v| v as i64))
         .execute(&mut *tx)
         .await
         .map_err(storage_err)?;
@@ -1970,6 +1996,10 @@ fn pg_opt_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<i32>
 
 fn pg_opt_u32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<u32>, ManagementError> {
     pg_opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u32))
+}
+
+fn pg_opt_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<u64>, ManagementError> {
+    pg_opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u64))
 }
 
 fn pg_f64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<f64, ManagementError> {

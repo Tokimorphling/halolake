@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-stream = { workspace = true }
 bytes = { workspace = true }
+data-encoding = { workspace = true }
 certain-map = { workspace = true }
 clap = { workspace = true }
 futures-channel = { workspace = true }
@@ -25,6 +26,7 @@ http = { workspace = true }
 monoio = { workspace = true }
 monoio-http = { workspace = true }
 monoio-native-tls = { workspace = true }
+native-tls = "0.2"
 monoio-transports = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
 serde = { workspace = true }

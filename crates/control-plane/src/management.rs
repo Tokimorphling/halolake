@@ -106,6 +106,14 @@ impl ManagementData {
             .enumerate()
             .map(|(idx, channel)| {
                 let key = snapshot_channel_key(&channel);
+                let setting = channel.proxy.as_ref().and_then(|proxy| {
+                    let proxy = proxy.trim();
+                    if proxy.is_empty() {
+                        None
+                    } else {
+                        serde_json::to_string(&serde_json::json!({ "proxy": proxy })).ok()
+                    }
+                });
                 ChannelRecord {
                     id: channel.id.parse().unwrap_or((idx + 1) as u64),
                     snapshot_id: Some(channel.id.clone()),
@@ -131,10 +139,11 @@ impl ManagementData {
                     priority: Some(0),
                     auto_ban: Some(1),
                     tag: None,
-                    setting: None,
+                    setting,
                     param_override: None,
                     header_override: None,
                     remark: None,
+                    proxy_id: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -1510,7 +1519,21 @@ fn channel_config(channel: &ChannelRecord) -> Result<Option<ChannelConfig>, Mana
         weight: channel.weight.unwrap_or(1),
         models: channel.model_list(),
         groups: channel.group_list(),
+        proxy: channel_setting_proxy(channel),
     }))
+}
+
+fn channel_setting_proxy(channel: &ChannelRecord) -> Option<String> {
+    let raw = channel.setting.as_deref()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    v.get("proxy")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn channel_model_mappings(channel: &ChannelRecord) -> Result<Vec<ModelMapping>, ManagementError> {
@@ -2078,6 +2101,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: Vec::new(),
+                    proxy: None,
                 }],
                 model_mappings: vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
@@ -2268,6 +2292,7 @@ mod tests {
                     weight: 1,
                     models: vec!["gpt-4o".to_string()],
                     groups: Vec::new(),
+                    proxy: None,
                 }],
                 model_mappings: vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
@@ -2444,6 +2469,7 @@ mod tests {
                 param_override: None,
                 header_override: None,
                 remark: None,
+                proxy_id: None,
             }],
             Vec::new(),
         );
@@ -2528,6 +2554,7 @@ mod tests {
                 param_override: None,
                 header_override: None,
                 remark: None,
+                proxy_id: None,
             }],
             Vec::new(),
         );
@@ -2554,6 +2581,7 @@ mod tests {
                 weight: 1,
                 models: vec!["upstream".to_string()],
                 groups: Vec::new(),
+                proxy: None,
             }],
             model_mappings: vec![ModelMapping {
                 requested_model: "requested".to_string(),
@@ -2599,6 +2627,7 @@ mod tests {
                 weight: 1,
                 models: vec!["deepseek-v4-pro".to_string()],
                 groups: Vec::new(),
+                proxy: None,
             }],
             model_mappings: vec![ModelMapping {
                 requested_model: "deepseek-v4-pro".to_string(),
