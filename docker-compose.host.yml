@@ -17,7 +17,9 @@ services:
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
       # OTEL_SERVICE_NAME: halolake
       # OTEL_EXPORTER_OTLP_PROTOCOL: grpc
-      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret}
+      # Unset SESSION_SECRET → first boot writes secrets + admin password to:
+      #   ./data/halolake-credentials.txt  (cat that file after start)
+      HALOLAKE_CREDENTIALS_FILE: /data/halolake-credentials.txt
       HALOLAKE_CONTROL_CONFIG: /app/config/control-api.toml
       HALOLAKE_GATEWAY_CONFIG: /app/config/gateway.toml
     volumes:

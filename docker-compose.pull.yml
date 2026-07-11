@@ -18,7 +18,9 @@ services:
       - "8082:8082"
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      SESSION_SECRET: ${SESSION_SECRET:-change-me}
+      # Leave SESSION_SECRET unset to auto-generate into /data/halolake-credentials.txt
+      # SESSION_SECRET: ${SESSION_SECRET:-}
+      HALOLAKE_CREDENTIALS_FILE: /data/halolake-credentials.txt
       # Optional OpenTelemetry:
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4317
       # OTEL_SERVICE_NAME: halolake

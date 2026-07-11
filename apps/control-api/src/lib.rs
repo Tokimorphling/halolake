@@ -40,6 +40,7 @@ mod channel_special;
 mod channel_task;
 mod checkin;
 mod auth_import;
+mod bootstrap_credentials;
 mod codex_auth_import;
 mod sub2api_data_import;
 mod compat;
@@ -244,7 +245,18 @@ impl ControlApi {
     pub async fn try_from_config(config: ControlApiConfig) -> Result<Self> {
         ensure_supported_storage_backend(&config.storage)?;
         let start_time_unix = now_unix();
-        let internal_secret = config.internal.secret.as_deref().map(Arc::<str>::from);
+
+        // Generate missing session/internal secrets and persist to credentials file.
+        let secrets = bootstrap_credentials::ensure_runtime_secrets(
+            config.session.secret.clone(),
+            config.internal.secret.clone(),
+        )
+        .context("bootstrap runtime secrets")?;
+
+        let internal_secret = secrets
+            .internal_secret
+            .as_deref()
+            .map(Arc::<str>::from);
         let gateway_base_url = config
             .internal
             .gateway_base_url
@@ -273,13 +285,29 @@ impl ControlApi {
             .clone()
             .index()
             .context("validate initial gateway snapshot")?;
+        // Do not seed weak/placeholder users from config on first boot.
+        // Root is created via setup UI or auto-bootstrap when DB has no root.
         let mut management_data = ManagementData::from_snapshot(snapshot.clone());
-        management_data.users = config.users;
-        normalize_config_users(&mut management_data.users)?;
+        let auto_bootstrap = std::env::var("HALOLAKE_AUTO_BOOTSTRAP")
+            .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+            .unwrap_or(true);
+        if auto_bootstrap {
+            management_data.users.clear();
+        } else {
+            management_data.users = config.users;
+            normalize_config_users(&mut management_data.users)?;
+        }
         let catalog_seed = CatalogData::from_management(&management_data);
         // Zero-cost monomorphized open: each store type is resolved statically.
         let management: ManagementStore =
             store_open::open_seeded_from_config(&config.storage, management_data).await?;
+
+        if auto_bootstrap {
+            bootstrap_credentials::ensure_root_admin(&management)
+                .await
+                .context("bootstrap root admin")?;
+        }
+
         let usage_events: UsageStore = store_open::open_from_config(&config.storage).await?;
         let catalog: CatalogStore =
             store_open::open_seeded_from_config(&config.storage, catalog_seed).await?;
@@ -295,19 +323,14 @@ impl ControlApi {
         let system_instances: SystemInstanceStore =
             store_open::open_from_config(&config.storage).await?;
         let sessions: SessionStore = store_open::open_from_config(&config.storage).await?;
-        let session_secret = config
-            .session
-            .secret
-            .clone()
-            .or_else(|| std::env::var("SESSION_SECRET").ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        if session_secret.is_none() {
+        let session_secret = secrets.session_secret.clone().unwrap_or_default();
+        if session_secret.is_empty() {
             warn!(
-                "session.secret / SESSION_SECRET is not set; session cookies are unsigned                  (acceptable for local memory/dev only)"
+                "session.secret / SESSION_SECRET is not set; session cookies are unsigned \
+                 (acceptable for local memory/dev only)"
             );
         }
-        let session_signer = SessionSigner::new(session_secret.unwrap_or_default());
+        let session_signer = SessionSigner::new(session_secret);
         let snapshots = MemorySnapshotBus::new(snapshot);
         spawn_system_instance_reporter(system_instances.clone(), start_time_unix);
         if config.system.task_scheduler_enabled {

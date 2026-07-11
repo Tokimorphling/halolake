@@ -326,8 +326,30 @@ impl GatewayConfig {
         let data = fs::read_to_string(path).with_context(|| format!("read config {path}"))?;
         let mut config: Self =
             toml::from_str(&data).with_context(|| format!("parse config {path}"))?;
+        config.resolve_control_env()?;
         config.resolve_channel_env_keys()?;
         Ok(config)
+    }
+
+    fn resolve_control_env(&mut self) -> Result<()> {
+        let empty = self
+            .control
+            .internal_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none();
+        if empty {
+            let from_env = std::env::var("HALOLAKE_INTERNAL_KEY")
+                .ok()
+                .or_else(|| std::env::var("HALOLAKE_INTERNAL_SECRET").ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            if let Some(key) = from_env {
+                self.control.internal_key = Some(key);
+            }
+        }
+        Ok(())
     }
 
     fn resolve_channel_env_keys(&mut self) -> Result<()> {
