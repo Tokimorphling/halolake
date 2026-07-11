@@ -13,7 +13,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{
         HeaderMap, HeaderValue, Method, StatusCode, Uri,
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, SET_COOKIE},
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HOST, SET_COOKIE},
     },
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -21,19 +21,16 @@ use axum::{
 use certain_map::ParamSet;
 use halolake_api_contract::ApiResponse;
 use halolake_control_plane::{
-    AdjustUserQuotaRequest, BatchSetChannelTagRequest, BootstrapRootUserRequest,
-    ChannelFeedbackBatch, ChannelFeedbackError, ChannelStatusUpdateRequest, ChannelTagPatch,
-    ControlActor, ControlContext, ControlRequestId, CreateChannelRequest, CreateTokenRequest,
-    CreateUserRequest, DeleteChannelRequest, DeleteDisabledChannelsRequest, DeleteTokenRequest,
-    DeleteUserRequest, GetChannelRequest, GetTokenRequest, GetUserRequest, ListChannelsRequest,
+    AdjustUserQuotaRequest, BootstrapRootUserRequest,
+    ChannelFeedbackBatch,
+    ControlActor, ControlContext, ControlRequestId, CreateTokenRequest,
+    CreateUserRequest, DeleteTokenRequest,
+    DeleteUserRequest, GetTokenRequest, GetUserRequest,
     ListTokensRequest, ListUsersRequest, LoginUserRequest, ManageUserRequest, ManagementData,
     ManagementError, MemorySnapshotBus, PublishSnapshotRequest,
-    RegisterUserRequest,
-    RevealChannelKeyRequest, RevealTokenKeyRequest, SearchChannelsRequest, SearchTokensRequest,
-    SearchUsersRequest, SettleUsageRequest, SnapshotRequest, SnapshotResponse,
-    UpdateChannelRequest, UpdateChannelsByTagRequest, UpdateTokenRequest,
-    UpdateUserAccessTokenRequest, UpdateUserRequest, UsageError, UsageEventBatch, UsagePricing,
-    ValidateUserAccessTokenRequest, ensure_user_password_hashed,
+    RegisterUserRequest, RevealTokenKeyRequest, SearchTokensRequest,
+    SearchUsersRequest, SettleUsageRequest, SnapshotRequest, SnapshotResponse, UpdateTokenRequest,
+    UpdateUserAccessTokenRequest, UpdateUserRequest, UsageError, UsageEventBatch, UsagePricing, ensure_user_password_hashed,
 };
 use halolake_domain::{
     ChannelRecord, PageRequest, PageResult, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED,
@@ -69,6 +66,9 @@ mod session;
 mod storage;
 mod system_instance;
 mod store_open;
+mod http_response;
+mod http_auth;
+mod api_channel;
 mod system_task;
 use billing::{
     BillingStore, CompleteTopUpRequest, CreateRedemptionsRequest, DeleteInvalidRedemptionsRequest,
@@ -87,37 +87,20 @@ use channel_affinity::{
     GetChannelAffinityUsageCacheStatsRequest,
 };
 use channel_feedback::ChannelFeedbackService;
-use channel_ops::{
-    ApplyAllChannelUpstreamModelUpdatesRequest, ApplyChannelUpstreamModelUpdatesRequest,
-    ChannelOpsService, ChannelTestAllQuery, ChannelTestQuery, CopyChannelQuery, CopyChannelRequest,
-    DetectChannelUpstreamModelUpdatesRequest, FixChannelAbilitiesRequest, TestChannelRequest,
-    UpdateAllChannelBalancesRequest, UpdateChannelBalanceRequest,
-};
-use channel_probe::{ChannelProbeService, FetchModelsRequest};
-use channel_special::{
-    ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
-    MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
-    OllamaPullModelRequest, OllamaVersionRequest,
-};
 use channel_task::{
-    ChannelTaskSchedulerConfig, ChannelTestTaskPayload, ModelUpdateTaskPayload,
-    SystemTaskProgressState, spawn_channel_task_scheduler, spawn_channel_test_task,
-    spawn_model_update_task,
+    ChannelTaskSchedulerConfig, spawn_channel_task_scheduler,
 };
 use checkin::{CheckinStore, CreateCheckinRequest, GetCheckinStatsRequest};
 use prefill::PrefillStore;
-use proxy::{
-    CreateProxyRequest, DeleteProxyRequest, GetProxyRequest, ListProxiesRequest, ProxyRecord,
-    ProxyStore, UpdateProxyRequest,
-};
+use proxy::ProxyStore;
 use model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest};
 use ratio_sync::{FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService};
-use session::{SecureVerificationError, SessionSigner, SessionStore};
+use session::{SessionSigner, SessionStore};
 use security::{
     AdminDisableTwoFaRequest, AdminResetPasskeyRequest, AdminTwoFaStatsRequest,
     DeletePasskeyRequest, DisableTwoFaRequest, EnableTwoFaRequest, GetPasskeyStatusRequest,
     GetTwoFaStatusRequest, PasskeyFlow, PasskeyFlowRequest, PasskeyFlowResponse,
-    PasskeyRequestContext, PasskeyUser, RegenerateTwoFaBackupCodesRequest, SecurityError,
+    PasskeyRequestContext, PasskeyUser, RegenerateTwoFaBackupCodesRequest,
     SecurityService, SecurityStore, StartTwoFaSetupRequest, UniversalVerifyRequest,
     VerificationMethod,
 };
@@ -130,9 +113,9 @@ use system_instance::{
     ListSystemInstancesRequest, SystemInstanceStore, spawn_system_instance_reporter,
 };
 use system_task::{
-    EnqueueSystemTaskRequest, GetCurrentSystemTaskRequest, GetSystemTaskRequest,
-    ListSystemTasksRequest, SYSTEM_TASK_TYPE_CHANNEL_TEST, SYSTEM_TASK_TYPE_MODEL_UPDATE,
-    StartLogCleanupTaskRequest, SystemTaskRecord, SystemTaskStore, spawn_log_cleanup_task,
+    GetCurrentSystemTaskRequest, GetSystemTaskRequest,
+    ListSystemTasksRequest,
+    StartLogCleanupTaskRequest, SystemTaskStore, spawn_log_cleanup_task,
 };
 
 
@@ -141,18 +124,32 @@ pub(crate) use config::{
     ensure_supported_storage_backend, storage_backend_name,
 };
 
+
+pub(crate) use http_response::{
+    api_error_status, api_ok, api_ok_message, api_success,
+    api_success_with_extra, api_success_with_message, channel_feedback_error, json_error,
+    management_error, page_items, security_error, usage_error, HealthResponse,
+};
+pub(crate) use http_auth::{
+    clear_session_cookie,
+    current_user, login_payload,
+    require_role, require_secure_verification, self_payload,
+    session_id_from_headers, set_session_cookie, token_from_read_only_auth,
+};
+pub(crate) use api_channel::*;
+
 pub use config::{
     ControlApiConfig, InternalConfig, LogStorageBackend, ServerConfig, SessionConfig, StorageBackend,
     StorageConfig, SystemConfig, WebConfig,
 };
 
-const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
-const SNAPSHOT_VERSION_HEADER: &str = "x-halolake-snapshot-version";
-const NEW_API_USER_HEADER: &str = "new-api-user";
-const SESSION_COOKIE_NAME: &str = "session";
-const MAX_RECENT_TOKEN_LOGS: usize = 1000;
-const TOKEN_STATUS_EXPIRED: i32 = 3;
-const TOKEN_STATUS_EXHAUSTED: i32 = 4;
+pub(crate) const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
+pub(crate) const SNAPSHOT_VERSION_HEADER: &str = "x-halolake-snapshot-version";
+pub(crate) const NEW_API_USER_HEADER: &str = "new-api-user";
+pub(crate) const SESSION_COOKIE_NAME: &str = "session";
+pub(crate) const MAX_RECENT_TOKEN_LOGS: usize = 1000;
+pub(crate) const TOKEN_STATUS_EXPIRED: i32 = 3;
+pub(crate) const TOKEN_STATUS_EXHAUSTED: i32 = 4;
 const DEFAULT_MODEL_RATIO_JSON: &str = "{}";
 const DEFAULT_CHANNEL_AFFINITY_RULES_JSON: &str = r#"[{"name":"codex cli trace","model_regex":["^gpt-.*$"],"path_regex":["/v1/responses"],"key_sources":[{"type":"gjson","path":"prompt_cache_key"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["Originator","Session_id","User-Agent","X-Codex-Beta-Features","X-Codex-Turn-Metadata"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true},{"name":"claude cli trace","model_regex":["^claude-.*$"],"path_regex":["/v1/messages"],"key_sources":[{"type":"gjson","path":"metadata.user_id"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["X-Stainless-Arch","X-Stainless-Lang","X-Stainless-Os","X-Stainless-Package-Version","X-Stainless-Retry-Count","X-Stainless-Runtime","X-Stainless-Runtime-Version","X-Stainless-Timeout","User-Agent","X-App","Anthropic-Beta","Anthropic-Dangerous-Direct-Browser-Access","Anthropic-Version"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true}]"#;
 
@@ -170,7 +167,7 @@ pub struct ControlApi {
 }
 
 #[derive(Debug, Clone)]
-struct AppState {
+pub(crate) struct AppState {
     snapshots: MemorySnapshotBus,
     management: ManagementStore,
     usage_events: UsageStore,
@@ -212,7 +209,7 @@ struct SetupPayload {
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
-struct PageQuery {
+pub(crate) struct PageQuery {
     #[serde(default = "default_page")]
     page: usize,
     #[serde(default = "default_page_size")]
@@ -241,7 +238,7 @@ struct TokenSearchQuery {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-struct ChannelSearchQuery {
+pub(crate) struct ChannelSearchQuery {
     #[serde(default = "default_page")]
     page: usize,
     #[serde(default = "default_page_size")]
@@ -525,17 +522,17 @@ struct QuotaDataRecord {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct BatchIds {
+pub(crate) struct BatchIds {
     ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
-struct StatusUpdate {
+pub(crate) struct StatusUpdate {
     status: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ChannelTagPayload {
+pub(crate) struct ChannelTagPayload {
     tag: String,
     #[serde(default)]
     new_tag: Option<String>,
@@ -556,26 +553,10 @@ struct ChannelTagPayload {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ChannelBatchTagPayload {
+pub(crate) struct ChannelBatchTagPayload {
     ids: Vec<u64>,
     #[serde(default)]
     tag: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    snapshot_version: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: ErrorBody,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    message: String,
 }
 
 impl ControlApi {
@@ -3889,910 +3870,6 @@ async fn data_self_flow(
     quota_data_response(&state, &query, Some(&user_id), QuotaGrouping::UserModel)
 }
 
-async fn list_channels(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<PageQuery>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .management
-        .call(ListChannelsRequest { page: query.into() })
-        .await
-    {
-        Ok(page) => api_success(page),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn search_channels(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<ChannelSearchQuery>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .management
-        .call(SearchChannelsRequest {
-            search: SearchRequest {
-                page: PageRequest {
-                    page: query.page,
-                    page_size: query.page_size,
-                },
-                keyword: query.keyword,
-            },
-        })
-        .await
-    {
-        Ok(page) => api_success(page),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn get_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.management.call(GetChannelRequest { id }).await {
-        Ok(channel) => api_success(channel),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn reveal_channel_key(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    // new-api: RootAuth + SecureVerificationRequired before returning plaintext key.
-    let _actor = match require_role(&state, &headers, ROLE_ROOT_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    if let Err(resp) = require_secure_verification(&state, &headers) {
-        return resp;
-    }
-    match state.management.call(RevealChannelKeyRequest { id }).await {
-        Ok(key) => api_success(json!({ "key": key.key })),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn create_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(channel): Json<ChannelRecord>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .management
-        .call(CreateChannelRequest { channel })
-        .await
-    {
-        Ok(_) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_ok(),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn update_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(channel): Json<ChannelRecord>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .management
-        .call(UpdateChannelRequest { channel })
-        .await
-    {
-        Ok(_) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_ok(),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn delete_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.management.call(DeleteChannelRequest { id }).await {
-        Ok(()) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_ok(),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn delete_channel_batch(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<BatchIds>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    for id in req.ids {
-        if let Err(err) = state.management.call(DeleteChannelRequest { id }).await {
-            return management_error(err);
-        }
-    }
-    match publish_management_snapshot(&state).await {
-        Ok(()) => api_ok(),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn update_channel_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-    Json(req): Json<StatusUpdate>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .management
-        .call(ChannelStatusUpdateRequest {
-            id,
-            status: req.status,
-        })
-        .await
-    {
-        Ok(_) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_ok(),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn update_channel_status_batch(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<Vec<ChannelStatusUpdateRequest>>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    for item in req {
-        if let Err(err) = state.management.call(item).await {
-            return management_error(err);
-        }
-    }
-    match publish_management_snapshot(&state).await {
-        Ok(()) => api_ok(),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn channel_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let data = match state.management.current_data() {
-        Ok(data) => data,
-        Err(err) => return management_error(err),
-    };
-    let mut models = data
-        .channels
-        .into_iter()
-        .flat_map(|channel| channel.model_list())
-        .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    api_success(models)
-}
-
-async fn channel_ops(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let options = state.options.values().unwrap_or_default();
-    api_success(json!({
-        "retry_times": option_i64(&options, "RetryTimes", 0),
-    }))
-}
-
-async fn fetch_models_for_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelProbeService::new(state.management.clone());
-    match service
-        .call(FetchModelsRequest {
-            channel_id: Some(id),
-            base_url: String::new(),
-            channel_type: 1,
-            key: String::new(),
-        })
-        .await
-    {
-        Ok(models) => api_success(models),
-        Err(err) => api_error_status(StatusCode::OK, &format!("获取模型列表失败: {err}")),
-    }
-}
-
-async fn fetch_models_for_channel_payload(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<FetchModelsRequest>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelProbeService::new(state.management.clone());
-    match service.call(payload).await {
-        Ok(models) => api_success(models),
-        Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
-    }
-}
-
-async fn copy_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-    Query(query): Query<CopyChannelQuery>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service
-        .call(CopyChannelRequest {
-            id,
-            suffix: query.suffix,
-            reset_balance: query.reset_balance,
-        })
-        .await
-    {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn update_channel_balance(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service
-        .call(UpdateChannelBalanceRequest {
-            id,
-            price: channel_balance_price(&state),
-        })
-        .await
-    {
-        Ok(balance) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success_with_extra(json!({ "balance": balance })),
-            Err(err) => management_error(err),
-        },
-        Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
-    }
-}
-
-async fn update_all_channel_balances(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service
-        .call(UpdateAllChannelBalancesRequest {
-            price: channel_balance_price(&state),
-        })
-        .await
-    {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn test_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-    Query(query): Query<ChannelTestQuery>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service
-        .call(TestChannelRequest {
-            id,
-            model: query.model,
-            endpoint_type: query.endpoint_type,
-            stream: query.stream,
-        })
-        .await
-    {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success_with_extra(json!({ "time": data.time })),
-            Err(err) => management_error(err),
-        },
-        Err(err) => Json(json!({
-            "success": false,
-            "message": err.to_string(),
-            "time": 0.0,
-        }))
-        .into_response(),
-    }
-}
-
-async fn test_all_channels(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<ChannelTestAllQuery>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .system_tasks
-        .call(EnqueueSystemTaskRequest {
-            task_type: SYSTEM_TASK_TYPE_CHANNEL_TEST,
-            payload: Some(json!(ChannelTestTaskPayload::manual(query.stream))),
-            state: Some(json!(SystemTaskProgressState::default())),
-        })
-        .await
-    {
-        Ok(enqueued) if enqueued.created => {
-            let task = enqueued.task;
-            spawn_channel_test_task(
-                state.system_tasks.clone(),
-                state.management.clone(),
-                state.options.clone(),
-                state.snapshots.clone(),
-                state.proxies.clone(),
-                task.task_id.clone(),
-            );
-            api_success(json!({
-                "task_id": task.task_id,
-                "status": task.status,
-            }))
-        }
-        Ok(enqueued) => system_task_conflict(
-            &enqueued.task,
-            "已有通道测试任务正在运行或等待中，不能启动本次手动任务",
-        ),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn fix_channel_abilities(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service.call(FixChannelAbilitiesRequest).await {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn detect_channel_upstream_model_updates(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<DetectChannelUpstreamModelUpdatesRequest>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service.call(req).await {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
-    }
-}
-
-async fn detect_all_channel_upstream_model_updates(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state
-        .system_tasks
-        .call(EnqueueSystemTaskRequest {
-            task_type: SYSTEM_TASK_TYPE_MODEL_UPDATE,
-            payload: Some(json!(ModelUpdateTaskPayload::manual())),
-            state: Some(json!(SystemTaskProgressState::default())),
-        })
-        .await
-    {
-        Ok(enqueued) if enqueued.created => {
-            let task = enqueued.task;
-            spawn_model_update_task(
-                state.system_tasks.clone(),
-                state.management.clone(),
-                state.options.clone(),
-                state.snapshots.clone(),
-                state.proxies.clone(),
-                task.task_id.clone(),
-            );
-            api_success(json!({
-                "task_id": task.task_id,
-                "status": task.status,
-            }))
-        }
-        Ok(enqueued) => system_task_conflict(
-            &enqueued.task,
-            "已有模型更新任务正在运行或等待中，不能启动本次手动任务",
-        ),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn apply_channel_upstream_model_updates(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ApplyChannelUpstreamModelUpdatesRequest>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service.call(req).await {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
-    }
-}
-
-async fn apply_all_channel_upstream_model_updates(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelOpsService::new(state.management.clone());
-    match service
-        .call(ApplyAllChannelUpstreamModelUpdatesRequest)
-        .await
-    {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn manage_multi_keys(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<MultiKeyManageRequest>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service.call(req).await {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => Json(data).into_response(),
-            Err(err) => management_error(err),
-        },
-        Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
-    }
-}
-
-async fn ollama_pull_model(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<OllamaModelRequestBody>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service
-        .call(OllamaPullModelRequest {
-            channel_id: req.channel_id,
-            model_name: req.model_name,
-            stream: false,
-        })
-        .await
-    {
-        Ok(data) => Json(json!({ "success": true, "message": data.message })).into_response(),
-        Err(err) => api_error_status(StatusCode::OK, &format!("Failed to pull model: {err}")),
-    }
-}
-
-async fn ollama_pull_model_stream(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<OllamaModelRequestBody>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service
-        .call(OllamaPullModelRequest {
-            channel_id: req.channel_id,
-            model_name: req.model_name,
-            stream: true,
-        })
-        .await
-    {
-        Ok(data) => (
-            [
-                ("content-type", "text/event-stream"),
-                ("cache-control", "no-cache"),
-                ("connection", "keep-alive"),
-                ("access-control-allow-origin", "*"),
-            ],
-            data.event_stream_body(),
-        )
-            .into_response(),
-        Err(err) => (
-            [("content-type", "text/event-stream")],
-            format!(
-                "data: {}\n\ndata: [DONE]\n\n",
-                json!({ "error": err.to_string() })
-            ),
-        )
-            .into_response(),
-    }
-}
-
-async fn ollama_delete_model(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<OllamaModelRequestBody>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service
-        .call(OllamaDeleteModelRequest {
-            channel_id: req.channel_id,
-            model_name: req.model_name,
-        })
-        .await
-    {
-        Ok(message) => Json(json!({ "success": true, "message": message })).into_response(),
-        Err(err) => api_error_status(StatusCode::OK, &format!("Failed to delete model: {err}")),
-    }
-}
-
-async fn ollama_version(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service.call(OllamaVersionRequest { id }).await {
-        Ok(data) => api_success(data),
-        Err(err) => api_error_status(StatusCode::OK, &format!("获取Ollama版本失败: {err}")),
-    }
-}
-
-async fn refresh_codex_channel_credential(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service.call(CodexRefreshCredentialRequest { id }).await {
-        Ok(data) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success_with_message("refreshed", data),
-            Err(err) => management_error(err),
-        },
-        Err(err) => {
-            warn!(%err, "failed to refresh codex channel credential");
-            api_error_status(StatusCode::OK, "刷新凭证失败，请稍后重试")
-        }
-    }
-}
-
-async fn get_codex_channel_usage(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    codex_wham_response(&state, &headers, id, CodexWhamKind::Usage).await
-}
-
-async fn get_codex_channel_rate_limit_reset_credits(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    codex_wham_response(&state, &headers, id, CodexWhamKind::ResetCredits).await
-}
-
-async fn reset_codex_channel_usage(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    codex_wham_response(&state, &headers, id, CodexWhamKind::ConsumeResetCredit).await
-}
-
-async fn codex_wham_response(
-    state: &AppState,
-    headers: &HeaderMap,
-    id: u64,
-    kind: CodexWhamKind,
-) -> Response {
-    let _actor = match require_role(state, headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let service = ChannelSpecialService::new(state.management.clone());
-    match service.call(CodexWhamRequest { id, kind }).await {
-        Ok(data) => {
-            let _ = publish_management_snapshot(state).await;
-            let message = if data.success {
-                String::new()
-            } else {
-                format!("upstream status: {}", data.upstream_status)
-            };
-            Json(json!({
-                "success": data.success,
-                "message": message,
-                "upstream_status": data.upstream_status,
-                "data": data.data,
-            }))
-            .into_response()
-        }
-        Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
-    }
-}
-
-async fn delete_disabled_channels(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.management.call(DeleteDisabledChannelsRequest).await {
-        Ok(rows) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(rows),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn batch_set_channel_tag(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ChannelBatchTagPayload>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    if req.ids.is_empty() {
-        return api_error_status(StatusCode::OK, "参数错误");
-    }
-    match state
-        .management
-        .call(BatchSetChannelTagRequest {
-            ids: req.ids,
-            tag: req.tag,
-        })
-        .await
-    {
-        Ok(rows) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(rows),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
-async fn disable_tag_channels(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ChannelTagPayload>,
-) -> Response {
-    update_channels_by_tag(
-        &state,
-        &headers,
-        req.tag,
-        ChannelTagPatch {
-            status: Some(0),
-            ..ChannelTagPatch::default()
-        },
-    )
-    .await
-}
-
-async fn enable_tag_channels(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ChannelTagPayload>,
-) -> Response {
-    update_channels_by_tag(
-        &state,
-        &headers,
-        req.tag,
-        ChannelTagPatch {
-            status: Some(STATUS_ENABLED),
-            ..ChannelTagPatch::default()
-        },
-    )
-    .await
-}
-
-async fn edit_tag_channels(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ChannelTagPayload>,
-) -> Response {
-    if req.tag.trim().is_empty() {
-        return api_error_status(StatusCode::OK, "tag不能为空");
-    }
-    if let Err(resp) = validate_json_override("参数覆盖", req.param_override.as_deref()) {
-        return resp;
-    }
-    if let Err(resp) = validate_json_override("请求头覆盖", req.header_override.as_deref()) {
-        return resp;
-    }
-    update_channels_by_tag(
-        &state,
-        &headers,
-        req.tag,
-        ChannelTagPatch {
-            status: None,
-            new_tag: req.new_tag,
-            priority: req.priority,
-            weight: req.weight,
-            model_mapping: req.model_mapping,
-            models: req.models,
-            groups: req.groups,
-            param_override: req.param_override,
-            header_override: req.header_override,
-        },
-    )
-    .await
-}
-
-async fn tag_models(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let tag = query.get("tag").map(String::as_str).unwrap_or_default();
-    if tag.is_empty() {
-        return api_error_status(StatusCode::BAD_REQUEST, "tag不能为空");
-    }
-    let data = match state.management.current_data() {
-        Ok(data) => data,
-        Err(err) => return management_error(err),
-    };
-    let mut longest_models = String::new();
-    let mut max_len = 0usize;
-    for channel in data.channels {
-        if channel.tag.as_deref() != Some(tag) || channel.models.is_empty() {
-            continue;
-        }
-        let len = channel.model_list().len();
-        if len > max_len {
-            max_len = len;
-            longest_models = channel.models;
-        }
-    }
-    api_success(longest_models)
-}
-
-async fn update_channels_by_tag(
-    state: &AppState,
-    headers: &HeaderMap,
-    tag: String,
-    patch: ChannelTagPatch,
-) -> Response {
-    let _actor = match require_role(state, headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    if tag.trim().is_empty() {
-        return api_error_status(StatusCode::OK, "参数错误");
-    }
-    match state
-        .management
-        .call(UpdateChannelsByTagRequest { tag, patch })
-        .await
-    {
-        Ok(_) => match publish_management_snapshot(state).await {
-            Ok(()) => api_ok(),
-            Err(err) => management_error(err),
-        },
-        Err(err) => management_error(err),
-    }
-}
-
 async fn api_empty_string() -> Response {
     api_success("")
 }
@@ -5024,266 +4101,6 @@ fn static_content_type(path: &FsPath) -> &'static str {
     } else {
         "application/octet-stream"
     }
-}
-
-/// Length-independent, byte-by-byte comparison that avoids the early-exit
-/// timing signal of `==`. Not a substitute for a constant-time-length
-/// primitive, but adequate for a shared-secret header check.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
-impl AppState {
-    fn authorized(&self, headers: &HeaderMap) -> bool {
-        // Default-deny: an unset internal secret must never expose the
-        // `/internal/*` endpoints, which return plaintext channel keys and
-        // gateway tokens. Startup logs a loud warning in this case.
-        let Some(secret) = &self.internal_secret else {
-            return false;
-        };
-        headers
-            .get(INTERNAL_KEY_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| constant_time_eq(value.as_bytes(), secret.as_bytes()))
-    }
-}
-
-fn require_secure_verification(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
-    let Some(session_id) = session_id_from_headers(headers, &state.session_signer) else {
-        return Err(secure_verification_response(SecureVerificationError::Required));
-    };
-    match state.sessions.require_secure_verified(session_id) {
-        Ok(()) => Ok(()),
-        Err(err) => Err(secure_verification_response(err)),
-    }
-}
-
-fn secure_verification_response(err: SecureVerificationError) -> Response {
-    // Frontend `isVerificationRequiredError` reads `response.data.code` at the
-    // top level of the JSON body (not nested under `data`).
-    let (message, code) = match err {
-        SecureVerificationError::Required => ("需要安全验证", "VERIFICATION_REQUIRED"),
-        SecureVerificationError::Expired => ("验证已过期，请重新验证", "VERIFICATION_EXPIRED"),
-        SecureVerificationError::Unavailable => {
-            return api_error_status(StatusCode::INTERNAL_SERVER_ERROR, "session unavailable");
-        }
-    };
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({
-            "success": false,
-            "message": message,
-            "code": code,
-        })),
-    )
-        .into_response()
-}
-
-async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<UserRecord, Response> {
-    let session_user_id = match state.sessions.user_id_from_headers(headers, &state.session_signer) {
-        Ok(user_id) => user_id,
-        Err(err) => return Err(management_error(err)),
-    };
-    let access_token = if session_user_id.is_none() {
-        access_token_from_headers(headers)
-    } else {
-        None
-    };
-    let user_id = if let Some(user_id) = session_user_id {
-        user_id
-    } else if let Some(access_token) = access_token {
-        let user = match state
-            .management
-            .call(ValidateUserAccessTokenRequest { access_token })
-            .await
-        {
-            Ok(user) => user,
-            Err(err) => return Err(management_error(err)),
-        };
-        user.id
-    } else {
-        return Err(api_error_status(StatusCode::UNAUTHORIZED, "not logged in"));
-    };
-    if let Some(header_user_id) = new_api_user_id(headers) {
-        match header_user_id {
-            Ok(id) if id == user_id => {}
-            Ok(_) => {
-                return Err(api_error_status(
-                    StatusCode::UNAUTHORIZED,
-                    "user id mismatch",
-                ));
-            }
-            Err(()) => {
-                return Err(api_error_status(
-                    StatusCode::UNAUTHORIZED,
-                    "invalid New-Api-User header",
-                ));
-            }
-        }
-    }
-    let user = match state.management.call(GetUserRequest { id: user_id }).await {
-        Ok(user) => user,
-        Err(err) => return Err(management_error(err)),
-    };
-    if user.status != STATUS_ENABLED {
-        return Err(api_error_status(StatusCode::OK, "user is disabled"));
-    }
-    Ok(user)
-}
-
-fn token_from_read_only_auth(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<TokenRecord, Response> {
-    let keys = authorization_token_keys(headers)?;
-    let data = state.management.current_data().map_err(management_error)?;
-    let token = data
-        .tokens
-        .iter()
-        .find(|token| keys.matches(&token.key))
-        .cloned()
-        .ok_or_else(|| api_error_status(StatusCode::UNAUTHORIZED, "token is invalid"))?;
-    if !read_only_token_status_allowed(token.status) {
-        return Err(api_error_status(
-            StatusCode::UNAUTHORIZED,
-            "token status is unavailable",
-        ));
-    }
-    let user_enabled = data
-        .users
-        .iter()
-        .find(|user| user.id == token.user_id)
-        .is_none_or(|user| user.status == STATUS_ENABLED);
-    if !user_enabled {
-        return Err(api_error_status(StatusCode::FORBIDDEN, "user is disabled"));
-    }
-    Ok(token)
-}
-
-struct AuthorizationTokenKeys {
-    exact: String,
-    split_prefix: Option<String>,
-}
-
-impl AuthorizationTokenKeys {
-    fn matches(&self, token_key: &str) -> bool {
-        token_key == self.exact
-            || self
-                .split_prefix
-                .as_deref()
-                .is_some_and(|candidate| token_key == candidate)
-    }
-}
-
-fn authorization_token_keys(headers: &HeaderMap) -> Result<AuthorizationTokenKeys, Response> {
-    let Some(raw) = headers
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return Err(api_error_status(
-            StatusCode::UNAUTHORIZED,
-            "token is required",
-        ));
-    };
-    let token = raw
-        .trim()
-        .strip_prefix("Bearer ")
-        .or_else(|| raw.trim().strip_prefix("bearer "))
-        .unwrap_or(raw.trim())
-        .trim()
-        .strip_prefix("sk-")
-        .unwrap_or_else(|| {
-            raw.trim()
-                .strip_prefix("Bearer ")
-                .or_else(|| raw.trim().strip_prefix("bearer "))
-                .unwrap_or(raw.trim())
-                .trim()
-        });
-    if token.is_empty() {
-        return Err(api_error_status(
-            StatusCode::UNAUTHORIZED,
-            "token is required",
-        ));
-    }
-    let split_prefix = token
-        .split_once('-')
-        .map(|(prefix, _)| prefix.trim())
-        .filter(|prefix| !prefix.is_empty() && *prefix != token)
-        .map(str::to_string);
-    Ok(AuthorizationTokenKeys {
-        exact: token.to_string(),
-        split_prefix,
-    })
-}
-
-fn read_only_token_status_allowed(status: i32) -> bool {
-    matches!(
-        status,
-        STATUS_ENABLED | TOKEN_STATUS_EXPIRED | TOKEN_STATUS_EXHAUSTED
-    )
-}
-
-async fn require_role(
-    state: &AppState,
-    headers: &HeaderMap,
-    min_role: i32,
-) -> Result<UserRecord, Response> {
-    let user = current_user(state, headers).await?;
-    if user.role < min_role {
-        return Err(api_error_status(
-            StatusCode::FORBIDDEN,
-            "insufficient privilege",
-        ));
-    }
-    Ok(user)
-}
-
-fn login_payload(user: &UserRecord) -> serde_json::Value {
-    json!({
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "role": user.role,
-        "status": user.status,
-        "group": user.group,
-    })
-}
-
-fn self_payload(user: &UserRecord) -> serde_json::Value {
-    json!({
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "role": user.role,
-        "status": user.status,
-        "email": user.email,
-        "github_id": "",
-        "discord_id": "",
-        "oidc_id": "",
-        "wechat_id": "",
-        "telegram_id": "",
-        "group": user.group,
-        "quota": user.quota,
-        "used_quota": user.used_quota,
-        "request_count": 0,
-        "aff_code": "",
-        "aff_count": 0,
-        "aff_quota": 0,
-        "aff_history_quota": 0,
-        "inviter_id": 0,
-        "linux_do_id": "",
-        "setting": user.setting,
-        "stripe_customer": "",
-        "sidebar_modules": serde_json::Value::Null,
-        "permissions": user_permissions(user.role),
-    })
 }
 
 fn usage_log_page(state: &AppState, query: &LogQuery, user_id: Option<&str>) -> Response {
@@ -5893,42 +4710,6 @@ fn validate_flow_time_range(query: &DataQuery) -> Result<(), Response> {
     Ok(())
 }
 
-fn page_items<T>(items: Vec<T>, page: PageRequest) -> PageResult<T> {
-    let total = items.len();
-    let start = page.offset();
-    let limit = page.limit();
-    let items = items.into_iter().skip(start).take(limit).collect();
-    PageResult::new(items, total, page)
-}
-
-fn user_permissions(role: i32) -> serde_json::Value {
-    if role == ROLE_ROOT_USER {
-        json!({
-            "sidebar_settings": false,
-            "sidebar_modules": {},
-            "admin_permissions": {},
-        })
-    } else if role >= ROLE_ADMIN_USER {
-        json!({
-            "sidebar_settings": true,
-            "sidebar_modules": {
-                "admin": {
-                    "setting": false,
-                }
-            },
-            "admin_permissions": {},
-        })
-    } else {
-        json!({
-            "sidebar_settings": true,
-            "sidebar_modules": {
-                "admin": false,
-            },
-            "admin_permissions": {},
-        })
-    }
-}
-
 fn pricing_records(
     management: &ManagementData,
     catalog: &CatalogData,
@@ -6011,14 +4792,6 @@ fn pricing_records(
             Some(JsonValue::Object(record))
         })
         .collect()
-}
-
-fn api_success_with_extra(mut value: JsonValue) -> Response {
-    if let Some(object) = value.as_object_mut() {
-        object.insert("success".to_string(), json!(true));
-        object.entry("message").or_insert_with(|| json!(""));
-    }
-    Json(value).into_response()
 }
 
 fn pricing_usable_groups(options: &BTreeMap<String, String>, requested_group: &str) -> JsonValue {
@@ -6721,7 +5494,7 @@ fn toml_value_to_option_string(value: &toml::Value) -> String {
     }
 }
 
-fn option_value_to_string(value: JsonValue) -> String {
+pub(crate) fn option_value_to_string(value: JsonValue) -> String {
     match value {
         JsonValue::Null => String::new(),
         JsonValue::Bool(value) => value.to_string(),
@@ -7044,11 +5817,11 @@ fn checkin_setting(options: &BTreeMap<String, String>) -> CheckinSetting {
     }
 }
 
-fn option_str<'a>(options: &'a BTreeMap<String, String>, key: &str, default: &'a str) -> &'a str {
+pub(crate) fn option_str<'a>(options: &'a BTreeMap<String, String>, key: &str, default: &'a str) -> &'a str {
     options.get(key).map(String::as_str).unwrap_or(default)
 }
 
-fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
+pub(crate) fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
     options
         .get(key)
         .and_then(|value| value.parse().ok())
@@ -7071,14 +5844,14 @@ fn generate_default_token_enabled(options: &BTreeMap<String, String>) -> bool {
     option_bool(options, "GenerateDefaultToken", env_default)
 }
 
-fn option_f64(options: &BTreeMap<String, String>, key: &str, default: f64) -> f64 {
+pub(crate) fn option_f64(options: &BTreeMap<String, String>, key: &str, default: f64) -> f64 {
     options
         .get(key)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
 
-fn option_i64(options: &BTreeMap<String, String>, key: &str, default: i64) -> i64 {
+pub(crate) fn option_i64(options: &BTreeMap<String, String>, key: &str, default: i64) -> i64 {
     options
         .get(key)
         .and_then(|value| value.parse().ok())
@@ -7211,35 +5984,11 @@ fn topup_info_payload(options: &BTreeMap<String, String>) -> JsonValue {
     })
 }
 
-fn validate_json_override(label: &str, value: Option<&str>) -> Result<(), Response> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    if serde_json::from_str::<JsonValue>(value).is_err() {
-        return Err(api_error_status(
-            StatusCode::OK,
-            &format!("{label}必须是合法的 JSON 格式"),
-        ));
-    }
-    Ok(())
-}
-
 fn push_non_empty_group(groups: &mut BTreeSet<String>, group: String) {
     let group = group.trim();
     if !group.is_empty() {
         groups.insert(group.to_string());
     }
-}
-
-fn session_id_from_headers<'a>(headers: &'a HeaderMap, signer: &SessionSigner) -> Option<&'a str> {
-    let cookie = headers.get(COOKIE)?.to_str().ok()?;
-    cookie.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        if name != SESSION_COOKIE_NAME || value.is_empty() {
-            return None;
-        }
-        signer.verify_cookie_value(value)
-    })
 }
 
 fn passkey_request_context(headers: &HeaderMap, uri: &Uri) -> PasskeyRequestContext {
@@ -7266,234 +6015,7 @@ fn insert_session_cookie(resp: &mut Response, session_id: &str, signer: &Session
     }
 }
 
-fn access_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    let token = headers
-        .get(http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .trim();
-    let token = token
-        .strip_prefix("Bearer ")
-        .or_else(|| token.strip_prefix("bearer "))
-        .unwrap_or(token)
-        .trim();
-    (!token.is_empty()).then(|| token.to_string())
-}
-
-fn new_api_user_id(headers: &HeaderMap) -> Option<Result<u64, ()>> {
-    headers.get(NEW_API_USER_HEADER).map(|value| {
-        value
-            .to_str()
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .ok_or(())
-    })
-}
-
-fn set_session_cookie(session_id: &str, signer: &SessionSigner) -> String {
-    let value = signer.sign(session_id);
-    format!(
-        "{SESSION_COOKIE_NAME}={value}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict"
-    )
-}
-
-fn clear_session_cookie() -> String {
-    format!("{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
-}
-
-fn api_success<T: Serialize>(data: T) -> Response {
-    Json(ApiResponse::success(data)).into_response()
-}
-
-fn api_success_with_message<T: Serialize>(message: &str, data: T) -> Response {
-    Json(ApiResponse {
-        success: true,
-        message: message.to_string(),
-        data: Some(data),
-    })
-    .into_response()
-}
-
-fn api_ok() -> Response {
-    Json(ApiResponse::<()>::ok()).into_response()
-}
-
-fn api_ok_message(message: &str) -> Response {
-    Json(ApiResponse::<()> {
-        success: true,
-        message: message.to_string(),
-        data: None,
-    })
-    .into_response()
-}
-
-fn api_error_status(status: StatusCode, message: &str) -> Response {
-    (status, Json(ApiResponse::<()>::error(message))).into_response()
-}
-
-fn api_error_status_with_data<T: Serialize>(
-    status: StatusCode,
-    message: &str,
-    data: T,
-) -> Response {
-    (
-        status,
-        Json(ApiResponse {
-            success: false,
-            message: message.to_string(),
-            data: Some(data),
-        }),
-    )
-        .into_response()
-}
-
-fn system_task_conflict(task: &SystemTaskRecord, message: &str) -> Response {
-    api_error_status_with_data(
-        StatusCode::CONFLICT,
-        message,
-        json!({
-            "task_id": task.task_id,
-            "status": task.status,
-            "type": task.task_type,
-        }),
-    )
-}
-
-fn management_error(err: ManagementError) -> Response {
-    let status = match err {
-        ManagementError::NotFound => StatusCode::NOT_FOUND,
-        ManagementError::Duplicate
-        | ManagementError::InvalidCredentials
-        | ManagementError::InvalidRequest(_)
-        | ManagementError::PasswordHash(_)
-        | ManagementError::InvalidModelMapping { .. } => StatusCode::BAD_REQUEST,
-        ManagementError::PermissionDenied => StatusCode::FORBIDDEN,
-        ManagementError::UnsupportedChannelType(_) => StatusCode::BAD_REQUEST,
-        ManagementError::Poisoned(_)
-        | ManagementError::Snapshot(_)
-        | ManagementError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    api_error_status(status, &err.to_string())
-}
-
-fn security_error(err: SecurityError) -> Response {
-    let message = err.message();
-    match err {
-        SecurityError::Management(err) => management_error(err),
-        SecurityError::Business(_) => api_error_status(StatusCode::OK, &message),
-    }
-}
-
-fn usage_error(err: UsageError) -> Response {
-    let status = match err {
-        UsageError::Unavailable | UsageError::Poisoned(_) | UsageError::Storage(_) => {
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-        UsageError::Transport(_) | UsageError::InvalidResponse(_) => StatusCode::BAD_GATEWAY,
-    };
-    api_error_status(status, &err.to_string())
-}
-
-fn channel_feedback_error(err: ChannelFeedbackError) -> Response {
-    let status = match err {
-        ChannelFeedbackError::Unavailable | ChannelFeedbackError::Storage(_) => {
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-        ChannelFeedbackError::Transport(_) | ChannelFeedbackError::InvalidResponse(_) => {
-            StatusCode::BAD_GATEWAY
-        }
-    };
-    api_error_status(status, &err.to_string())
-}
-
-
-async fn list_proxies(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.proxies.call(ListProxiesRequest).await {
-        Ok(items) => api_success(items),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn get_proxy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.proxies.call(GetProxyRequest { id }).await {
-        Ok(item) => api_success(item),
-        Err(err) => management_error(err),
-    }
-}
-
-async fn create_proxy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(proxy): Json<ProxyRecord>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.proxies.call(CreateProxyRequest { proxy }).await {
-        Ok(item) => {
-            if let Err(err) = publish_management_snapshot(&state).await {
-                return management_error(err);
-            }
-            api_success(item)
-        }
-        Err(err) => management_error(err),
-    }
-}
-
-async fn update_proxy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(proxy): Json<ProxyRecord>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.proxies.call(UpdateProxyRequest { proxy }).await {
-        Ok(item) => {
-            if let Err(err) = publish_management_snapshot(&state).await {
-                return management_error(err);
-            }
-            api_success(item)
-        }
-        Err(err) => management_error(err),
-    }
-}
-
-async fn delete_proxy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    match state.proxies.call(DeleteProxyRequest { id }).await {
-        Ok(()) => {
-            if let Err(err) = publish_management_snapshot(&state).await {
-                return management_error(err);
-            }
-            api_ok()
-        }
-        Err(err) => management_error(err),
-    }
-}
-
-async fn publish_management_snapshot(state: &AppState) -> Result<(), ManagementError> {
+pub(crate) async fn publish_management_snapshot(state: &AppState) -> Result<(), ManagementError> {
     publish_enriched_management_snapshot(
         &state.management,
         &state.options,
@@ -7546,14 +6068,6 @@ fn apply_channel_proxies(
             }
         }
     }
-}
-
-fn channel_balance_price(state: &AppState) -> f64 {
-    state
-        .options
-        .values()
-        .map(|options| option_f64(&options, "Price", 7.3))
-        .unwrap_or(7.3)
 }
 
 fn fill_new_token_defaults(token: &mut TokenRecord, user_id: u64) {
@@ -7695,18 +6209,6 @@ async fn shutdown_signal() {
     if let Err(err) = tokio::signal::ctrl_c().await {
         warn!(?err, "failed to install ctrl-c handler");
     }
-}
-
-fn json_error(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(ErrorResponse {
-            error: ErrorBody {
-                message: message.to_string(),
-            },
-        }),
-    )
-        .into_response()
 }
 
 #[cfg(test)]
