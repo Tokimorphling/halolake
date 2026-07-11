@@ -19,8 +19,8 @@ name = "Halolake"
 
 [web]
 enabled = true
+# Embedded default theme only (classic not built into the image).
 default_dist = "/app/web/default"
-classic_dist = "/app/web/classic"
 theme = "default"
 
 [storage]

@@ -100,7 +100,8 @@ pub(crate) fn selected_web_dist(state: &AppState) -> SelectedWebDist {
         .get("theme.frontend")
         .map(String::as_str)
         .unwrap_or(state.web.theme.as_str());
-    if theme == "classic" {
+    // Classic is no longer embedded; only use it when files exist on disk.
+    if theme == "classic" && state.web.classic_dist.join("index.html").is_file() {
         SelectedWebDist {
             theme: WebTheme::Classic,
             root:  state.web.classic_dist.clone(),

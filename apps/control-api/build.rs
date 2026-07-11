@@ -16,15 +16,15 @@ fn main() -> io::Result<()> {
 
     println!("cargo:rerun-if-env-changed=HALOLAKE_WEB_BUILD_ID");
 
+    // Only embed the default theme to keep the control-api binary small.
+    // Classic remains optional on-disk via config [web].classic_dist if needed.
     let default_dist = workspace_dir.join("web/new-api/default/dist");
-    let classic_dist = workspace_dir.join("web/new-api/classic/dist");
-
     let default_assets = collect_assets(&default_dist)?;
-    let classic_assets = collect_assets(&classic_dist)?;
 
     let mut file = fs::File::create(generated)?;
     write_assets(&mut file, "DEFAULT_WEB_ASSETS", &default_assets)?;
-    write_assets(&mut file, "CLASSIC_WEB_ASSETS", &classic_assets)?;
+    // Empty table so existing classic theme switch still compiles; no assets embedded.
+    write_assets(&mut file, "CLASSIC_WEB_ASSETS", &[])?;
     Ok(())
 }
 

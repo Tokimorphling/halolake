@@ -12,10 +12,8 @@ COPY web/new-api/ ./
 RUN bun install
 WORKDIR /web/default
 RUN bun run build
-WORKDIR /web/classic
-RUN bun run build || mkdir -p dist
 
-# --- Rust (embeds dist via apps/control-api/build.rs) ---
+# --- Rust (embeds default dist via apps/control-api/build.rs; classic not embedded) ---
 FROM rust:1-bookworm AS builder
 WORKDIR /src
 RUN apt-get update \
@@ -27,7 +25,6 @@ COPY apps apps
 COPY crates crates
 COPY examples examples
 COPY --from=web /web/default/dist web/new-api/default/dist
-COPY --from=web /web/classic/dist web/new-api/classic/dist
 
 ENV HALOLAKE_WEB_BUILD_ID=docker
 RUN cargo build --release -p halolake-control-api -p halolake-gateway-monoio
