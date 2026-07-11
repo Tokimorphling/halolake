@@ -31,6 +31,29 @@ docker compose up -d
 sleep 3 && cat data/halolake-credentials.txt
 ```
 
+### 1.1b 挂到现有 Sub2API 网络 + 复用其 Postgres
+
+见仓库根目录 `docker-compose.pull.sub2api.yml`（网络名 `sub2api_sub2api-network`）。
+
+```bash
+mkdir -p ~/halolake && cd ~/halolake
+curl -fsSL -o docker-compose.yml \
+  https://raw.githubusercontent.com/Tokimorphling/halolake/main/docker-compose.pull.sub2api.yml
+
+# 与 sub2api 相同的 Postgres 账号（从 sub2api .env 抄）
+export POSTGRES_USER=...
+export POSTGRES_PASSWORD=...
+# 新建库，勿共用 sub2api 业务库：
+docker exec -it sub2api-postgres \
+  psql -U "$POSTGRES_USER" -c 'CREATE DATABASE halolake;'
+
+docker compose up -d
+cat data/halolake-credentials.txt
+```
+
+容器内通过服务名访问：`sub2api-postgres:5432`、代理容器名等。  
+本机端口仅绑 `127.0.0.1:9090` / `8082`，交给 Caddy。
+
 等价纯 `docker run`：
 
 ```bash
