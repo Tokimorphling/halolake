@@ -47,8 +47,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data
 
 ENV RUST_LOG=info \
     HALOLAKE_CONTROL_CONFIG=/app/config/control-api.toml \
-    HALOLAKE_GATEWAY_CONFIG=/app/config/gateway.toml \
-    SESSION_SECRET=change-me-in-production
+    HALOLAKE_GATEWAY_CONFIG=/app/config/gateway.toml
 
 VOLUME ["/data"]
 EXPOSE 9090 8082
