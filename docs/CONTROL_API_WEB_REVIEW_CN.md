@@ -13,11 +13,13 @@
 ## 结论
 
 - control-api 作为 gateway 控制面的最小闭环，已经有可用基础。
-- control-api 还不能替换完整 new-api backend。
-- web 前端本身可构建、可被 control-api 静态托管；但完整使用会大量 404。
+- control-api 还不能替换完整 new-api backend 的**业务能力**（支付网关、OAuth 真登录、io.net deployment、SMTP 等外部集成仍为 stub）。
+- 前端调用面已补齐：原先约 66 条 404 的 `/api/*` 已注册，页面不再因缺路由直接失败。
+- 注意：大量新增路由是兼容 stub（空列表 / “not configured”），不等于业务能力完成。
+- web 前端本身可构建、可被 control-api 静态托管。
 - web dist 现在可以打包进 `control-api` 二进制；运行时优先读磁盘 dist，缺失时回退到内置资源。
-- 基础后台管理可用度粗估约 50%-60%。
-- 支付/订阅/OAuth/deployment/异步任务等产品能力仍是明显缺口。
+- 基础后台管理**路由覆盖**粗估约 75%-85%；真实产品能力（在线支付/OAuth/deployment）仍需外部配置后实现。
+- 支付/订阅/OAuth/deployment/异步任务等**外部集成**仍是明显缺口（有兼容响应，无第三方联调；支付 webhook 默认拒绝）。
 
 ## 验证结果
 

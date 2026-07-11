@@ -1713,8 +1713,11 @@ async fn update_option(
                 }
             }
             // Options feed channel_affinity / group_routing in the published
-            // snapshot, so republish (which bumps the version) to push the change
-            // to the gateway. Without this the data plane keeps stale config.
+            // snapshot. Bump first so the gateway poll does not treat this as
+            // NotModified (options do not flow through ManagementData::mutate).
+            if let Err(err) = state.management.bump_version().await {
+                return management_error(err);
+            }
             if let Err(err) = publish_management_snapshot(&state).await {
                 return management_error(err);
             }
@@ -3596,6 +3599,10 @@ async fn reveal_token_key(
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    // Token material is as sensitive as channel keys; require the same step-up.
+    if let Err(resp) = require_secure_verification(&state, &headers) {
+        return resp;
+    }
     match state
         .management
         .call(RevealTokenKeyRequest {
@@ -3618,6 +3625,9 @@ async fn reveal_token_keys_batch(
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_secure_verification(&state, &headers) {
+        return resp;
+    }
     if req.ids.len() > 100 {
         return api_error_status(StatusCode::OK, "too many ids (max 100)");
     }
@@ -3650,10 +3660,9 @@ async fn create_token(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    // Force ownership to the authenticated caller. Trusting a client-supplied
-    // user_id let any common user mint a token attributed to another account
-    // and spend that account's quota.
-    token.user_id = user.id;
+    // Self-service tokens are rebuilt server-side. Never trust ownership,
+    // used_quota, or an attacker-chosen key material from the client.
+    sanitize_self_service_token_create(&mut token, user.id);
     fill_new_token_defaults(&mut token, user.id);
     match state.management.call(CreateTokenRequest { token }).await {
         Ok(_) => match publish_management_snapshot(&state).await {
@@ -3667,15 +3676,46 @@ async fn create_token(
 async fn update_token(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(mut token): Json<TokenRecord>,
+    Json(patch): Json<TokenRecord>,
 ) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    if token.user_id == 0 {
-        token.user_id = user.id;
+    // Load the stored token first and overlay only self-service fields. Never
+    // trust a full client rewrite of key/user_id/used_quota/group.
+    let current = match state
+        .management
+        .call(GetTokenRequest {
+            id: patch.id,
+            user_id: Some(user.id),
+        })
+        .await
+    {
+        Ok(token) => token,
+        Err(err) => return management_error(err),
+    };
+    // GetToken returns a masked key; fetch the real key via reveal internals
+    // would be wrong here. Instead re-apply the update through management which
+    // preserves the stored key when the payload key is empty.
+    let mut token = current;
+    token.user_id = user.id;
+    token.key.clear();
+    if !patch.name.trim().is_empty() {
+        token.name = patch.name.trim().to_string();
     }
+    token.expired_time = patch.expired_time;
+    token.remain_quota = patch.remain_quota.max(0);
+    token.unlimited_quota = patch.unlimited_quota;
+    token.model_limits_enabled = patch.model_limits_enabled;
+    token.model_limits = patch.model_limits;
+    token.allow_ips = patch.allow_ips;
+    if patch.status == 0 || patch.status == STATUS_ENABLED {
+        token.status = patch.status;
+    }
+    // group / cross_group_retry stay server-owned (inherit user group).
+    token.group.clear();
+    token.cross_group_retry = false;
     match state
         .management
         .call(UpdateTokenRequest {
@@ -7817,12 +7857,9 @@ pub(crate) async fn publish_enriched_management_snapshot(
     options: &OptionStore,
     snapshots: &MemorySnapshotBus,
 ) -> Result<(), ManagementError> {
-    // Bump version on every publish. Options-derived config (channel_affinity /
-    // group_routing) is enriched onto the snapshot at publish time and does not
-    // flow through ManagementData mutations, so without bumping an options-only
-    // change would republish an identical version and the gateway's
-    // `since_version >= version` poll would treat it as NotModified.
-    management.bump_version().await?;
+    // Do NOT bump here. Write paths already advanced the version via
+    // `mutate()`. Options-only changes must call `bump_version()` before this
+    // helper so the gateway does not treat the republish as NotModified.
     let mut snapshot = management.current_data()?.build_snapshot()?;
     let option_values = options.values()?;
     snapshot.channel_affinity = channel_affinity_config_from_options(&option_values);
@@ -7862,6 +7899,47 @@ fn fill_new_token_defaults(token: &mut TokenRecord, user_id: u64) {
         token.accessed_time = now;
     }
 }
+
+/// Fields a self-service caller may set on create. Everything else is server-owned.
+fn sanitize_self_service_token_create(token: &mut TokenRecord, user_id: u64) {
+    let name = token.name.trim().to_string();
+    let expired_time = token.expired_time;
+    let remain_quota = token.remain_quota.max(0);
+    let unlimited_quota = token.unlimited_quota;
+    let model_limits_enabled = token.model_limits_enabled;
+    let model_limits = token.model_limits.clone();
+    let allow_ips = token.allow_ips.clone();
+    let status = if token.status == 0 {
+        // 0 is the common "disabled" value in the copied frontend.
+        0
+    } else {
+        STATUS_ENABLED
+    };
+
+    *token = TokenRecord {
+        id: 0,
+        snapshot_id: None,
+        user_id,
+        snapshot_user_id: None,
+        key: String::new(),
+        status,
+        name,
+        created_time: 0,
+        accessed_time: 0,
+        expired_time,
+        remain_quota,
+        unlimited_quota,
+        model_limits_enabled,
+        model_limits,
+        allow_ips,
+        used_quota: 0,
+        // Empty inherits the user's group in the published snapshot. Self-service
+        // callers must not invent a privileged token_group override.
+        group: String::new(),
+        cross_group_retry: false,
+    };
+}
+
 
 fn fill_new_user_defaults(user: &mut UserRecord) {
     if user.display_name.is_empty() {

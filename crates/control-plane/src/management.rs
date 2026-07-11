@@ -1201,12 +1201,18 @@ impl Service<UpdateTokenRequest> for MemoryManagementStore {
                 })
                 .ok_or(ManagementError::NotFound)?;
             let mut updated = req.token;
+            // Ownership and spend counters are server-owned. Self-service (and
+            // any caller that supplies user_id) cannot reassign a token or reset
+            // used_quota by rewriting the record.
+            updated.user_id = token.user_id;
+            updated.used_quota = token.used_quota;
             if updated.key.is_empty() {
                 updated.key.clone_from(&token.key);
             }
             updated.snapshot_id.clone_from(&token.snapshot_id);
-            if updated.user_id == token.user_id {
-                updated.snapshot_user_id.clone_from(&token.snapshot_user_id);
+            updated.snapshot_user_id.clone_from(&token.snapshot_user_id);
+            if updated.remain_quota < 0 {
+                updated.remain_quota = 0;
             }
             *token = updated.clone();
             Ok(updated.masked())
@@ -1450,13 +1456,10 @@ where
         &self,
         req: PublishManagementSnapshotRequest<P>,
     ) -> Result<Self::Response, Self::Error> {
-        // Bump the version on every publish. Options-derived config
-        // (channel_affinity / group_routing) is enriched onto the snapshot after
-        // this call and never flows through `mutate`, so without bumping here an
-        // options-only change would republish an identical version and the
-        // gateway's `since_version >= version` poll would treat it as
-        // NotModified, leaving the data plane on stale routing/affinity config.
-        let snapshot = self.mutate(|data| data.build_snapshot())?;
+        // Publish the current version as-is. Write paths already advanced the
+        // version via `mutate()`. Options-only publishers must call
+        // `bump_version()` before this so the gateway does not see NotModified.
+        let snapshot = self.current_data()?.build_snapshot()?;
         req.publisher
             .call(PublishSnapshotRequest { snapshot })
             .await

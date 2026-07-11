@@ -5,6 +5,8 @@ listen = "127.0.0.1:9090"
 
 [internal]
 secret = "dev-internal-secret"
+# Used by the web playground (`/pg/chat/completions`) to reach the data plane.
+gateway_base_url = "http://127.0.0.1:8082"
 
 [system]
 name = "Halolake"

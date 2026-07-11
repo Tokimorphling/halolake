@@ -85,6 +85,7 @@ pub(crate) struct BoundChannel {
 pub(crate) struct ModelRecord {
     #[serde(default)]
     pub(crate) id: u64,
+    #[serde(default)]
     pub(crate) model_name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) description: String,
