@@ -39,6 +39,7 @@ mod channel_probe;
 mod channel_special;
 mod channel_task;
 mod checkin;
+mod codex_auth_import;
 mod compat;
 mod model_sync;
 mod playground;
@@ -565,6 +566,8 @@ impl ControlApi {
                 "/api/channel/",
                 get(list_channels).post(create_channel).put(update_channel),
             )
+            .route("/api/channel/import/codex-auth", post(import_codex_auth))
+            .route("/api/channel/import/codex-auth/", post(import_codex_auth))
             .route("/api/channel/search", get(search_channels))
             .route("/api/channel/models", get(channel_models))
             .route("/api/channel/models_enabled", get(channel_models))

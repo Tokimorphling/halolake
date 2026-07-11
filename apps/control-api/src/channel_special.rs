@@ -835,13 +835,17 @@ fn key_preview(key: &str) -> String {
 }
 
 fn parse_codex_key(raw: &str) -> Result<CodexOAuthKey, ManagementError> {
-    if raw.trim().is_empty() {
-        return Err(ManagementError::InvalidRequest(
-            "codex channel: empty oauth key",
-        ));
-    }
-    serde_json::from_str(raw.trim())
-        .map_err(|_| ManagementError::InvalidRequest("codex channel: invalid oauth key json"))
+    let flexible = crate::codex_auth_import::parse_flexible_codex_key(raw)?;
+    Ok(CodexOAuthKey {
+        id_token: flexible.id_token,
+        access_token: flexible.access_token,
+        refresh_token: flexible.refresh_token,
+        account_id: flexible.account_id,
+        last_refresh: flexible.last_refresh,
+        email: flexible.email,
+        key_type: flexible.key_type,
+        expired: flexible.expired,
+    })
 }
 
 async fn response_json(response: reqwest::Response) -> Result<JsonValue, ManagementError> {

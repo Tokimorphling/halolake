@@ -37,6 +37,10 @@ use crate::channel_task::{
     ChannelTestTaskPayload, ModelUpdateTaskPayload, SystemTaskProgressState,
     spawn_channel_test_task, spawn_model_update_task,
 };
+use crate::codex_auth_import::{
+    CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
+    CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
+};
 use crate::http_response::{
     api_error_status, api_ok, api_success, api_success_with_extra, api_success_with_message,
     management_error, system_task_conflict,
@@ -50,7 +54,7 @@ use crate::system_task::{
 };
 use crate::{
     AppState, BatchIds, ChannelBatchTagPayload, ChannelSearchQuery, ChannelTagPayload, PageQuery,
-    StatusUpdate, option_f64, option_i64, publish_management_snapshot,
+    StatusUpdate, now_unix, option_f64, option_i64, publish_management_snapshot,
 };
 use crate::http_auth::{require_role, require_secure_verification};
 
@@ -160,6 +164,274 @@ pub(crate) async fn create_channel(
     }
 }
 
+/// Import Codex / sub2api-format auth files as type-57 channels.
+///
+/// Body: `{ "content": "<file or paste>", "contents": ["..."], "name", "group",
+/// "models", "base_url", "proxy_id", "update_existing": true }`
+pub(crate) async fn import_codex_auth(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CodexAuthImportRequest>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+
+    let entries = match collect_entries(&req) {
+        Ok(entries) => entries,
+        Err(err) => return management_error(err),
+    };
+
+    let mut result = CodexAuthImportResult {
+        total: entries.len(),
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        failed: 0,
+        items: Vec::with_capacity(entries.len()),
+        warnings: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    let existing = match state.management.current_data() {
+        Ok(data) => data.channels,
+        Err(err) => return management_error(err),
+    };
+
+    let group = req
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .unwrap_or("default")
+        .to_string();
+    let models = req
+        .models
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or("gpt-5.1,gpt-5,o3,o4-mini")
+        .to_string();
+    let base_url = req
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_string);
+    let name_base = req.name.trim();
+
+    let mut seen: HashMap<String, usize> = HashMap::new();
+
+    for (offset, item) in entries.into_iter().enumerate() {
+        let index = offset + 1;
+        let account_name = if name_base.is_empty() {
+            item.name.clone()
+        } else if result.total > 1 {
+            format!("{name_base} #{index}")
+        } else {
+            name_base.to_string()
+        };
+
+        for warning in &item.warnings {
+            result.warnings.push(CodexAuthImportMessage {
+                index,
+                name: account_name.clone(),
+                message: warning.clone(),
+            });
+        }
+
+        if let Some(prev) = item
+            .identity_keys
+            .iter()
+            .find_map(|key| seen.get(key).copied())
+        {
+            result.skipped = result.skipped.saturating_add(1);
+            let message = format!("duplicate of import entry {prev}; skipped");
+            result.items.push(CodexAuthImportItem {
+                index,
+                name: account_name.clone(),
+                action: "skipped".into(),
+                channel_id: None,
+                message: message.clone(),
+            });
+            result.warnings.push(CodexAuthImportMessage {
+                index,
+                name: account_name,
+                message,
+            });
+            continue;
+        }
+        for key in &item.identity_keys {
+            seen.insert(key.clone(), index);
+        }
+
+        let key_json = match codex_key_to_json(&item.key) {
+            Ok(json) => json,
+            Err(err) => {
+                result.failed = result.failed.saturating_add(1);
+                let message = err.to_string();
+                result.items.push(CodexAuthImportItem {
+                    index,
+                    name: account_name.clone(),
+                    action: "failed".into(),
+                    channel_id: None,
+                    message: message.clone(),
+                });
+                result.errors.push(CodexAuthImportMessage {
+                    index,
+                    name: account_name,
+                    message,
+                });
+                continue;
+            }
+        };
+
+        if let Some(existing_id) = find_existing_channel_id(&existing, &item) {
+            if req.update_existing {
+                let mut channel = match existing.iter().find(|c| c.id == existing_id).cloned() {
+                    Some(channel) => channel,
+                    None => {
+                        result.failed = result.failed.saturating_add(1);
+                        result.items.push(CodexAuthImportItem {
+                            index,
+                            name: account_name.clone(),
+                            action: "failed".into(),
+                            channel_id: None,
+                            message: "existing channel disappeared".into(),
+                        });
+                        continue;
+                    }
+                };
+                channel.key = key_json;
+                channel.channel_type = CHANNEL_TYPE_CODEX;
+                if !account_name.is_empty() {
+                    channel.name = account_name.clone();
+                }
+                if let Some(pid) = req.proxy_id {
+                    channel.proxy_id = Some(pid);
+                }
+                match state
+                    .management
+                    .call(UpdateChannelRequest { channel })
+                    .await
+                {
+                    Ok(updated) => {
+                        result.updated = result.updated.saturating_add(1);
+                        result.items.push(CodexAuthImportItem {
+                            index,
+                            name: account_name,
+                            action: "updated".into(),
+                            channel_id: Some(updated.id),
+                            message: String::new(),
+                        });
+                    }
+                    Err(err) => {
+                        result.failed = result.failed.saturating_add(1);
+                        let message = err.to_string();
+                        result.items.push(CodexAuthImportItem {
+                            index,
+                            name: account_name.clone(),
+                            action: "failed".into(),
+                            channel_id: None,
+                            message: message.clone(),
+                        });
+                        result.errors.push(CodexAuthImportMessage {
+                            index,
+                            name: account_name,
+                            message,
+                        });
+                    }
+                }
+            } else {
+                result.skipped = result.skipped.saturating_add(1);
+                result.items.push(CodexAuthImportItem {
+                    index,
+                    name: account_name,
+                    action: "skipped".into(),
+                    channel_id: Some(existing_id),
+                    message: "matching channel exists; update_existing=false".into(),
+                });
+            }
+            continue;
+        }
+
+        let channel = ChannelRecord {
+            id: 0,
+            snapshot_id: None,
+            channel_type: CHANNEL_TYPE_CODEX,
+            key: key_json,
+            status: STATUS_ENABLED,
+            name: account_name.clone(),
+            weight: req.weight.or(Some(1)),
+            created_time: now_unix(),
+            test_time: 0,
+            response_time: 0,
+            base_url: base_url.clone(),
+            balance: 0.0,
+            balance_updated_time: 0,
+            models: models.clone(),
+            group: group.clone(),
+            used_quota: 0,
+            model_mapping: None,
+            priority: req.priority.or(Some(0)),
+            auto_ban: Some(1),
+            tag: None,
+            setting: None,
+            param_override: None,
+            header_override: None,
+            remark: Some(format!(
+                "imported from codex/sub2api auth{}",
+                if item.email.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", item.email)
+                }
+            )),
+            proxy_id: req.proxy_id,
+        };
+
+        match state
+            .management
+            .call(CreateChannelRequest { channel })
+            .await
+        {
+            Ok(created) => {
+                result.created = result.created.saturating_add(1);
+                result.items.push(CodexAuthImportItem {
+                    index,
+                    name: account_name,
+                    action: "created".into(),
+                    channel_id: Some(created.id),
+                    message: String::new(),
+                });
+            }
+            Err(err) => {
+                result.failed = result.failed.saturating_add(1);
+                let message = err.to_string();
+                result.items.push(CodexAuthImportItem {
+                    index,
+                    name: account_name.clone(),
+                    action: "failed".into(),
+                    channel_id: None,
+                    message: message.clone(),
+                });
+                result.errors.push(CodexAuthImportMessage {
+                    index,
+                    name: account_name,
+                    message,
+                });
+            }
+        }
+    }
+
+    if result.created > 0 || result.updated > 0 {
+        if let Err(err) = publish_management_snapshot(&state).await {
+            return management_error(err);
+        }
+    }
+    api_success(result)
+}
 
 pub(crate) async fn update_channel(
     State(state): State<AppState>,
