@@ -1,31 +1,30 @@
-use serde::{Deserialize, Serialize};
-
 use crate::JsonValue;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiChatRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub contents: Vec<GeminiChatContent>,
+    pub contents:           Vec<GeminiChatContent>,
     #[serde(
         default,
         rename = "safetySettings",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub safety_settings: Vec<GeminiChatSafetySetting>,
+    pub safety_settings:    Vec<GeminiChatSafetySetting>,
     #[serde(
         default,
         rename = "generationConfig",
         skip_serializing_if = "GeminiGenerationConfig::is_empty"
     )]
-    pub generation_config: GeminiGenerationConfig,
+    pub generation_config:  GeminiGenerationConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<GeminiTool>,
+    pub tools:              Vec<GeminiTool>,
     #[serde(
         default,
         rename = "toolConfig",
         skip_serializing_if = "Option::is_none"
     )]
-    pub tool_config: Option<JsonValue>,
+    pub tool_config:        Option<JsonValue>,
     #[serde(
         default,
         rename = "systemInstruction",
@@ -37,13 +36,13 @@ pub struct GeminiChatRequest {
         rename = "cachedContent",
         skip_serializing_if = "Option::is_none"
     )]
-    pub cached_content: Option<String>,
+    pub cached_content:     Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiChatContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
+    pub role:  Option<String>,
     #[serde(default)]
     pub parts: Vec<GeminiPart>,
 }
@@ -51,35 +50,35 @@ pub struct GeminiChatContent {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    pub text:                  Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thought: Option<bool>,
+    pub thought:               Option<bool>,
     #[serde(
         default,
         rename = "inlineData",
         skip_serializing_if = "Option::is_none"
     )]
-    pub inline_data: Option<GeminiInlineData>,
+    pub inline_data:           Option<GeminiInlineData>,
     #[serde(default, rename = "fileData", skip_serializing_if = "Option::is_none")]
-    pub file_data: Option<GeminiFileData>,
+    pub file_data:             Option<GeminiFileData>,
     #[serde(
         default,
         rename = "functionCall",
         skip_serializing_if = "Option::is_none"
     )]
-    pub function_call: Option<GeminiFunctionCall>,
+    pub function_call:         Option<GeminiFunctionCall>,
     #[serde(
         default,
         rename = "functionResponse",
         skip_serializing_if = "Option::is_none"
     )]
-    pub function_response: Option<GeminiFunctionResponse>,
+    pub function_response:     Option<GeminiFunctionResponse>,
     #[serde(
         default,
         rename = "executableCode",
         skip_serializing_if = "Option::is_none"
     )]
-    pub executable_code: Option<GeminiExecutableCode>,
+    pub executable_code:       Option<GeminiExecutableCode>,
     #[serde(
         default,
         rename = "codeExecutionResult",
@@ -87,7 +86,7 @@ pub struct GeminiPart {
     )]
     pub code_execution_result: Option<GeminiCodeExecutionResult>,
     #[serde(flatten)]
-    pub extra: serde_json::Map<String, JsonValue>,
+    pub extra:                 serde_json::Map<String, JsonValue>,
 }
 
 impl GeminiPart {
@@ -103,7 +102,7 @@ impl GeminiPart {
 pub struct GeminiInlineData {
     #[serde(rename = "mimeType")]
     pub mime_type: String,
-    pub data: String,
+    pub data:      String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -111,7 +110,7 @@ pub struct GeminiFileData {
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     #[serde(rename = "fileUri")]
-    pub file_uri: String,
+    pub file_uri:  String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -123,7 +122,7 @@ pub struct GeminiFunctionCall {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeminiFunctionResponse {
-    pub name: String,
+    pub name:     String,
     #[serde(default)]
     pub response: JsonValue,
 }
@@ -133,7 +132,7 @@ pub struct GeminiExecutableCode {
     #[serde(default)]
     pub language: String,
     #[serde(default)]
-    pub code: String,
+    pub code:     String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -141,41 +140,41 @@ pub struct GeminiCodeExecutionResult {
     #[serde(default)]
     pub outcome: String,
     #[serde(default)]
-    pub output: String,
+    pub output:  String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiChatSafetySetting {
-    pub category: String,
+    pub category:  String,
     pub threshold: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiGenerationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature:        Option<f32>,
     #[serde(default, rename = "topP", skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
+    pub top_p:              Option<f32>,
     #[serde(default, rename = "topK", skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>,
+    pub top_k:              Option<i32>,
     #[serde(
         default,
         rename = "maxOutputTokens",
         skip_serializing_if = "Option::is_none"
     )]
-    pub max_output_tokens: Option<u32>,
+    pub max_output_tokens:  Option<u32>,
     #[serde(
         default,
         rename = "candidateCount",
         skip_serializing_if = "Option::is_none"
     )]
-    pub candidate_count: Option<u32>,
+    pub candidate_count:    Option<u32>,
     #[serde(
         default,
         rename = "stopSequences",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub stop_sequences: Vec<String>,
+    pub stop_sequences:     Vec<String>,
     #[serde(
         default,
         rename = "responseMimeType",
@@ -187,9 +186,9 @@ pub struct GeminiGenerationConfig {
         rename = "responseSchema",
         skip_serializing_if = "Option::is_none"
     )]
-    pub response_schema: Option<JsonValue>,
+    pub response_schema:    Option<JsonValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seed: Option<i64>,
+    pub seed:               Option<i64>,
 }
 
 impl GeminiGenerationConfig {
@@ -219,34 +218,34 @@ pub struct GeminiTool {
         rename = "googleSearch",
         skip_serializing_if = "Option::is_none"
     )]
-    pub google_search: Option<JsonValue>,
+    pub google_search:         Option<JsonValue>,
     #[serde(
         default,
         rename = "codeExecution",
         skip_serializing_if = "Option::is_none"
     )]
-    pub code_execution: Option<JsonValue>,
+    pub code_execution:        Option<JsonValue>,
     #[serde(
         default,
         rename = "urlContext",
         skip_serializing_if = "Option::is_none"
     )]
-    pub url_context: Option<JsonValue>,
+    pub url_context:           Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeminiFunctionDeclaration {
-    pub name: String,
+    pub name:        String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parameters: Option<JsonValue>,
+    pub parameters:  Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiChatResponse {
     #[serde(default)]
-    pub candidates: Vec<GeminiCandidate>,
+    pub candidates:      Vec<GeminiCandidate>,
     #[serde(
         default,
         rename = "promptFeedback",
@@ -254,21 +253,21 @@ pub struct GeminiChatResponse {
     )]
     pub prompt_feedback: Option<JsonValue>,
     #[serde(default, rename = "usageMetadata")]
-    pub usage_metadata: GeminiUsageMetadata,
+    pub usage_metadata:  GeminiUsageMetadata,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiCandidate {
     #[serde(default)]
-    pub content: GeminiChatContent,
+    pub content:        GeminiChatContent,
     #[serde(
         default,
         rename = "finishReason",
         skip_serializing_if = "Option::is_none"
     )]
-    pub finish_reason: Option<String>,
+    pub finish_reason:  Option<String>,
     #[serde(default)]
-    pub index: u32,
+    pub index:          u32,
     #[serde(default, rename = "safetyRatings")]
     pub safety_ratings: Vec<JsonValue>,
 }
@@ -276,20 +275,20 @@ pub struct GeminiCandidate {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct GeminiUsageMetadata {
     #[serde(default, rename = "promptTokenCount")]
-    pub prompt_token_count: u32,
+    pub prompt_token_count:         u32,
     #[serde(default, rename = "candidatesTokenCount")]
-    pub candidates_token_count: u32,
+    pub candidates_token_count:     u32,
     #[serde(default, rename = "totalTokenCount")]
-    pub total_token_count: u32,
+    pub total_token_count:          u32,
     #[serde(default, rename = "thoughtsTokenCount")]
-    pub thoughts_token_count: u32,
+    pub thoughts_token_count:       u32,
     #[serde(default, rename = "cachedContentTokenCount")]
     pub cached_content_token_count: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeminiImageRequest {
-    pub instances: Vec<GeminiImageInstance>,
+    pub instances:  Vec<GeminiImageInstance>,
     pub parameters: GeminiImageParameters,
 }
 
@@ -305,13 +304,13 @@ pub struct GeminiImageParameters {
         rename = "sampleCount",
         skip_serializing_if = "Option::is_none"
     )]
-    pub sample_count: Option<u32>,
+    pub sample_count:      Option<u32>,
     #[serde(
         default,
         rename = "aspectRatio",
         skip_serializing_if = "String::is_empty"
     )]
-    pub aspect_ratio: String,
+    pub aspect_ratio:      String,
     #[serde(
         default,
         rename = "personGeneration",
@@ -323,7 +322,7 @@ pub struct GeminiImageParameters {
         rename = "imageSize",
         skip_serializing_if = "String::is_empty"
     )]
-    pub image_size: String,
+    pub image_size:        String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -335,15 +334,15 @@ pub struct GeminiImageResponse {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GeminiImagePrediction {
     #[serde(default, rename = "mimeType")]
-    pub mime_type: String,
+    pub mime_type:            String,
     #[serde(default, rename = "bytesBase64Encoded")]
     pub bytes_base64_encoded: String,
     #[serde(default, rename = "raiFilteredReason")]
-    pub rai_filtered_reason: String,
+    pub rai_filtered_reason:  String,
     #[serde(
         default,
         rename = "safetyAttributes",
         skip_serializing_if = "Option::is_none"
     )]
-    pub safety_attributes: Option<JsonValue>,
+    pub safety_attributes:    Option<JsonValue>,
 }

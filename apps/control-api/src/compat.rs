@@ -19,7 +19,7 @@ struct PrefillListQuery {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct CompatPageQuery {
     #[serde(default = "default_page", alias = "p")]
-    page: usize,
+    page:      usize,
     #[serde(default = "default_page_size")]
     page_size: usize,
 }
@@ -88,7 +88,7 @@ struct SubscriptionPreferenceBody {
 #[allow(dead_code)]
 struct SubscriptionPlanBody {
     #[serde(default)]
-    plan: JsonValue,
+    plan:    JsonValue,
     #[serde(default)]
     enabled: Option<bool>,
 }
@@ -99,14 +99,14 @@ struct CustomOAuthDiscoveryBody {
     #[serde(default)]
     well_known_url: String,
     #[serde(default)]
-    issuer_url: String,
+    issuer_url:     String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[allow(dead_code)]
 struct PerformanceLogsQuery {
     #[serde(default)]
-    mode: String,
+    mode:  String,
     #[serde(default)]
     value: i64,
 }
@@ -167,7 +167,10 @@ pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
             "/api/subscription/self/preference",
             put(subscription_preference),
         )
-        .route("/api/subscription/balance/pay", post(payment_not_configured))
+        .route(
+            "/api/subscription/balance/pay",
+            post(payment_not_configured),
+        )
         .route("/api/subscription/epay/pay", post(payment_not_configured))
         .route("/api/subscription/stripe/pay", post(payment_not_configured))
         .route("/api/subscription/creem/pay", post(payment_not_configured))
@@ -203,7 +206,10 @@ pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
             "/api/subscription/admin/user_subscriptions/{id}/invalidate",
             post(subscription_admin_invalidate),
         )
-        .route("/api/subscription/admin/bind", post(subscription_admin_bind))
+        .route(
+            "/api/subscription/admin/bind",
+            post(subscription_admin_bind),
+        )
         .route("/api/user/amount", post(user_amount))
         .route("/api/user/pay", post(payment_not_configured))
         .route("/api/user/stripe/amount", post(user_amount))
@@ -220,10 +226,7 @@ pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
             "/api/user/oauth/bindings",
             get(empty_list).delete(oauth_not_configured_delete),
         )
-        .route(
-            "/api/user/{id}/oauth/bindings",
-            get(empty_list),
-        )
+        .route("/api/user/{id}/oauth/bindings", get(empty_list))
         .route(
             "/api/user/{id}/oauth/bindings/{provider_id}",
             delete(oauth_not_configured_delete),
@@ -237,7 +240,10 @@ pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
             "/api/performance/disk_cache",
             delete(performance_clear_disk_cache),
         )
-        .route("/api/performance/reset_stats", post(performance_reset_stats))
+        .route(
+            "/api/performance/reset_stats",
+            post(performance_reset_stats),
+        )
         .route("/api/performance/gc", post(performance_gc))
         .route(
             "/api/performance/logs",
@@ -297,10 +303,7 @@ pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
         .route("/api/creem/webhook", post(webhook_ok))
         .route("/api/waffo/webhook", post(webhook_ok))
         .route("/api/waffo-pancake/webhook/{env}", post(webhook_ok))
-        .route(
-            "/api/user/epay/notify",
-            get(webhook_ok).post(webhook_ok),
-        )
+        .route("/api/user/epay/notify", get(webhook_ok).post(webhook_ok))
 }
 
 async fn uptime_status() -> Response {
@@ -349,7 +352,11 @@ async fn authz_catalog(State(state): State<AppState>, headers: HeaderMap) -> Res
 
 fn static_authz_catalog() -> JsonValue {
     let channel_actions = [
-        ("read", "permission.channel.read", "permission.channel.read.desc"),
+        (
+            "read",
+            "permission.channel.read",
+            "permission.channel.read.desc",
+        ),
         (
             "operate",
             "permission.channel.operate",
@@ -612,7 +619,10 @@ async fn subscription_admin_create_plan(
         return resp;
     }
     let _ = body;
-    api_error_status(StatusCode::OK, "subscription plans storage is not enabled yet")
+    api_error_status(
+        StatusCode::OK,
+        "subscription plans storage is not enabled yet",
+    )
 }
 
 async fn subscription_admin_update_plan(
@@ -625,7 +635,10 @@ async fn subscription_admin_update_plan(
         return resp;
     }
     let _ = body;
-    api_error_status(StatusCode::OK, "subscription plans storage is not enabled yet")
+    api_error_status(
+        StatusCode::OK,
+        "subscription plans storage is not enabled yet",
+    )
 }
 
 async fn subscription_admin_patch_plan(
@@ -638,13 +651,13 @@ async fn subscription_admin_patch_plan(
         return resp;
     }
     let _ = body;
-    api_error_status(StatusCode::OK, "subscription plans storage is not enabled yet")
+    api_error_status(
+        StatusCode::OK,
+        "subscription plans storage is not enabled yet",
+    )
 }
 
-async fn subscription_admin_reset(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn subscription_admin_reset(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = require_role(&state, &headers, ROLE_ADMIN_USER).await {
         return resp;
     }
@@ -657,10 +670,7 @@ async fn subscription_admin_reset(
     }))
 }
 
-async fn subscription_admin_bind(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn subscription_admin_bind(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = require_role(&state, &headers, ROLE_ADMIN_USER).await {
         return resp;
     }
@@ -775,10 +785,7 @@ async fn update_user_setting(
             obj.insert("gotify_priority".into(), json!(value));
         }
         if let Some(value) = body.upstream_model_update_notify_enabled {
-            obj.insert(
-                "upstream_model_update_notify_enabled".into(),
-                json!(value),
-            );
+            obj.insert("upstream_model_update_notify_enabled".into(), json!(value));
         }
         if let Some(value) = body.accept_unset_model_ratio_model {
             obj.insert("accept_unset_model_ratio_model".into(), json!(value));
@@ -959,14 +966,10 @@ async fn webhook_ok() -> Response {
 }
 
 fn empty_page(query: CompatPageQuery) -> PageResult<JsonValue> {
-    PageResult::new(
-        Vec::new(),
-        0,
-        PageRequest {
-            page: query.page.max(1),
-            page_size: query.page_size.max(1),
-        },
-    )
+    PageResult::new(Vec::new(), 0, PageRequest {
+        page:      query.page.max(1),
+        page_size: query.page_size.max(1),
+    })
 }
 
 fn aff_code_for_user(user_id: u64) -> String {

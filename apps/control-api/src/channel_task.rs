@@ -1,12 +1,3 @@
-use std::time::{Duration, Instant};
-
-use halolake_control_plane::{ManagementError, MemorySnapshotBus};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue, json};
-use service_async::Service;
-use tracing::{debug, info, warn};
-use uuid::Uuid;
-
 use crate::{
     channel_ops::{
         ChannelOpsProgress, ChannelOpsService, DetectAllChannelUpstreamModelUpdatesRequest,
@@ -21,13 +12,20 @@ use crate::{
         SystemTaskStatus, SystemTaskStore, UpdateSystemTaskStateRequest,
     },
 };
+use halolake_control_plane::{ManagementError, MemorySnapshotBus};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonValue, json};
+use service_async::Service;
+use std::time::{Duration, Instant};
+use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 const PROGRESS_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChannelTestTaskPayload {
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) mode: String,
+    pub(crate) mode:   String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) notify: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -60,9 +58,9 @@ impl ModelUpdateTaskPayload {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SystemTaskProgressState {
-    pub(crate) total: usize,
+    pub(crate) total:     usize,
     pub(crate) processed: usize,
-    pub(crate) progress: usize,
+    pub(crate) progress:  usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -207,8 +205,8 @@ async fn enqueue_channel_test_task(
     let enqueued = tasks
         .call(EnqueueSystemTaskRequest {
             task_type: SYSTEM_TASK_TYPE_CHANNEL_TEST,
-            payload: Some(json!(payload)),
-            state: Some(json!(SystemTaskProgressState::default())),
+            payload:   Some(json!(payload)),
+            state:     Some(json!(SystemTaskProgressState::default())),
         })
         .await?;
     if enqueued.created || enqueued.task.status == SystemTaskStatus::Pending {
@@ -224,8 +222,8 @@ async fn enqueue_model_update_task(
     let enqueued = tasks
         .call(EnqueueSystemTaskRequest {
             task_type: SYSTEM_TASK_TYPE_MODEL_UPDATE,
-            payload: Some(json!(payload)),
-            state: Some(json!(SystemTaskProgressState::default())),
+            payload:   Some(json!(payload)),
+            state:     Some(json!(SystemTaskProgressState::default())),
         })
         .await?;
     if enqueued.created || enqueued.task.status == SystemTaskStatus::Pending {
@@ -246,12 +244,12 @@ struct RunModelUpdateTaskRequest {
 
 #[derive(Debug, Clone)]
 struct ChannelTestTaskRunner {
-    tasks: SystemTaskStore,
+    tasks:      SystemTaskStore,
     management: ManagementStore,
-    options: OptionStore,
-    snapshots: MemorySnapshotBus,
-    proxies: ProxyStore,
-    runner_id: String,
+    options:    OptionStore,
+    snapshots:  MemorySnapshotBus,
+    proxies:    ProxyStore,
+    runner_id:  String,
 }
 
 impl ChannelTestTaskRunner {
@@ -281,7 +279,7 @@ impl Service<RunChannelTestTaskRequest> for ChannelTestTaskRunner {
         let Some(task) = self
             .tasks
             .call(ClaimSystemTaskRequest {
-                task_id: req.task_id,
+                task_id:   req.task_id,
                 task_type: SYSTEM_TASK_TYPE_CHANNEL_TEST,
                 runner_id: self.runner_id.clone(),
             })
@@ -336,11 +334,11 @@ impl ChannelTestTaskRunner {
     ) -> Result<(), ManagementError> {
         self.tasks
             .call(FinishSystemTaskRequest {
-                task_id: task_id.to_string(),
+                task_id:   task_id.to_string(),
                 runner_id: self.runner_id.clone(),
-                status: SystemTaskStatus::Succeeded,
-                result: Some(result),
-                error: String::new(),
+                status:    SystemTaskStatus::Succeeded,
+                result:    Some(result),
+                error:     String::new(),
             })
             .await?;
         Ok(())
@@ -349,11 +347,11 @@ impl ChannelTestTaskRunner {
     async fn finish_failed(&self, task_id: &str, error: &str) -> Result<(), ManagementError> {
         self.tasks
             .call(FinishSystemTaskRequest {
-                task_id: task_id.to_string(),
+                task_id:   task_id.to_string(),
                 runner_id: self.runner_id.clone(),
-                status: SystemTaskStatus::Failed,
-                result: None,
-                error: error.to_string(),
+                status:    SystemTaskStatus::Failed,
+                result:    None,
+                error:     error.to_string(),
             })
             .await?;
         Ok(())
@@ -362,12 +360,12 @@ impl ChannelTestTaskRunner {
 
 #[derive(Debug, Clone)]
 struct ModelUpdateTaskRunner {
-    tasks: SystemTaskStore,
+    tasks:      SystemTaskStore,
     management: ManagementStore,
-    options: OptionStore,
-    snapshots: MemorySnapshotBus,
-    proxies: ProxyStore,
-    runner_id: String,
+    options:    OptionStore,
+    snapshots:  MemorySnapshotBus,
+    proxies:    ProxyStore,
+    runner_id:  String,
 }
 
 impl ModelUpdateTaskRunner {
@@ -397,7 +395,7 @@ impl Service<RunModelUpdateTaskRequest> for ModelUpdateTaskRunner {
         let Some(task) = self
             .tasks
             .call(ClaimSystemTaskRequest {
-                task_id: req.task_id,
+                task_id:   req.task_id,
                 task_type: SYSTEM_TASK_TYPE_MODEL_UPDATE,
                 runner_id: self.runner_id.clone(),
             })
@@ -450,11 +448,11 @@ impl ModelUpdateTaskRunner {
     ) -> Result<(), ManagementError> {
         self.tasks
             .call(FinishSystemTaskRequest {
-                task_id: task_id.to_string(),
+                task_id:   task_id.to_string(),
                 runner_id: self.runner_id.clone(),
-                status: SystemTaskStatus::Succeeded,
-                result: Some(result),
-                error: String::new(),
+                status:    SystemTaskStatus::Succeeded,
+                result:    Some(result),
+                error:     String::new(),
             })
             .await?;
         Ok(())
@@ -463,11 +461,11 @@ impl ModelUpdateTaskRunner {
     async fn finish_failed(&self, task_id: &str, error: &str) -> Result<(), ManagementError> {
         self.tasks
             .call(FinishSystemTaskRequest {
-                task_id: task_id.to_string(),
+                task_id:   task_id.to_string(),
                 runner_id: self.runner_id.clone(),
-                status: SystemTaskStatus::Failed,
-                result: None,
-                error: error.to_string(),
+                status:    SystemTaskStatus::Failed,
+                result:    None,
+                error:     error.to_string(),
             })
             .await?;
         Ok(())
@@ -476,9 +474,9 @@ impl ModelUpdateTaskRunner {
 
 #[derive(Debug, Clone)]
 struct SystemTaskProgressReporter {
-    tasks: SystemTaskStore,
-    task_id: String,
-    runner_id: String,
+    tasks:         SystemTaskStore,
+    task_id:       String,
+    runner_id:     String,
     last_write_at: Option<Instant>,
     last_progress: Option<usize>,
 }
@@ -514,9 +512,9 @@ impl ChannelOpsProgress for SystemTaskProgressReporter {
         self.last_write_at = Some(Instant::now());
         self.tasks
             .call(UpdateSystemTaskStateRequest {
-                task_id: self.task_id.clone(),
+                task_id:   self.task_id.clone(),
                 runner_id: self.runner_id.clone(),
-                state: json!(SystemTaskProgressState {
+                state:     json!(SystemTaskProgressState {
                     total,
                     processed,
                     progress,
@@ -553,7 +551,7 @@ where
 impl Default for ChannelTestTaskPayload {
     fn default() -> Self {
         Self {
-            mode: String::new(),
+            mode:   String::new(),
             notify: false,
             stream: false,
         }

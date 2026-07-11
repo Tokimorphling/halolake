@@ -1,40 +1,37 @@
 //! Control-api configuration types and storage backend resolution.
 
-use std::{
-    collections::BTreeMap,
-    net::SocketAddr,
-    path::PathBuf,
-};
-
 use anyhow::{Context, Result, bail};
 use halolake_domain::UserRecord;
-use halolake_router_core::{ChannelAffinityConfig, ChannelConfig, GatewaySnapshot, GroupRoutingConfig};
+use halolake_router_core::{
+    ChannelAffinityConfig, ChannelConfig, GatewaySnapshot, GroupRoutingConfig,
+};
 use serde::Deserialize;
+use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ControlApiConfig {
     #[serde(default)]
-    pub server: ServerConfig,
+    pub server:         ServerConfig,
     #[serde(default)]
-    pub internal: InternalConfig,
+    pub internal:       InternalConfig,
     #[serde(default)]
-    pub system: SystemConfig,
+    pub system:         SystemConfig,
     #[serde(default)]
-    pub web: WebConfig,
+    pub web:            WebConfig,
     #[serde(default)]
-    pub storage: StorageConfig,
+    pub storage:        StorageConfig,
     #[serde(default)]
-    pub session: SessionConfig,
+    pub session:        SessionConfig,
     #[serde(default)]
-    pub options: BTreeMap<String, toml::Value>,
+    pub options:        BTreeMap<String, toml::Value>,
     #[serde(default)]
-    pub users: Vec<UserRecord>,
+    pub users:          Vec<UserRecord>,
     #[serde(default = "default_version")]
-    pub version: u64,
+    pub version:        u64,
     #[serde(default)]
-    pub tokens: Vec<halolake_router_core::TokenConfig>,
+    pub tokens:         Vec<halolake_router_core::TokenConfig>,
     #[serde(default)]
-    pub channels: Vec<ChannelConfig>,
+    pub channels:       Vec<ChannelConfig>,
     #[serde(default)]
     pub model_mappings: Vec<halolake_router_core::ModelMapping>,
 }
@@ -63,7 +60,7 @@ pub struct SessionConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct InternalConfig {
     #[serde(default)]
-    pub secret: Option<String>,
+    pub secret:           Option<String>,
     /// Base URL of the gateway data plane used by the playground proxy
     /// (`/pg/chat/completions`). Defaults to `http://127.0.0.1:8082`.
     #[serde(default)]
@@ -96,22 +93,22 @@ impl Default for SystemConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebConfig {
     #[serde(default)]
-    pub enabled: bool,
+    pub enabled:      bool,
     #[serde(default = "default_web_default_dist")]
     pub default_dist: PathBuf,
     #[serde(default = "default_web_classic_dist")]
     pub classic_dist: PathBuf,
     #[serde(default = "default_web_theme")]
-    pub theme: String,
+    pub theme:        String,
 }
 
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled:      false,
             default_dist: default_web_default_dist(),
             classic_dist: default_web_classic_dist(),
-            theme: default_web_theme(),
+            theme:        default_web_theme(),
         }
     }
 }
@@ -119,13 +116,13 @@ impl Default for WebConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
     #[serde(default)]
-    pub backend: StorageBackend,
+    pub backend:          StorageBackend,
     #[serde(default)]
-    pub sqlite_url: Option<String>,
+    pub sqlite_url:       Option<String>,
     #[serde(default)]
-    pub database_url: Option<String>,
+    pub database_url:     Option<String>,
     #[serde(default)]
-    pub log_backend: Option<LogStorageBackend>,
+    pub log_backend:      Option<LogStorageBackend>,
     #[serde(default)]
     pub log_database_url: Option<String>,
 }
@@ -133,10 +130,10 @@ pub struct StorageConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            backend: StorageBackend::Memory,
-            sqlite_url: None,
-            database_url: None,
-            log_backend: None,
+            backend:          StorageBackend::Memory,
+            sqlite_url:       None,
+            database_url:     None,
+            log_backend:      None,
             log_database_url: None,
         }
     }
@@ -228,12 +225,12 @@ impl ControlApiConfig {
 
     pub(crate) fn snapshot(&self) -> GatewaySnapshot {
         GatewaySnapshot {
-            version: self.version,
-            tokens: self.tokens.clone(),
-            channels: self.channels.clone(),
-            model_mappings: self.model_mappings.clone(),
+            version:          self.version,
+            tokens:           self.tokens.clone(),
+            channels:         self.channels.clone(),
+            model_mappings:   self.model_mappings.clone(),
             channel_affinity: ChannelAffinityConfig::default(),
-            group_routing: GroupRoutingConfig::default(),
+            group_routing:    GroupRoutingConfig::default(),
         }
     }
 }
@@ -300,7 +297,8 @@ pub(crate) fn infer_main_storage_backend(dsn: &str) -> Result<StorageBackend> {
     }
     if is_clickhouse_dsn(dsn) {
         bail!(
-            "SQL_DSN does not support ClickHouse; use SQLite, MySQL, or PostgreSQL for the primary database and LOG_SQL_DSN for ClickHouse logs"
+            "SQL_DSN does not support ClickHouse; use SQLite, MySQL, or PostgreSQL for the \
+             primary database and LOG_SQL_DSN for ClickHouse logs"
         );
     }
     if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
@@ -342,7 +340,8 @@ pub(crate) fn ensure_supported_storage_backend(storage: &StorageConfig) -> Resul
         && log_backend != LogStorageBackend::Sqlite
     {
         bail!(
-            "storage.log_backend = {} is recognized for new-api compatibility but separate log storage is not implemented yet in halolake-control-api",
+            "storage.log_backend = {} is recognized for new-api compatibility but separate log \
+             storage is not implemented yet in halolake-control-api",
             log_storage_backend_name(log_backend)
         );
     }

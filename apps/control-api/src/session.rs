@@ -3,12 +3,6 @@
 //! Cookies are signed as `{session_id}.{hmac_sha256_base64url}` when a session
 //! secret is configured. DB backends use row-level upsert/delete.
 
-use std::{
-    collections::HashMap,
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use data_encoding::BASE64URL_NOPAD;
 use halolake_control_plane::ManagementError;
 use hmac::{Hmac, Mac};
@@ -19,6 +13,11 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -28,8 +27,8 @@ pub(crate) const SECURE_VERIFICATION_TIMEOUT_SECS: i64 = 300;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SessionRecord {
-    pub(crate) user_id: Option<u64>,
-    pub(crate) pending_user_id: Option<u64>,
+    pub(crate) user_id:            Option<u64>,
+    pub(crate) pending_user_id:    Option<u64>,
     pub(crate) secure_verified_at: Option<i64>,
 }
 
@@ -281,40 +280,31 @@ impl MemorySessionStore {
 
     pub(crate) fn create_anonymous(&self) -> Result<String, ManagementError> {
         let session_id = Uuid::new_v4().simple().to_string();
-        self.insert(
-            session_id.clone(),
-            SessionRecord {
-                user_id: None,
-                pending_user_id: None,
-                secure_verified_at: None,
-            },
-        )?;
+        self.insert(session_id.clone(), SessionRecord {
+            user_id:            None,
+            pending_user_id:    None,
+            secure_verified_at: None,
+        })?;
         Ok(session_id)
     }
 
     pub(crate) fn create(&self, user_id: u64) -> Result<String, ManagementError> {
         let session_id = Uuid::new_v4().simple().to_string();
-        self.insert(
-            session_id.clone(),
-            SessionRecord {
-                user_id: Some(user_id),
-                pending_user_id: None,
-                secure_verified_at: None,
-            },
-        )?;
+        self.insert(session_id.clone(), SessionRecord {
+            user_id:            Some(user_id),
+            pending_user_id:    None,
+            secure_verified_at: None,
+        })?;
         Ok(session_id)
     }
 
     pub(crate) fn create_pending(&self, user_id: u64) -> Result<String, ManagementError> {
         let session_id = Uuid::new_v4().simple().to_string();
-        self.insert(
-            session_id.clone(),
-            SessionRecord {
-                user_id: None,
-                pending_user_id: Some(user_id),
-                secure_verified_at: None,
-            },
-        )?;
+        self.insert(session_id.clone(), SessionRecord {
+            user_id:            None,
+            pending_user_id:    Some(user_id),
+            secure_verified_at: None,
+        })?;
         Ok(session_id)
     }
 
@@ -419,7 +409,7 @@ impl MemorySessionStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteSessionStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemorySessionStore,
 }
 
@@ -513,7 +503,8 @@ impl SqliteSessionStore {
         let now = now_unix();
         block_on_db(async {
             sqlx::query(
-                "INSERT INTO sessions (session_id, user_id, pending_user_id, secure_verified_at, updated_at)
+                "INSERT INTO sessions (session_id, user_id, pending_user_id, secure_verified_at, \
+                 updated_at)
                  VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(session_id) DO UPDATE SET
                     user_id = excluded.user_id,
@@ -536,7 +527,7 @@ impl SqliteSessionStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlSessionStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemorySessionStore,
 }
 
@@ -628,7 +619,8 @@ impl MySqlSessionStore {
         let now = now_unix();
         block_on_db(async {
             sqlx::query(
-                "INSERT INTO sessions (session_id, user_id, pending_user_id, secure_verified_at, updated_at)
+                "INSERT INTO sessions (session_id, user_id, pending_user_id, secure_verified_at, \
+                 updated_at)
                  VALUES (?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     user_id = VALUES(user_id),
@@ -651,7 +643,7 @@ impl MySqlSessionStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresSessionStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemorySessionStore,
 }
 
@@ -743,7 +735,8 @@ impl PostgresSessionStore {
         let now = now_unix();
         block_on_db(async {
             sqlx::query(
-                "INSERT INTO sessions (session_id, user_id, pending_user_id, secure_verified_at, updated_at)
+                "INSERT INTO sessions (session_id, user_id, pending_user_id, secure_verified_at, \
+                 updated_at)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (session_id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -780,14 +773,11 @@ async fn load_sessions_sqlite(
         let pending_user_id: Option<i64> = row.try_get("pending_user_id").map_err(storage_err)?;
         let secure_verified_at: Option<i64> =
             row.try_get("secure_verified_at").map_err(storage_err)?;
-        map.insert(
-            session_id,
-            SessionRecord {
-                user_id: user_id.map(|v| v.max(0) as u64),
-                pending_user_id: pending_user_id.map(|v| v.max(0) as u64),
-                secure_verified_at,
-            },
-        );
+        map.insert(session_id, SessionRecord {
+            user_id: user_id.map(|v| v.max(0) as u64),
+            pending_user_id: pending_user_id.map(|v| v.max(0) as u64),
+            secure_verified_at,
+        });
     }
     Ok(map)
 }
@@ -808,14 +798,11 @@ async fn load_sessions_mysql(
         let pending_user_id: Option<i64> = row.try_get("pending_user_id").map_err(storage_err)?;
         let secure_verified_at: Option<i64> =
             row.try_get("secure_verified_at").map_err(storage_err)?;
-        map.insert(
-            session_id,
-            SessionRecord {
-                user_id: user_id.map(|v| v.max(0) as u64),
-                pending_user_id: pending_user_id.map(|v| v.max(0) as u64),
-                secure_verified_at,
-            },
-        );
+        map.insert(session_id, SessionRecord {
+            user_id: user_id.map(|v| v.max(0) as u64),
+            pending_user_id: pending_user_id.map(|v| v.max(0) as u64),
+            secure_verified_at,
+        });
     }
     Ok(map)
 }
@@ -836,22 +823,16 @@ async fn load_sessions_pg(
         let pending_user_id: Option<i64> = row.try_get("pending_user_id").map_err(storage_err)?;
         let secure_verified_at: Option<i64> =
             row.try_get("secure_verified_at").map_err(storage_err)?;
-        map.insert(
-            session_id,
-            SessionRecord {
-                user_id: user_id.map(|v| v.max(0) as u64),
-                pending_user_id: pending_user_id.map(|v| v.max(0) as u64),
-                secure_verified_at,
-            },
-        );
+        map.insert(session_id, SessionRecord {
+            user_id: user_id.map(|v| v.max(0) as u64),
+            pending_user_id: pending_user_id.map(|v| v.max(0) as u64),
+            secure_verified_at,
+        });
     }
     Ok(map)
 }
 
-fn cookie_session_id<'a>(
-    headers: &'a http::HeaderMap,
-    signer: &SessionSigner,
-) -> Option<&'a str> {
+fn cookie_session_id<'a>(headers: &'a http::HeaderMap, signer: &SessionSigner) -> Option<&'a str> {
     let cookie = headers
         .get(http::header::COOKIE)
         .and_then(|value| value.to_str().ok())?;

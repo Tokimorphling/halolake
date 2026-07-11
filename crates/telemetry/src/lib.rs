@@ -10,21 +10,18 @@ use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter, WithExportConfig};
-use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::logs::SdkLoggerProvider;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::trace::SdkTracerProvider;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry};
+use opentelemetry_sdk::{
+    Resource, logs::SdkLoggerProvider, metrics::SdkMeterProvider,
+    propagation::TraceContextPropagator, trace::SdkTracerProvider,
+};
+use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Holds providers so they can be shut down cleanly on drop.
 pub struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
     logger_provider: Option<SdkLoggerProvider>,
-    meter_provider: Option<SdkMeterProvider>,
-    _log_guard: tracing_appender::non_blocking::WorkerGuard,
+    meter_provider:  Option<SdkMeterProvider>,
+    _log_guard:      tracing_appender::non_blocking::WorkerGuard,
 }
 
 impl Drop for TelemetryGuard {
@@ -96,8 +93,8 @@ pub fn init(service_name: &str) -> Result<TelemetryGuard> {
         Ok(TelemetryGuard {
             tracer_provider: Some(tracer_provider),
             logger_provider: Some(logger_provider),
-            meter_provider: Some(meter_provider),
-            _log_guard: log_guard,
+            meter_provider:  Some(meter_provider),
+            _log_guard:      log_guard,
         })
     } else {
         Registry::default()
@@ -109,8 +106,8 @@ pub fn init(service_name: &str) -> Result<TelemetryGuard> {
         Ok(TelemetryGuard {
             tracer_provider: None,
             logger_provider: None,
-            meter_provider: None,
-            _log_guard: log_guard,
+            meter_provider:  None,
+            _log_guard:      log_guard,
         })
     }
 }

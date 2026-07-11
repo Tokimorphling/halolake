@@ -1,5 +1,19 @@
 //! Setup, status, health, and internal gateway control-plane endpoints.
 
+use crate::{
+    AppState, SNAPSHOT_VERSION_HEADER,
+    channel_feedback::ChannelFeedbackService,
+    http_response::{
+        HealthResponse, api_error_status, api_ok_message, api_success, channel_feedback_error,
+        json_error, management_error, usage_error,
+    },
+    options_util::{
+        checkin_setting, option_bool, option_f64, option_str, usage_pricing_from_options,
+    },
+    publish_management_snapshot, security,
+    storage::UpdateOptionRequest,
+    storage_backend_name,
+};
 use axum::{
     Json,
     extract::{Query, State},
@@ -11,26 +25,12 @@ use halolake_control_plane::{
     BootstrapRootUserRequest, ChannelFeedbackBatch, ControlActor, ControlContext, ControlRequestId,
     ManagementError, SettleUsageRequest, SnapshotRequest, SnapshotResponse, UsageEventBatch,
 };
+use halolake_domain::ROLE_ROOT_USER;
 use serde::Deserialize;
 use serde_json::json;
 use service_async::Service;
 use tracing::warn;
 use uuid::Uuid;
-
-use crate::channel_feedback::ChannelFeedbackService;
-use crate::http_response::{
-    api_error_status, api_ok_message, api_success, channel_feedback_error, json_error,
-    management_error, usage_error, HealthResponse,
-};
-use crate::options_util::{
-    checkin_setting, option_bool, option_f64, option_str, usage_pricing_from_options,
-};
-use crate::storage::UpdateOptionRequest;
-use crate::{
-    AppState, SNAPSHOT_VERSION_HEADER, publish_management_snapshot, storage_backend_name,
-};
-use crate::security;
-use halolake_domain::ROLE_ROOT_USER;
 
 // storage_backend_name is reexported from config via crate root
 
@@ -39,19 +39,17 @@ pub(crate) struct SnapshotQuery {
     pub(crate) since_version: Option<u64>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SetupPayload {
-    pub(crate) username: String,
-    pub(crate) password: String,
+    pub(crate) username:              String,
+    pub(crate) password:              String,
     #[serde(rename = "confirmPassword")]
-    pub(crate) confirm_password: String,
+    pub(crate) confirm_password:      String,
     #[serde(default, rename = "SelfUseModeEnabled")]
     pub(crate) self_use_mode_enabled: bool,
     #[serde(default, rename = "DemoSiteEnabled")]
-    pub(crate) demo_site_enabled: bool,
+    pub(crate) demo_site_enabled:     bool,
 }
-
 
 pub(crate) async fn healthz(State(state): State<AppState>) -> Response {
     let snapshot_version = match state.snapshots.current_version() {
@@ -67,7 +65,6 @@ pub(crate) async fn healthz(State(state): State<AppState>) -> Response {
     })
     .into_response()
 }
-
 
 pub(crate) async fn gateway_snapshot(
     State(state): State<AppState>,
@@ -100,7 +97,6 @@ pub(crate) async fn gateway_snapshot(
         }
     }
 }
-
 
 pub(crate) async fn gateway_usage(
     State(state): State<AppState>,
@@ -161,7 +157,6 @@ pub(crate) async fn gateway_usage(
     }
 }
 
-
 pub(crate) async fn gateway_channel_feedback(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -189,7 +184,6 @@ pub(crate) async fn gateway_channel_feedback(
     }
 }
 
-
 pub(crate) async fn api_setup(State(state): State<AppState>) -> Response {
     let root_init = match root_user_exists(&state) {
         Ok(root_init) => root_init,
@@ -202,8 +196,10 @@ pub(crate) async fn api_setup(State(state): State<AppState>) -> Response {
     }))
 }
 
-
-pub(crate) async fn post_setup(State(state): State<AppState>, Json(payload): Json<SetupPayload>) -> Response {
+pub(crate) async fn post_setup(
+    State(state): State<AppState>,
+    Json(payload): Json<SetupPayload>,
+) -> Response {
     let root_init = match root_user_exists(&state) {
         Ok(root_init) => root_init,
         Err(err) => return management_error(err),
@@ -253,7 +249,6 @@ pub(crate) async fn post_setup(State(state): State<AppState>, Json(payload): Jso
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn api_status(State(state): State<AppState>) -> Response {
     let option_values = state.options.values().unwrap_or_default();
@@ -305,7 +300,6 @@ pub(crate) async fn api_status(State(state): State<AppState>) -> Response {
     }))
 }
 
-
 pub(crate) fn root_user_exists(state: &AppState) -> Result<bool, ManagementError> {
     Ok(state
         .management
@@ -315,7 +309,6 @@ pub(crate) fn root_user_exists(state: &AppState) -> Result<bool, ManagementError
         .any(|user| user.role == ROLE_ROOT_USER))
 }
 
-
 pub(crate) async fn update_setup_option(
     state: &AppState,
     key: &'static str,
@@ -324,16 +317,13 @@ pub(crate) async fn update_setup_option(
     state
         .options
         .call(UpdateOptionRequest {
-            key: key.to_string(),
+            key:   key.to_string(),
             value: bool_option_value(value).to_string(),
         })
         .await
         .map(|_| ())
 }
 
-
 pub(crate) fn bool_option_value(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
-
-

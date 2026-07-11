@@ -1,15 +1,13 @@
+use crate::{
+    AppState, channel_affinity_config_from_options, group_routing_config_from_options,
+    proxy::ProxyStore,
+    storage::{ManagementStore, OptionStore},
+};
 use halolake_control_plane::{
     ManagementData, ManagementError, MemorySnapshotBus, PublishSnapshotRequest,
 };
 use halolake_router_core::GatewaySnapshot;
 use service_async::Service;
-
-use crate::{
-    AppState,
-    channel_affinity_config_from_options, group_routing_config_from_options,
-    proxy::ProxyStore,
-    storage::{ManagementStore, OptionStore},
-};
 
 pub(crate) async fn publish_management_snapshot(state: &AppState) -> Result<(), ManagementError> {
     publish_enriched_management_snapshot(
@@ -50,10 +48,7 @@ fn apply_channel_proxies(
 ) {
     for ch in &mut snapshot.channels {
         let Some(rec) = management.channels.iter().find(|c| {
-            c.snapshot_id
-                .as_deref()
-                .unwrap_or(&c.id.to_string())
-                == ch.id.as_str()
+            c.snapshot_id.as_deref().unwrap_or(&c.id.to_string()) == ch.id.as_str()
                 || c.id.to_string() == ch.id
         }) else {
             continue;

@@ -1,26 +1,25 @@
-use serde::{Deserialize, Serialize};
-
 use crate::JsonValue;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessagesRequest {
-    pub model: String,
-    pub max_tokens: u32,
+    pub model:          String,
+    pub max_tokens:     u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system: Option<SystemContent>,
-    pub messages: Vec<Message>,
+    pub system:         Option<SystemContent>,
+    pub messages:       Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature:    Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
+    pub top_p:          Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>,
+    pub top_k:          Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
+    pub stream:         Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Tool>>,
+    pub tools:          Option<Vec<Tool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<JsonValue>,
+    pub tool_choice:    Option<JsonValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop_sequences: Vec<String>,
 }
@@ -52,14 +51,14 @@ pub struct SystemBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    pub text:       Option<String>,
     #[serde(flatten)]
-    pub extra: serde_json::Map<String, JsonValue>,
+    pub extra:      serde_json::Map<String, JsonValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Message {
-    pub role: String,
+    pub role:    String,
     pub content: Vec<ContentBlock>,
 }
 
@@ -72,8 +71,8 @@ pub enum ContentBlock {
     Image { source: ImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
-        id: String,
-        name: String,
+        id:    String,
+        name:  String,
         #[serde(default)]
         input: JsonValue,
     },
@@ -81,13 +80,13 @@ pub enum ContentBlock {
     ToolResult {
         tool_use_id: String,
         #[serde(default)]
-        content: ToolResultContent,
+        content:     ToolResultContent,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
+        is_error:    Option<bool>,
     },
     #[serde(rename = "thinking")]
     Thinking {
-        thinking: String,
+        thinking:  String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
@@ -98,11 +97,11 @@ pub struct ImageSource {
     #[serde(rename = "type")]
     pub source_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub media_type: Option<String>,
+    pub media_type:  Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<String>,
+    pub data:        Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    pub url:         Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -141,51 +140,51 @@ impl ToolResultContent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Tool {
-    pub name: String,
+    pub name:         String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description:  Option<String>,
     pub input_schema: JsonValue,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessagesResponse {
-    pub id: String,
+    pub id:            String,
     #[serde(rename = "type")]
     pub response_type: String,
-    pub role: String,
-    pub model: String,
+    pub role:          String,
+    pub model:         String,
     #[serde(default)]
-    pub content: Vec<ContentBlock>,
+    pub content:       Vec<ContentBlock>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<String>,
+    pub stop_reason:   Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Usage>,
+    pub usage:         Option<Usage>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct Usage {
     #[serde(default)]
-    pub input_tokens: u32,
+    pub input_tokens:                u32,
     #[serde(default)]
-    pub output_tokens: u32,
+    pub output_tokens:               u32,
     #[serde(default)]
     pub cache_creation_input_tokens: u32,
     #[serde(default)]
-    pub cache_read_input_tokens: u32,
+    pub cache_read_input_tokens:     u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StreamEvent {
     #[serde(rename = "type")]
-    pub event_type: String,
+    pub event_type:    String,
     #[serde(default)]
-    pub message: Option<MessagesResponse>,
+    pub message:       Option<MessagesResponse>,
     #[serde(default)]
-    pub delta: Option<JsonValue>,
+    pub delta:         Option<JsonValue>,
     #[serde(default)]
     pub content_block: Option<ContentBlock>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index: Option<usize>,
+    pub index:         Option<usize>,
     #[serde(default)]
-    pub usage: Option<Usage>,
+    pub usage:         Option<Usage>,
 }

@@ -7,15 +7,13 @@
 
 use super::super::*;
 use monoio::io::{
-    sink::SinkExt,
-    stream::Stream as MonoioStream,
-    AsyncReadRent, AsyncWriteRent, Split, Splitable,
+    AsyncReadRent, AsyncWriteRent, Split, Splitable, sink::SinkExt, stream::Stream as MonoioStream,
 };
 use monoio_http::h1::codec::{
     decoder::{FillPayload, RequestDecoder},
     encoder::GenericEncoder,
 };
-use service_async::layer::{layer_fn, FactoryLayer};
+use service_async::layer::{FactoryLayer, layer_fn};
 
 const DEFAULT_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(75);
 
@@ -23,7 +21,7 @@ const DEFAULT_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(75);
 /// `(response, keep_connection_open)`.
 #[derive(Clone)]
 pub(crate) struct HttpH1CoreService<H> {
-    inner: H,
+    inner:             H,
     keepalive_timeout: Option<Duration>,
 }
 
@@ -111,7 +109,7 @@ where
 
     fn make_via_ref(&self, old: Option<&Self::Service>) -> Result<Self::Service, Self::Error> {
         Ok(HttpH1CoreService {
-            inner: self.inner.make_via_ref(old.map(|o| &o.inner))?,
+            inner:             self.inner.make_via_ref(old.map(|o| &o.inner))?,
             keepalive_timeout: self.keepalive_timeout,
         })
     }

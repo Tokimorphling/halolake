@@ -2,7 +2,7 @@
 
 use super::super::*;
 use http::Version;
-use service_async::layer::{layer_fn, FactoryLayer};
+use service_async::layer::{FactoryLayer, layer_fn};
 
 const CLOSE: &str = "close";
 const KEEPALIVE: &str = "keep-alive";
@@ -45,11 +45,7 @@ where
             request.headers_mut().remove(header::CONNECTION);
         }
 
-        let mut response = self
-            .inner
-            .call((request, cx))
-            .await
-            .map_err(Into::into)?;
+        let mut response = self.inner.call((request, cx)).await.map_err(Into::into)?;
 
         // HTTP/2 is always multiplexed; for H1 honor client + server close.
         if response.version() == Version::HTTP_11 || response.version() == Version::HTTP_10 {

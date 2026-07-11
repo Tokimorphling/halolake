@@ -1,8 +1,7 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+use crate::{
+    channel_probe::{ChannelProbeService, FetchModelsRequest},
+    storage::ManagementStore,
 };
-
 use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
 use halolake_domain::{
     CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, STATUS_ENABLED,
@@ -11,10 +10,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
-
-use crate::{
-    channel_probe::{ChannelProbeService, FetchModelsRequest},
-    storage::ManagementStore,
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 const CHANNEL_TYPE_MIDJOURNEY: i32 = 2;
@@ -65,7 +63,7 @@ impl ChannelOpsProgress for NoopChannelOpsProgress {
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelOpsService {
     management: ManagementStore,
-    client: reqwest::Client,
+    client:     reqwest::Client,
 }
 
 impl ChannelOpsService {
@@ -384,10 +382,10 @@ impl ChannelOpsService {
         let mut settings = channel_settings(&channel);
         let upstream_models = ChannelProbeService::new(self.management.clone())
             .call(FetchModelsRequest {
-                channel_id: Some(channel_id),
-                base_url: String::new(),
+                channel_id:   Some(channel_id),
+                base_url:     String::new(),
                 channel_type: CHANNEL_TYPE_OPENAI,
-                key: String::new(),
+                key:          String::new(),
             })
             .await?;
         let (pending_add, pending_remove) = collect_pending_upstream_model_changes(
@@ -449,10 +447,10 @@ impl ChannelOpsService {
                 continue;
             }
             let test_req = TestChannelRequest {
-                id: channel.id,
-                model: String::new(),
+                id:            channel.id,
+                model:         String::new(),
                 endpoint_type: String::new(),
-                stream: req.stream || channel.channel_type == CHANNEL_TYPE_CODEX,
+                stream:        req.stream || channel.channel_type == CHANNEL_TYPE_CODEX,
             };
             response.tested = response.tested.saturating_add(1);
             match self.test_channel(channel, test_req).await {
@@ -718,8 +716,8 @@ impl Service<ApplyAllChannelUpstreamModelUpdatesRequest> for ChannelOpsService {
                 continue;
             }
             let req = ApplyChannelUpstreamModelUpdatesRequest {
-                id: channel.id,
-                add_models: settings.upstream_model_update_last_detected_models,
+                id:            channel.id,
+                add_models:    settings.upstream_model_update_last_detected_models,
                 remove_models: settings.upstream_model_update_last_removed_models,
                 ignore_models: Vec::new(),
             };
@@ -733,11 +731,11 @@ impl Service<ApplyAllChannelUpstreamModelUpdatesRequest> for ChannelOpsService {
                         .removed_models
                         .saturating_add(result.removed_models.len());
                     response.results.push(ApplyAllChannelResult {
-                        channel_id: result.id,
-                        channel_name: channel.name,
-                        added_models: result.added_models,
-                        removed_models: result.removed_models,
-                        remaining_models: result.remaining_models,
+                        channel_id:              result.id,
+                        channel_name:            channel.name,
+                        added_models:            result.added_models,
+                        removed_models:          result.removed_models,
+                        remaining_models:        result.remaining_models,
                         remaining_remove_models: result.remaining_remove_models,
                     });
                 }
@@ -750,8 +748,8 @@ impl Service<ApplyAllChannelUpstreamModelUpdatesRequest> for ChannelOpsService {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CopyChannelRequest {
-    pub(crate) id: u64,
-    pub(crate) suffix: String,
+    pub(crate) id:            u64,
+    pub(crate) suffix:        String,
     pub(crate) reset_balance: bool,
 }
 
@@ -762,7 +760,7 @@ pub(crate) struct CopyChannelResponse {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UpdateChannelBalanceRequest {
-    pub(crate) id: u64,
+    pub(crate) id:    u64,
     pub(crate) price: f64,
 }
 
@@ -773,17 +771,17 @@ pub(crate) struct UpdateAllChannelBalancesRequest {
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub(crate) struct UpdateAllChannelBalancesResponse {
-    pub(crate) updated: usize,
-    pub(crate) failed: usize,
+    pub(crate) updated:  usize,
+    pub(crate) failed:   usize,
     pub(crate) disabled: usize,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TestChannelRequest {
-    pub(crate) id: u64,
-    pub(crate) model: String,
+    pub(crate) id:            u64,
+    pub(crate) model:         String,
     pub(crate) endpoint_type: String,
-    pub(crate) stream: bool,
+    pub(crate) stream:        bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -798,9 +796,9 @@ pub(crate) struct TestAllChannelsRequest {
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub(crate) struct TestAllChannelsResponse {
-    pub(crate) tested: usize,
+    pub(crate) tested:    usize,
     pub(crate) succeeded: usize,
-    pub(crate) failed: usize,
+    pub(crate) failed:    usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -809,7 +807,7 @@ pub(crate) struct FixChannelAbilitiesRequest;
 #[derive(Debug, Clone, Copy, Serialize)]
 pub(crate) struct FixChannelAbilitiesResponse {
     pub(crate) success: usize,
-    pub(crate) fails: usize,
+    pub(crate) fails:   usize,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -822,9 +820,9 @@ pub(crate) struct DetectAllChannelUpstreamModelUpdatesRequest;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ApplyChannelUpstreamModelUpdatesRequest {
-    pub(crate) id: u64,
+    pub(crate) id:            u64,
     #[serde(default)]
-    pub(crate) add_models: Vec<String>,
+    pub(crate) add_models:    Vec<String>,
     #[serde(default)]
     pub(crate) remove_models: Vec<String>,
     #[serde(default)]
@@ -836,22 +834,22 @@ pub(crate) struct ApplyAllChannelUpstreamModelUpdatesRequest;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DetectChannelUpstreamModelUpdatesResponse {
-    pub(crate) channel_id: u64,
-    pub(crate) channel_name: String,
-    pub(crate) add_models: Vec<String>,
-    pub(crate) remove_models: Vec<String>,
-    pub(crate) last_check_time: i64,
+    pub(crate) channel_id:        u64,
+    pub(crate) channel_name:      String,
+    pub(crate) add_models:        Vec<String>,
+    pub(crate) remove_models:     Vec<String>,
+    pub(crate) last_check_time:   i64,
     pub(crate) auto_added_models: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct DetectAllChannelUpstreamModelUpdatesResponse {
-    pub(crate) checked_channels: usize,
-    pub(crate) changed_channels: usize,
-    pub(crate) detected_add_models: usize,
+    pub(crate) checked_channels:       usize,
+    pub(crate) changed_channels:       usize,
+    pub(crate) detected_add_models:    usize,
     pub(crate) detected_remove_models: usize,
-    pub(crate) failed_channels: usize,
-    pub(crate) auto_added_models: usize,
+    pub(crate) failed_channels:        usize,
+    pub(crate) auto_added_models:      usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -869,19 +867,19 @@ pub(crate) struct ApplyChannelUpstreamModelUpdatesResponse {
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct ApplyAllChannelUpstreamModelUpdatesResponse {
     pub(crate) processed_channels: usize,
-    pub(crate) added_models: usize,
-    pub(crate) removed_models: usize,
+    pub(crate) added_models:       usize,
+    pub(crate) removed_models:     usize,
     pub(crate) failed_channel_ids: Vec<u64>,
-    pub(crate) results: Vec<ApplyAllChannelResult>,
+    pub(crate) results:            Vec<ApplyAllChannelResult>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ApplyAllChannelResult {
-    pub(crate) channel_id: u64,
-    pub(crate) channel_name: String,
-    pub(crate) added_models: Vec<String>,
-    pub(crate) removed_models: Vec<String>,
-    pub(crate) remaining_models: Vec<String>,
+    pub(crate) channel_id:              u64,
+    pub(crate) channel_name:            String,
+    pub(crate) added_models:            Vec<String>,
+    pub(crate) removed_models:          Vec<String>,
+    pub(crate) remaining_models:        Vec<String>,
     pub(crate) remaining_remove_models: Vec<String>,
 }
 
@@ -906,7 +904,7 @@ pub(crate) struct ChannelOtherSettings {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct CopyChannelQuery {
     #[serde(default = "default_copy_suffix")]
-    pub(crate) suffix: String,
+    pub(crate) suffix:        String,
     #[serde(default = "default_true")]
     pub(crate) reset_balance: bool,
 }
@@ -914,11 +912,11 @@ pub(crate) struct CopyChannelQuery {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelTestQuery {
     #[serde(default)]
-    pub(crate) model: String,
+    pub(crate) model:         String,
     #[serde(default)]
     pub(crate) endpoint_type: String,
     #[serde(default)]
-    pub(crate) stream: bool,
+    pub(crate) stream:        bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -1517,11 +1515,11 @@ mod tests {
     #[test]
     fn model_change_apply_adds_and_removes_with_add_wins() {
         let origin = vec!["a".to_string(), "b".to_string()];
-        let next = apply_selected_model_changes(
-            origin,
-            vec!["c".to_string(), "b".to_string()],
-            vec!["a".to_string(), "c".to_string()],
-        );
+        let next =
+            apply_selected_model_changes(origin, vec!["c".to_string(), "b".to_string()], vec![
+                "a".to_string(),
+                "c".to_string(),
+            ]);
         assert_eq!(next, vec!["b", "c"]);
     }
 

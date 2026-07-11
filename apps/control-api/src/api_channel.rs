@@ -1,7 +1,45 @@
 //! Channel and proxy management HTTP handlers.
 
-use std::collections::HashMap;
-
+use crate::{
+    AppState, BatchIds, ChannelBatchTagPayload, ChannelSearchQuery, ChannelTagPayload, PageQuery,
+    StatusUpdate,
+    auth_import::{self, AuthImportRequest},
+    channel_ops::{
+        ApplyAllChannelUpstreamModelUpdatesRequest, ApplyChannelUpstreamModelUpdatesRequest,
+        ChannelOpsService, ChannelTestAllQuery, ChannelTestQuery, CopyChannelQuery,
+        CopyChannelRequest, DetectChannelUpstreamModelUpdatesRequest, FixChannelAbilitiesRequest,
+        TestChannelRequest, UpdateAllChannelBalancesRequest, UpdateChannelBalanceRequest,
+    },
+    channel_probe::{ChannelProbeService, FetchModelsRequest},
+    channel_special::{
+        ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
+        MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
+        OllamaPullModelRequest, OllamaVersionRequest,
+    },
+    channel_task::{
+        ChannelTestTaskPayload, ModelUpdateTaskPayload, SystemTaskProgressState,
+        spawn_channel_test_task, spawn_model_update_task,
+    },
+    codex_auth_import::{
+        CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
+        CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
+    },
+    http_auth::{require_role, require_secure_verification},
+    http_response::{
+        api_error_status, api_ok, api_success, api_success_with_extra, api_success_with_message,
+        management_error, system_task_conflict,
+    },
+    now_unix, option_f64, option_i64,
+    proxy::{
+        CreateProxyRequest, DeleteProxyRequest, GetProxyRequest, ListProxiesRequest, ProxyRecord,
+        UpdateProxyRequest,
+    },
+    publish_management_snapshot,
+    sub2api_data_import::{self, Sub2apiDataImportRequest},
+    system_task::{
+        EnqueueSystemTaskRequest, SYSTEM_TASK_TYPE_CHANNEL_TEST, SYSTEM_TASK_TYPE_MODEL_UPDATE,
+    },
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -9,8 +47,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use halolake_control_plane::{
-    BatchSetChannelTagRequest, ChannelStatusUpdateRequest, ChannelTagPatch,
-    CreateChannelRequest, DeleteChannelRequest, DeleteDisabledChannelsRequest, GetChannelRequest, ListChannelsRequest,
+    BatchSetChannelTagRequest, ChannelStatusUpdateRequest, ChannelTagPatch, CreateChannelRequest,
+    DeleteChannelRequest, DeleteDisabledChannelsRequest, GetChannelRequest, ListChannelsRequest,
     RevealChannelKeyRequest, SearchChannelsRequest, UpdateChannelRequest,
     UpdateChannelsByTagRequest,
 };
@@ -19,46 +57,8 @@ use halolake_domain::{
 };
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
+use std::collections::HashMap;
 use tracing::warn;
-
-use crate::channel_ops::{
-    ApplyAllChannelUpstreamModelUpdatesRequest, ApplyChannelUpstreamModelUpdatesRequest,
-    ChannelOpsService, ChannelTestAllQuery, ChannelTestQuery, CopyChannelQuery, CopyChannelRequest,
-    DetectChannelUpstreamModelUpdatesRequest, FixChannelAbilitiesRequest, TestChannelRequest,
-    UpdateAllChannelBalancesRequest, UpdateChannelBalanceRequest,
-};
-use crate::channel_probe::{ChannelProbeService, FetchModelsRequest};
-use crate::channel_special::{
-    ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
-    MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
-    OllamaPullModelRequest, OllamaVersionRequest,
-};
-use crate::channel_task::{
-    ChannelTestTaskPayload, ModelUpdateTaskPayload, SystemTaskProgressState,
-    spawn_channel_test_task, spawn_model_update_task,
-};
-use crate::auth_import::{self, AuthImportRequest};
-use crate::codex_auth_import::{
-    CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
-    CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
-};
-use crate::sub2api_data_import::{self, Sub2apiDataImportRequest};
-use crate::http_response::{
-    api_error_status, api_ok, api_success, api_success_with_extra, api_success_with_message,
-    management_error, system_task_conflict,
-};
-use crate::proxy::{
-    CreateProxyRequest, DeleteProxyRequest, GetProxyRequest, ListProxiesRequest, ProxyRecord,
-    UpdateProxyRequest,
-};
-use crate::system_task::{
-    EnqueueSystemTaskRequest, SYSTEM_TASK_TYPE_CHANNEL_TEST, SYSTEM_TASK_TYPE_MODEL_UPDATE,
-};
-use crate::{
-    AppState, BatchIds, ChannelBatchTagPayload, ChannelSearchQuery, ChannelTagPayload, PageQuery,
-    StatusUpdate, now_unix, option_f64, option_i64, publish_management_snapshot,
-};
-use crate::http_auth::{require_role, require_secure_verification};
 
 pub(crate) async fn list_channels(
     State(state): State<AppState>,
@@ -79,7 +79,6 @@ pub(crate) async fn list_channels(
     }
 }
 
-
 pub(crate) async fn search_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -93,8 +92,8 @@ pub(crate) async fn search_channels(
         .management
         .call(SearchChannelsRequest {
             search: SearchRequest {
-                page: PageRequest {
-                    page: query.page,
+                page:    PageRequest {
+                    page:      query.page,
                     page_size: query.page_size,
                 },
                 keyword: query.keyword,
@@ -106,7 +105,6 @@ pub(crate) async fn search_channels(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_channel(
     State(state): State<AppState>,
@@ -122,7 +120,6 @@ pub(crate) async fn get_channel(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn reveal_channel_key(
     State(state): State<AppState>,
@@ -142,7 +139,6 @@ pub(crate) async fn reveal_channel_key(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn create_channel(
     State(state): State<AppState>,
@@ -278,14 +274,11 @@ fn expand_create_channel_body(body: JsonValue) -> Result<Vec<ChannelRecord>, Str
                 .filter(|v| !v.is_empty())
                 .unwrap_or("random");
             // Persist multi-key metadata in `setting` (Halolake equivalent of channel_info)
-            channel.setting = Some(merge_setting_json(
-                channel.setting.as_deref(),
-                &[
-                    ("is_multi_key", json!(true)),
-                    ("multi_key_mode", json!(mode_value)),
-                    ("multi_key_size", json!(keys.len())),
-                ],
-            ));
+            channel.setting = Some(merge_setting_json(channel.setting.as_deref(), &[
+                ("is_multi_key", json!(true)),
+                ("multi_key_mode", json!(mode_value)),
+                ("multi_key_size", json!(keys.len())),
+            ]));
             Ok(vec![channel])
         }
         other => Err(format!("不支持的添加模式: {other}")),
@@ -432,14 +425,14 @@ pub(crate) async fn import_codex_auth(
     };
 
     let mut result = CodexAuthImportResult {
-        total: entries.len(),
-        created: 0,
-        updated: 0,
-        skipped: 0,
-        failed: 0,
-        items: Vec::with_capacity(entries.len()),
+        total:    entries.len(),
+        created:  0,
+        updated:  0,
+        skipped:  0,
+        failed:   0,
+        items:    Vec::with_capacity(entries.len()),
         warnings: Vec::new(),
-        errors: Vec::new(),
+        errors:   Vec::new(),
     };
 
     let existing = match state.management.current_data() {
@@ -605,30 +598,30 @@ pub(crate) async fn import_codex_auth(
         }
 
         let channel = ChannelRecord {
-            id: 0,
-            snapshot_id: None,
-            channel_type: CHANNEL_TYPE_CODEX,
-            key: key_json,
-            status: STATUS_ENABLED,
-            name: account_name.clone(),
-            weight: req.weight.or(Some(1)),
-            created_time: now_unix(),
-            test_time: 0,
-            response_time: 0,
-            base_url: base_url.clone(),
-            balance: 0.0,
+            id:                   0,
+            snapshot_id:          None,
+            channel_type:         CHANNEL_TYPE_CODEX,
+            key:                  key_json,
+            status:               STATUS_ENABLED,
+            name:                 account_name.clone(),
+            weight:               req.weight.or(Some(1)),
+            created_time:         now_unix(),
+            test_time:            0,
+            response_time:        0,
+            base_url:             base_url.clone(),
+            balance:              0.0,
             balance_updated_time: 0,
-            models: models.clone(),
-            group: group.clone(),
-            used_quota: 0,
-            model_mapping: None,
-            priority: req.priority.or(Some(0)),
-            auto_ban: Some(1),
-            tag: None,
-            setting: None,
-            param_override: None,
-            header_override: None,
-            remark: Some(format!(
+            models:               models.clone(),
+            group:                group.clone(),
+            used_quota:           0,
+            model_mapping:        None,
+            priority:             req.priority.or(Some(0)),
+            auto_ban:             Some(1),
+            tag:                  None,
+            setting:              None,
+            param_override:       None,
+            header_override:      None,
+            remark:               Some(format!(
                 "imported from codex/sub2api auth{}",
                 if item.email.is_empty() {
                     String::new()
@@ -636,7 +629,7 @@ pub(crate) async fn import_codex_auth(
                     format!(" ({})", item.email)
                 }
             )),
-            proxy_id: req.proxy_id,
+            proxy_id:             req.proxy_id,
         };
 
         match state
@@ -876,7 +869,6 @@ pub(crate) async fn update_channel(
     }
 }
 
-
 pub(crate) async fn delete_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -894,7 +886,6 @@ pub(crate) async fn delete_channel(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn delete_channel_batch(
     State(state): State<AppState>,
@@ -915,7 +906,6 @@ pub(crate) async fn delete_channel_batch(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn update_channel_status(
     State(state): State<AppState>,
@@ -943,7 +933,6 @@ pub(crate) async fn update_channel_status(
     }
 }
 
-
 pub(crate) async fn update_channel_status_batch(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -964,7 +953,6 @@ pub(crate) async fn update_channel_status_batch(
     }
 }
 
-
 pub(crate) async fn channel_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
@@ -984,7 +972,6 @@ pub(crate) async fn channel_models(State(state): State<AppState>, headers: Heade
     api_success(models)
 }
 
-
 pub(crate) async fn channel_ops(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
@@ -995,7 +982,6 @@ pub(crate) async fn channel_ops(State(state): State<AppState>, headers: HeaderMa
         "retry_times": option_i64(&options, "RetryTimes", 0),
     }))
 }
-
 
 pub(crate) async fn fetch_models_for_channel(
     State(state): State<AppState>,
@@ -1009,10 +995,10 @@ pub(crate) async fn fetch_models_for_channel(
     let service = ChannelProbeService::new(state.management.clone());
     match service
         .call(FetchModelsRequest {
-            channel_id: Some(id),
-            base_url: String::new(),
+            channel_id:   Some(id),
+            base_url:     String::new(),
             channel_type: 1,
-            key: String::new(),
+            key:          String::new(),
         })
         .await
     {
@@ -1020,7 +1006,6 @@ pub(crate) async fn fetch_models_for_channel(
         Err(err) => api_error_status(StatusCode::OK, &format!("获取模型列表失败: {err}")),
     }
 }
-
 
 pub(crate) async fn fetch_models_for_channel_payload(
     State(state): State<AppState>,
@@ -1037,7 +1022,6 @@ pub(crate) async fn fetch_models_for_channel_payload(
         Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
     }
 }
-
 
 pub(crate) async fn copy_channel(
     State(state): State<AppState>,
@@ -1066,7 +1050,6 @@ pub(crate) async fn copy_channel(
     }
 }
 
-
 pub(crate) async fn update_channel_balance(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1092,7 +1075,6 @@ pub(crate) async fn update_channel_balance(
     }
 }
 
-
 pub(crate) async fn update_all_channel_balances(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1115,7 +1097,6 @@ pub(crate) async fn update_all_channel_balances(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn test_channel(
     State(state): State<AppState>,
@@ -1150,7 +1131,6 @@ pub(crate) async fn test_channel(
     }
 }
 
-
 pub(crate) async fn test_all_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1164,8 +1144,8 @@ pub(crate) async fn test_all_channels(
         .system_tasks
         .call(EnqueueSystemTaskRequest {
             task_type: SYSTEM_TASK_TYPE_CHANNEL_TEST,
-            payload: Some(json!(ChannelTestTaskPayload::manual(query.stream))),
-            state: Some(json!(SystemTaskProgressState::default())),
+            payload:   Some(json!(ChannelTestTaskPayload::manual(query.stream))),
+            state:     Some(json!(SystemTaskProgressState::default())),
         })
         .await
     {
@@ -1192,8 +1172,10 @@ pub(crate) async fn test_all_channels(
     }
 }
 
-
-pub(crate) async fn fix_channel_abilities(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn fix_channel_abilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -1207,7 +1189,6 @@ pub(crate) async fn fix_channel_abilities(State(state): State<AppState>, headers
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn detect_channel_upstream_model_updates(
     State(state): State<AppState>,
@@ -1228,7 +1209,6 @@ pub(crate) async fn detect_channel_upstream_model_updates(
     }
 }
 
-
 pub(crate) async fn detect_all_channel_upstream_model_updates(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1241,8 +1221,8 @@ pub(crate) async fn detect_all_channel_upstream_model_updates(
         .system_tasks
         .call(EnqueueSystemTaskRequest {
             task_type: SYSTEM_TASK_TYPE_MODEL_UPDATE,
-            payload: Some(json!(ModelUpdateTaskPayload::manual())),
-            state: Some(json!(SystemTaskProgressState::default())),
+            payload:   Some(json!(ModelUpdateTaskPayload::manual())),
+            state:     Some(json!(SystemTaskProgressState::default())),
         })
         .await
     {
@@ -1269,7 +1249,6 @@ pub(crate) async fn detect_all_channel_upstream_model_updates(
     }
 }
 
-
 pub(crate) async fn apply_channel_upstream_model_updates(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1288,7 +1267,6 @@ pub(crate) async fn apply_channel_upstream_model_updates(
         Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
     }
 }
-
 
 pub(crate) async fn apply_all_channel_upstream_model_updates(
     State(state): State<AppState>,
@@ -1311,7 +1289,6 @@ pub(crate) async fn apply_all_channel_upstream_model_updates(
     }
 }
 
-
 pub(crate) async fn manage_multi_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1331,7 +1308,6 @@ pub(crate) async fn manage_multi_keys(
     }
 }
 
-
 pub(crate) async fn ollama_pull_model(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1346,7 +1322,7 @@ pub(crate) async fn ollama_pull_model(
         .call(OllamaPullModelRequest {
             channel_id: req.channel_id,
             model_name: req.model_name,
-            stream: false,
+            stream:     false,
         })
         .await
     {
@@ -1354,7 +1330,6 @@ pub(crate) async fn ollama_pull_model(
         Err(err) => api_error_status(StatusCode::OK, &format!("Failed to pull model: {err}")),
     }
 }
-
 
 pub(crate) async fn ollama_pull_model_stream(
     State(state): State<AppState>,
@@ -1370,7 +1345,7 @@ pub(crate) async fn ollama_pull_model_stream(
         .call(OllamaPullModelRequest {
             channel_id: req.channel_id,
             model_name: req.model_name,
-            stream: true,
+            stream:     true,
         })
         .await
     {
@@ -1395,7 +1370,6 @@ pub(crate) async fn ollama_pull_model_stream(
     }
 }
 
-
 pub(crate) async fn ollama_delete_model(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1418,7 +1392,6 @@ pub(crate) async fn ollama_delete_model(
     }
 }
 
-
 pub(crate) async fn ollama_version(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1434,7 +1407,6 @@ pub(crate) async fn ollama_version(
         Err(err) => api_error_status(StatusCode::OK, &format!("获取Ollama版本失败: {err}")),
     }
 }
-
 
 pub(crate) async fn refresh_codex_channel_credential(
     State(state): State<AppState>,
@@ -1458,7 +1430,6 @@ pub(crate) async fn refresh_codex_channel_credential(
     }
 }
 
-
 pub(crate) async fn get_codex_channel_usage(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1466,7 +1437,6 @@ pub(crate) async fn get_codex_channel_usage(
 ) -> Response {
     codex_wham_response(&state, &headers, id, CodexWhamKind::Usage).await
 }
-
 
 pub(crate) async fn get_codex_channel_rate_limit_reset_credits(
     State(state): State<AppState>,
@@ -1476,7 +1446,6 @@ pub(crate) async fn get_codex_channel_rate_limit_reset_credits(
     codex_wham_response(&state, &headers, id, CodexWhamKind::ResetCredits).await
 }
 
-
 pub(crate) async fn reset_codex_channel_usage(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1484,7 +1453,6 @@ pub(crate) async fn reset_codex_channel_usage(
 ) -> Response {
     codex_wham_response(&state, &headers, id, CodexWhamKind::ConsumeResetCredit).await
 }
-
 
 pub(crate) async fn codex_wham_response(
     state: &AppState,
@@ -1517,8 +1485,10 @@ pub(crate) async fn codex_wham_response(
     }
 }
 
-
-pub(crate) async fn delete_disabled_channels(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn delete_disabled_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -1531,7 +1501,6 @@ pub(crate) async fn delete_disabled_channels(State(state): State<AppState>, head
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn batch_set_channel_tag(
     State(state): State<AppState>,
@@ -1561,42 +1530,29 @@ pub(crate) async fn batch_set_channel_tag(
     }
 }
 
-
 pub(crate) async fn disable_tag_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<ChannelTagPayload>,
 ) -> Response {
-    update_channels_by_tag(
-        &state,
-        &headers,
-        req.tag,
-        ChannelTagPatch {
-            status: Some(0),
-            ..ChannelTagPatch::default()
-        },
-    )
+    update_channels_by_tag(&state, &headers, req.tag, ChannelTagPatch {
+        status: Some(0),
+        ..ChannelTagPatch::default()
+    })
     .await
 }
-
 
 pub(crate) async fn enable_tag_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<ChannelTagPayload>,
 ) -> Response {
-    update_channels_by_tag(
-        &state,
-        &headers,
-        req.tag,
-        ChannelTagPatch {
-            status: Some(STATUS_ENABLED),
-            ..ChannelTagPatch::default()
-        },
-    )
+    update_channels_by_tag(&state, &headers, req.tag, ChannelTagPatch {
+        status: Some(STATUS_ENABLED),
+        ..ChannelTagPatch::default()
+    })
     .await
 }
-
 
 pub(crate) async fn edit_tag_channels(
     State(state): State<AppState>,
@@ -1612,25 +1568,19 @@ pub(crate) async fn edit_tag_channels(
     if let Err(resp) = validate_json_override("请求头覆盖", req.header_override.as_deref()) {
         return resp;
     }
-    update_channels_by_tag(
-        &state,
-        &headers,
-        req.tag,
-        ChannelTagPatch {
-            status: None,
-            new_tag: req.new_tag,
-            priority: req.priority,
-            weight: req.weight,
-            model_mapping: req.model_mapping,
-            models: req.models,
-            groups: req.groups,
-            param_override: req.param_override,
-            header_override: req.header_override,
-        },
-    )
+    update_channels_by_tag(&state, &headers, req.tag, ChannelTagPatch {
+        status:          None,
+        new_tag:         req.new_tag,
+        priority:        req.priority,
+        weight:          req.weight,
+        model_mapping:   req.model_mapping,
+        models:          req.models,
+        groups:          req.groups,
+        param_override:  req.param_override,
+        header_override: req.header_override,
+    })
     .await
 }
-
 
 pub(crate) async fn tag_models(
     State(state): State<AppState>,
@@ -1664,7 +1614,6 @@ pub(crate) async fn tag_models(
     api_success(longest_models)
 }
 
-
 pub(crate) async fn update_channels_by_tag(
     state: &AppState,
     headers: &HeaderMap,
@@ -1691,7 +1640,6 @@ pub(crate) async fn update_channels_by_tag(
     }
 }
 
-
 pub(crate) fn validate_json_override(label: &str, value: Option<&str>) -> Result<(), Response> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
@@ -1705,7 +1653,6 @@ pub(crate) fn validate_json_override(label: &str, value: Option<&str>) -> Result
     Ok(())
 }
 
-
 pub(crate) async fn list_proxies(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
@@ -1716,7 +1663,6 @@ pub(crate) async fn list_proxies(State(state): State<AppState>, headers: HeaderM
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_proxy(
     State(state): State<AppState>,
@@ -1732,7 +1678,6 @@ pub(crate) async fn get_proxy(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn create_proxy(
     State(state): State<AppState>,
@@ -1754,7 +1699,6 @@ pub(crate) async fn create_proxy(
     }
 }
 
-
 pub(crate) async fn update_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1774,7 +1718,6 @@ pub(crate) async fn update_proxy(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn delete_proxy(
     State(state): State<AppState>,
@@ -1796,7 +1739,6 @@ pub(crate) async fn delete_proxy(
     }
 }
 
-
 pub(crate) fn channel_balance_price(state: &AppState) -> f64 {
     state
         .options
@@ -1804,5 +1746,3 @@ pub(crate) fn channel_balance_price(state: &AppState) -> f64 {
         .map(|options| option_f64(&options, "Price", 7.3))
         .unwrap_or(7.3)
 }
-
-

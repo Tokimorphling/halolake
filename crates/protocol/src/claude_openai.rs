@@ -1,10 +1,9 @@
+use halolake_api_contract::{JsonValue, claude, openai};
+use serde_json::json;
 use std::{
     collections::BTreeSet,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use halolake_api_contract::{JsonValue, claude, openai};
-use serde_json::json;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -47,19 +46,19 @@ pub fn openai_chat_to_claude_messages(
                 }
             }
             "assistant" => messages.push(claude::Message {
-                role: "assistant".to_string(),
+                role:    "assistant".to_string(),
                 content: assistant_content_blocks(msg),
             }),
             "tool" => {
                 let block = claude::ContentBlock::ToolResult {
                     tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
-                    content: claude::ToolResultContent::Text(
+                    content:     claude::ToolResultContent::Text(
                         msg.content
                             .as_ref()
                             .map(openai::MessageContent::as_text_lossy)
                             .unwrap_or_default(),
                     ),
-                    is_error: None,
+                    is_error:    None,
                 };
                 if let Some(last) = messages.last_mut() {
                     if last.role == "user" {
@@ -68,12 +67,12 @@ pub fn openai_chat_to_claude_messages(
                     }
                 }
                 messages.push(claude::Message {
-                    role: "user".to_string(),
+                    role:    "user".to_string(),
                     content: vec![block],
                 });
             }
             _ => messages.push(claude::Message {
-                role: "user".to_string(),
+                role:    "user".to_string(),
                 content: vec![claude::ContentBlock::Text {
                     text: msg
                         .content
@@ -90,15 +89,12 @@ pub fn openai_chat_to_claude_messages(
         .map(|message| message.role.as_str() != "user")
         .unwrap_or(false)
     {
-        messages.insert(
-            0,
-            claude::Message {
-                role: "user".to_string(),
-                content: vec![claude::ContentBlock::Text {
-                    text: "...".to_string(),
-                }],
-            },
-        );
+        messages.insert(0, claude::Message {
+            role:    "user".to_string(),
+            content: vec![claude::ContentBlock::Text {
+                text: "...".to_string(),
+            }],
+        });
     }
 
     Ok(claude::MessagesRequest {
@@ -129,11 +125,11 @@ pub fn claude_messages_to_openai_chat_request(
         let text = system.as_text_lossy();
         if !text.is_empty() {
             messages.push(openai::ChatMessage {
-                role: "system".to_string(),
-                content: Some(openai::MessageContent::Text(text)),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
+                role:              "system".to_string(),
+                content:           Some(openai::MessageContent::Text(text)),
+                name:              None,
+                tool_calls:        None,
+                tool_call_id:      None,
                 reasoning_content: None,
             });
         }
@@ -157,10 +153,10 @@ pub fn claude_messages_to_openai_chat_request(
                 .iter()
                 .map(|tool| openai::Tool {
                     tool_type: "function".to_string(),
-                    function: openai::FunctionTool {
-                        name: tool.name.clone(),
+                    function:  openai::FunctionTool {
+                        name:        tool.name.clone(),
                         description: tool.description.clone(),
-                        parameters: Some(tool.input_schema.clone()),
+                        parameters:  Some(tool.input_schema.clone()),
                     },
                 })
                 .collect()
@@ -210,8 +206,8 @@ pub fn openai_chat_to_claude_messages_response(
                 tool_calls
                     .into_iter()
                     .map(|call| claude::ContentBlock::ToolUse {
-                        id: call.id,
-                        name: call.function.name,
+                        id:    call.id,
+                        name:  call.function.name,
                         input: parse_tool_input_object(&call.function.arguments),
                     }),
             );
@@ -235,13 +231,13 @@ pub fn claude_messages_to_openai_chat(
 ) -> openai::ChatCompletionResponse {
     let (content, tool_calls) = claude_content_to_openai(resp.content);
     openai::ChatCompletionResponse {
-        id: resp.id,
-        object: "chat.completion".to_string(),
+        id:      resp.id,
+        object:  "chat.completion".to_string(),
         created: now_unix(),
-        model: requested_model.into(),
+        model:   requested_model.into(),
         choices: vec![openai::ChatChoice {
-            index: 0,
-            message: openai::ChatMessage {
+            index:         0,
+            message:       openai::ChatMessage {
                 role: "assistant".to_string(),
                 content: Some(openai::MessageContent::Text(content)),
                 name: None,
@@ -251,37 +247,37 @@ pub fn claude_messages_to_openai_chat(
             },
             finish_reason: resp.stop_reason.map(map_stop_reason),
         }],
-        usage: resp.usage.map(convert_usage),
+        usage:   resp.usage.map(convert_usage),
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct OpenAiSseToClaudeTranslator {
-    message_id: String,
-    requested_model: String,
-    started: bool,
-    done: bool,
-    block_index: usize,
-    open_block: Option<ClaudeOpenBlock>,
-    tool_base_index: usize,
+    message_id:        String,
+    requested_model:   String,
+    started:           bool,
+    done:              bool,
+    block_index:       usize,
+    open_block:        Option<ClaudeOpenBlock>,
+    tool_base_index:   usize,
     open_tool_indices: BTreeSet<usize>,
-    usage: Option<claude::Usage>,
-    finish_reason: Option<String>,
+    usage:             Option<claude::Usage>,
+    finish_reason:     Option<String>,
 }
 
 impl OpenAiSseToClaudeTranslator {
     pub fn new(requested_model: impl Into<String>) -> Self {
         Self {
-            message_id: format!("msg_{}", Uuid::new_v4().simple()),
-            requested_model: requested_model.into(),
-            started: false,
-            done: false,
-            block_index: 0,
-            open_block: None,
-            tool_base_index: 0,
+            message_id:        format!("msg_{}", Uuid::new_v4().simple()),
+            requested_model:   requested_model.into(),
+            started:           false,
+            done:              false,
+            block_index:       0,
+            open_block:        None,
+            tool_base_index:   0,
             open_tool_indices: BTreeSet::new(),
-            usage: None,
-            finish_reason: None,
+            usage:             None,
+            finish_reason:     None,
         }
     }
 
@@ -499,21 +495,21 @@ impl OpenAiSseToClaudeTranslator {
 
 #[derive(Debug, Clone)]
 pub struct ClaudeSseTranslator {
-    completion_id: String,
-    created: u64,
+    completion_id:   String,
+    created:         u64,
     requested_model: String,
-    emitted_role: bool,
-    usage: Option<openai::Usage>,
+    emitted_role:    bool,
+    usage:           Option<openai::Usage>,
 }
 
 impl ClaudeSseTranslator {
     pub fn new(requested_model: impl Into<String>) -> Self {
         Self {
-            completion_id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
-            created: now_unix(),
+            completion_id:   format!("chatcmpl-{}", Uuid::new_v4().simple()),
+            created:         now_unix(),
             requested_model: requested_model.into(),
-            emitted_role: false,
-            usage: None,
+            emitted_role:    false,
+            usage:           None,
         }
     }
 
@@ -603,11 +599,11 @@ impl ClaudeSseTranslator {
             choices: vec![openai::ChatChunkChoice {
                 index: 0,
                 delta: openai::ChatChunkDelta {
-                    role: role.map(str::to_string),
-                    content: content.map(str::to_string),
+                    role:              role.map(str::to_string),
+                    content:           content.map(str::to_string),
                     reasoning_content: None,
-                    reasoning: None,
-                    tool_calls: None,
+                    reasoning:         None,
+                    tool_calls:        None,
                 },
                 finish_reason,
             }],
@@ -623,30 +619,30 @@ impl ClaudeSseTranslator {
         arguments: &str,
     ) -> Result<String, ProtocolError> {
         let chunk = openai::ChatCompletionChunk {
-            id: self.completion_id.clone(),
-            object: "chat.completion.chunk".to_string(),
+            id:      self.completion_id.clone(),
+            object:  "chat.completion.chunk".to_string(),
             created: self.created,
-            model: self.requested_model.clone(),
+            model:   self.requested_model.clone(),
             choices: vec![openai::ChatChunkChoice {
-                index: 0,
-                delta: openai::ChatChunkDelta {
-                    role: None,
-                    content: None,
+                index:         0,
+                delta:         openai::ChatChunkDelta {
+                    role:              None,
+                    content:           None,
                     reasoning_content: None,
-                    reasoning: None,
-                    tool_calls: Some(vec![openai::ToolCall {
-                        id: id.unwrap_or_default(),
+                    reasoning:         None,
+                    tool_calls:        Some(vec![openai::ToolCall {
+                        id:        id.unwrap_or_default(),
                         tool_type: "function".to_string(),
-                        function: openai::ToolCallFunction {
-                            name: name.unwrap_or_default(),
+                        function:  openai::ToolCallFunction {
+                            name:      name.unwrap_or_default(),
                             arguments: arguments.to_string(),
                         },
-                        index: Some(0),
+                        index:     Some(0),
                     }]),
                 },
                 finish_reason: None,
             }],
-            usage: None,
+            usage:   None,
         };
         Ok(serde_json::to_string(&chunk)?)
     }
@@ -669,7 +665,7 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
                 if !text.is_empty() {
                     parts.push(openai::ContentPart::Text {
                         part_type: "text".to_string(),
-                        text: text.clone(),
+                        text:      text.clone(),
                     });
                 }
             }
@@ -686,13 +682,13 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
             }
             claude::ContentBlock::ToolUse { id, name, input } => {
                 tool_calls.push(openai::ToolCall {
-                    id: id.clone(),
+                    id:        id.clone(),
                     tool_type: "function".to_string(),
-                    function: openai::ToolCallFunction {
-                        name: name.clone(),
+                    function:  openai::ToolCallFunction {
+                        name:      name.clone(),
                         arguments: input.to_string(),
                     },
-                    index: None,
+                    index:     None,
                 });
             }
             claude::ContentBlock::ToolResult {
@@ -708,11 +704,11 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
                     ));
                 }
                 out.push(openai::ChatMessage {
-                    role: "tool".to_string(),
-                    content: Some(openai::MessageContent::Text(content.as_text_lossy())),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: Some(tool_use_id.clone()),
+                    role:              "tool".to_string(),
+                    content:           Some(openai::MessageContent::Text(content.as_text_lossy())),
+                    name:              None,
+                    tool_calls:        None,
+                    tool_call_id:      Some(tool_use_id.clone()),
                     reasoning_content: None,
                 });
             }
@@ -720,7 +716,7 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
                 if !thinking.is_empty() {
                     parts.push(openai::ContentPart::Text {
                         part_type: "text".to_string(),
-                        text: thinking.clone(),
+                        text:      thinking.clone(),
                     });
                 }
             }
@@ -825,8 +821,8 @@ fn assistant_content_blocks(msg: &openai::ChatMessage) -> Vec<claude::ContentBlo
     }
     if let Some(tool_calls) = &msg.tool_calls {
         blocks.extend(tool_calls.iter().map(|call| claude::ContentBlock::ToolUse {
-            id: call.id.clone(),
-            name: call.function.name.clone(),
+            id:    call.id.clone(),
+            name:  call.function.name.clone(),
             input: parse_tool_input_object(&call.function.arguments),
         }));
     }
@@ -850,8 +846,8 @@ fn convert_tools(tools: &[openai::Tool]) -> Vec<claude::Tool> {
         .iter()
         .filter(|tool| tool.tool_type == "function")
         .map(|tool| claude::Tool {
-            name: tool.function.name.clone(),
-            description: tool.function.description.clone(),
+            name:         tool.function.name.clone(),
+            description:  tool.function.description.clone(),
             input_schema: tool
                 .function
                 .parameters
@@ -966,13 +962,13 @@ fn openai_usage_to_claude(usage: openai::Usage) -> claude::Usage {
             .unwrap_or(0),
     );
     claude::Usage {
-        input_tokens: usage
+        input_tokens:                usage
             .prompt_tokens
             .saturating_sub(cache_read)
             .saturating_sub(cache_creation),
-        output_tokens: usage.completion_tokens,
+        output_tokens:               usage.completion_tokens,
         cache_creation_input_tokens: cache_creation,
-        cache_read_input_tokens: cache_read,
+        cache_read_input_tokens:     cache_read,
     }
 }
 
@@ -1011,11 +1007,11 @@ mod tests {
 
     fn msg(role: &str, content: &str) -> openai::ChatMessage {
         openai::ChatMessage {
-            role: role.into(),
-            content: Some(openai::MessageContent::Text(content.into())),
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
+            role:              role.into(),
+            content:           Some(openai::MessageContent::Text(content.into())),
+            name:              None,
+            tool_calls:        None,
+            tool_call_id:      None,
             reasoning_content: None,
         }
     }
@@ -1023,39 +1019,41 @@ mod tests {
     #[test]
     fn converts_openai_chat_to_claude_messages() {
         let req = openai::ChatCompletionRequest {
-            model: "gpt-4o-mini".into(),
-            messages: vec![
+            model:                 "gpt-4o-mini".into(),
+            messages:              vec![
                 openai::ChatMessage {
-                    role: "system".into(),
-                    content: Some(openai::MessageContent::Text("You are concise.".into())),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
+                    role:              "system".into(),
+                    content:           Some(openai::MessageContent::Text(
+                        "You are concise.".into(),
+                    )),
+                    name:              None,
+                    tool_calls:        None,
+                    tool_call_id:      None,
                     reasoning_content: None,
                 },
                 openai::ChatMessage {
-                    role: "user".into(),
-                    content: Some(openai::MessageContent::Text("Hello".into())),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
+                    role:              "user".into(),
+                    content:           Some(openai::MessageContent::Text("Hello".into())),
+                    name:              None,
+                    tool_calls:        None,
+                    tool_call_id:      None,
                     reasoning_content: None,
                 },
             ],
-            max_tokens: Some(64),
+            max_tokens:            Some(64),
             max_completion_tokens: None,
-            temperature: Some(0.2),
-            top_p: None,
-            top_k: None,
-            stream: Some(false),
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            stop: None,
-            n: None,
-            seed: None,
-            response_format: None,
-            stream_options: None,
+            temperature:           Some(0.2),
+            top_p:                 None,
+            top_k:                 None,
+            stream:                Some(false),
+            tools:                 None,
+            tool_choice:           None,
+            parallel_tool_calls:   None,
+            stop:                  None,
+            n:                     None,
+            seed:                  None,
+            response_format:       None,
+            stream_options:        None,
         };
 
         let claude = openai_chat_to_claude_messages(&req, "claude-sonnet-4").unwrap();
@@ -1073,26 +1071,26 @@ mod tests {
     #[test]
     fn normalizes_messages_like_new_api_claude_relay() {
         let req = openai::ChatCompletionRequest {
-            model: "gpt-4o-mini".into(),
-            messages: vec![
+            model:                 "gpt-4o-mini".into(),
+            messages:              vec![
                 msg("assistant", "first"),
                 msg("user", "hello"),
                 msg("user", "again"),
             ],
-            max_tokens: None,
+            max_tokens:            None,
             max_completion_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            stream: None,
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            stop: None,
-            n: None,
-            seed: None,
-            response_format: None,
-            stream_options: None,
+            temperature:           None,
+            top_p:                 None,
+            top_k:                 None,
+            stream:                None,
+            tools:                 None,
+            tool_choice:           None,
+            parallel_tool_calls:   None,
+            stop:                  None,
+            n:                     None,
+            seed:                  None,
+            response_format:       None,
+            stream_options:        None,
         };
 
         let claude = openai_chat_to_claude_messages(&req, "claude").unwrap();
@@ -1111,37 +1109,37 @@ mod tests {
     #[test]
     fn converts_tool_calls_with_object_arguments_only() {
         let req = openai::ChatCompletionRequest {
-            model: "gpt-4o-mini".into(),
-            messages: vec![openai::ChatMessage {
-                role: "assistant".into(),
-                content: None,
-                name: None,
-                tool_calls: Some(vec![openai::ToolCall {
-                    id: "call_1".into(),
+            model:                 "gpt-4o-mini".into(),
+            messages:              vec![openai::ChatMessage {
+                role:              "assistant".into(),
+                content:           None,
+                name:              None,
+                tool_calls:        Some(vec![openai::ToolCall {
+                    id:        "call_1".into(),
                     tool_type: "function".into(),
-                    function: openai::ToolCallFunction {
-                        name: "lookup".into(),
+                    function:  openai::ToolCallFunction {
+                        name:      "lookup".into(),
                         arguments: "\"bad\"".into(),
                     },
-                    index: None,
+                    index:     None,
                 }]),
-                tool_call_id: None,
+                tool_call_id:      None,
                 reasoning_content: None,
             }],
-            max_tokens: None,
+            max_tokens:            None,
             max_completion_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            stream: None,
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            stop: None,
-            n: None,
-            seed: None,
-            response_format: None,
-            stream_options: None,
+            temperature:           None,
+            top_p:                 None,
+            top_k:                 None,
+            stream:                None,
+            tools:                 None,
+            tool_choice:           None,
+            parallel_tool_calls:   None,
+            stop:                  None,
+            n:                     None,
+            seed:                  None,
+            response_format:       None,
+            stream_options:        None,
         };
 
         let claude = openai_chat_to_claude_messages(&req, "claude").unwrap();

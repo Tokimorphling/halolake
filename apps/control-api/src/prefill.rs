@@ -1,10 +1,5 @@
 //! Prefill groups (`/api/prefill_group`) with memory + SQLite + Postgres storage.
 
-use std::{
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use halolake_control_plane::ManagementError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -15,16 +10,20 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct PrefillGroup {
     #[serde(default)]
-    pub(crate) id: u64,
-    pub(crate) name: String,
+    pub(crate) id:          u64,
+    pub(crate) name:        String,
     #[serde(rename = "type")]
-    pub(crate) group_type: String,
+    pub(crate) group_type:  String,
     #[serde(default)]
-    pub(crate) items: JsonValue,
+    pub(crate) items:       JsonValue,
     #[serde(default)]
     pub(crate) description: String,
 }
@@ -218,7 +217,7 @@ impl Service<DeletePrefillGroupRequest> for MemoryPrefillStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqlitePrefillStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryPrefillStore,
 }
 
@@ -288,14 +287,13 @@ impl Service<DeletePrefillGroupRequest> for SqlitePrefillStore {
 #[derive(Debug, Clone)]
 
 pub(crate) struct MySqlPrefillStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryPrefillStore,
 }
 
 impl MySqlPrefillStore {
     async fn connect(url: &str) -> Result<Self, ManagementError> {
-        let options = MySqlConnectOptions::from_str(url)
-            .map_err(storage_err)?;
+        let options = MySqlConnectOptions::from_str(url).map_err(storage_err)?;
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -355,7 +353,7 @@ impl Service<DeletePrefillGroupRequest> for MySqlPrefillStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresPrefillStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryPrefillStore,
 }
 
@@ -463,45 +461,41 @@ async fn migrate_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
 }
 
 async fn load_sqlite(pool: &SqlitePool) -> Result<Vec<PrefillGroup>, ManagementError> {
-    sqlx::query(
-        "SELECT id, name, group_type, items, description FROM prefill_groups ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(storage_err)?
-    .into_iter()
-    .map(|row| {
-        let items: String = row.try_get("items").map_err(storage_err)?;
-        Ok(PrefillGroup {
-            id: row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
-            name: row.try_get("name").map_err(storage_err)?,
-            group_type: row.try_get("group_type").map_err(storage_err)?,
-            items: serde_json::from_str(&items).unwrap_or(JsonValue::Null),
-            description: row.try_get("description").map_err(storage_err)?,
+    sqlx::query("SELECT id, name, group_type, items, description FROM prefill_groups ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .map_err(storage_err)?
+        .into_iter()
+        .map(|row| {
+            let items: String = row.try_get("items").map_err(storage_err)?;
+            Ok(PrefillGroup {
+                id:          row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
+                name:        row.try_get("name").map_err(storage_err)?,
+                group_type:  row.try_get("group_type").map_err(storage_err)?,
+                items:       serde_json::from_str(&items).unwrap_or(JsonValue::Null),
+                description: row.try_get("description").map_err(storage_err)?,
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 async fn load_mysql(pool: &MySqlPool) -> Result<Vec<PrefillGroup>, ManagementError> {
-    sqlx::query(
-        "SELECT id, name, group_type, items, description FROM prefill_groups ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(storage_err)?
-    .into_iter()
-    .map(|row| {
-        let items: String = row.try_get("items").map_err(storage_err)?;
-        Ok(PrefillGroup {
-            id: row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
-            name: row.try_get("name").map_err(storage_err)?,
-            group_type: row.try_get("group_type").map_err(storage_err)?,
-            items: serde_json::from_str(&items).unwrap_or(JsonValue::Null),
-            description: row.try_get("description").map_err(storage_err)?,
+    sqlx::query("SELECT id, name, group_type, items, description FROM prefill_groups ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .map_err(storage_err)?
+        .into_iter()
+        .map(|row| {
+            let items: String = row.try_get("items").map_err(storage_err)?;
+            Ok(PrefillGroup {
+                id:          row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
+                name:        row.try_get("name").map_err(storage_err)?,
+                group_type:  row.try_get("group_type").map_err(storage_err)?,
+                items:       serde_json::from_str(&items).unwrap_or(JsonValue::Null),
+                description: row.try_get("description").map_err(storage_err)?,
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 async fn save_sqlite(pool: &SqlitePool, groups: &[PrefillGroup]) -> Result<(), ManagementError> {
@@ -567,24 +561,22 @@ async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
 }
 
 async fn load_pg(pool: &PgPool) -> Result<Vec<PrefillGroup>, ManagementError> {
-    sqlx::query(
-        "SELECT id, name, group_type, items, description FROM prefill_groups ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(storage_err)?
-    .into_iter()
-    .map(|row| {
-        let items: String = row.try_get("items").map_err(storage_err)?;
-        Ok(PrefillGroup {
-            id: row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
-            name: row.try_get("name").map_err(storage_err)?,
-            group_type: row.try_get("group_type").map_err(storage_err)?,
-            items: serde_json::from_str(&items).unwrap_or(JsonValue::Null),
-            description: row.try_get("description").map_err(storage_err)?,
+    sqlx::query("SELECT id, name, group_type, items, description FROM prefill_groups ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .map_err(storage_err)?
+        .into_iter()
+        .map(|row| {
+            let items: String = row.try_get("items").map_err(storage_err)?;
+            Ok(PrefillGroup {
+                id:          row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
+                name:        row.try_get("name").map_err(storage_err)?,
+                group_type:  row.try_get("group_type").map_err(storage_err)?,
+                items:       serde_json::from_str(&items).unwrap_or(JsonValue::Null),
+                description: row.try_get("description").map_err(storage_err)?,
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 async fn save_pg(pool: &PgPool, groups: &[PrefillGroup]) -> Result<(), ManagementError> {
@@ -641,10 +633,10 @@ mod tests {
             let created = store
                 .call(CreatePrefillGroupRequest {
                     group: PrefillGroup {
-                        id: 0,
-                        name: "prompts".into(),
-                        group_type: "prompt".into(),
-                        items: serde_json::json!(["hi"]),
+                        id:          0,
+                        name:        "prompts".into(),
+                        group_type:  "prompt".into(),
+                        items:       serde_json::json!(["hi"]),
                         description: "d".into(),
                     },
                 })

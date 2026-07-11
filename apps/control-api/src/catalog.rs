@@ -1,9 +1,3 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use halolake_control_plane::{ManagementData, ManagementError};
 use halolake_domain::{ChannelRecord, PageRequest, PageResult, STATUS_ENABLED, SearchRequest};
 use serde::{Deserialize, Serialize};
@@ -14,6 +8,11 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 const NAME_RULE_EXACT: i32 = 0;
 const NAME_RULE_PREFIX: i32 = 1;
@@ -23,7 +22,7 @@ const NAME_RULE_SUFFIX: i32 = 3;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CatalogData {
     pub(crate) vendors: Vec<VendorRecord>,
-    pub(crate) models: Vec<ModelRecord>,
+    pub(crate) models:  Vec<ModelRecord>,
 }
 
 impl CatalogData {
@@ -62,14 +61,14 @@ impl CatalogData {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct VendorRecord {
     #[serde(default)]
-    pub(crate) id: u64,
-    pub(crate) name: String,
+    pub(crate) id:           u64,
+    pub(crate) name:         String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) description: String,
+    pub(crate) description:  String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) icon: String,
+    pub(crate) icon:         String,
     #[serde(default = "default_status")]
-    pub(crate) status: i32,
+    pub(crate) status:       i32,
     #[serde(default)]
     pub(crate) created_time: i64,
     #[serde(default)]
@@ -78,7 +77,7 @@ pub(crate) struct VendorRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct BoundChannel {
-    pub(crate) name: String,
+    pub(crate) name:         String,
     #[serde(rename = "type")]
     pub(crate) channel_type: i32,
 }
@@ -86,39 +85,39 @@ pub(crate) struct BoundChannel {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct ModelRecord {
     #[serde(default)]
-    pub(crate) id: u64,
+    pub(crate) id:             u64,
     #[serde(default)]
-    pub(crate) model_name: String,
+    pub(crate) model_name:     String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) description: String,
+    pub(crate) description:    String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) icon: String,
+    pub(crate) icon:           String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) tags: String,
+    pub(crate) tags:           String,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub(crate) vendor_id: u64,
+    pub(crate) vendor_id:      u64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) endpoints: String,
+    pub(crate) endpoints:      String,
     #[serde(default = "default_status")]
-    pub(crate) status: i32,
+    pub(crate) status:         i32,
     #[serde(default = "default_status")]
-    pub(crate) sync_official: i32,
+    pub(crate) sync_official:  i32,
     #[serde(default)]
-    pub(crate) created_time: i64,
+    pub(crate) created_time:   i64,
     #[serde(default)]
-    pub(crate) updated_time: i64,
+    pub(crate) updated_time:   i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) bound_channels: Vec<BoundChannel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) enable_groups: Vec<String>,
+    pub(crate) enable_groups:  Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) quota_types: Vec<i32>,
+    pub(crate) quota_types:    Vec<i32>,
     #[serde(default)]
-    pub(crate) name_rule: i32,
+    pub(crate) name_rule:      i32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) matched_models: Vec<String>,
     #[serde(default, skip_serializing_if = "is_zero_usize")]
-    pub(crate) matched_count: usize,
+    pub(crate) matched_count:  usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -174,7 +173,7 @@ pub(crate) struct CreateModelRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct UpdateModelRequest {
-    pub(crate) model: ModelRecord,
+    pub(crate) model:       ModelRecord,
     pub(crate) status_only: bool,
 }
 
@@ -208,7 +207,9 @@ impl CatalogStore {
     }
 
     pub(crate) async fn postgres(url: &str, seed: CatalogData) -> Result<Self, ManagementError> {
-        Ok(Self::Postgres(PostgresCatalogStore::connect(url, seed).await?))
+        Ok(Self::Postgres(
+            PostgresCatalogStore::connect(url, seed).await?,
+        ))
     }
 
     pub(crate) fn current_data(&self) -> Result<CatalogData, ManagementError> {
@@ -566,7 +567,7 @@ impl Service<VendorModelCountsRequest> for MemoryCatalogStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteCatalogStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryCatalogStore,
 }
 
@@ -689,17 +690,15 @@ impl_sqlite_write_service!(CreateModelRequest, ModelRecord);
 impl_sqlite_write_service!(UpdateModelRequest, ModelRecord);
 impl_sqlite_write_service!(DeleteModelRequest, ());
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlCatalogStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryCatalogStore,
 }
 
 impl MySqlCatalogStore {
     async fn connect(url: &str, seed: CatalogData) -> Result<Self, ManagementError> {
-        let options = MySqlConnectOptions::from_str(url)
-            .map_err(storage_err)?;
+        let options = MySqlConnectOptions::from_str(url).map_err(storage_err)?;
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -730,16 +729,9 @@ impl MySqlCatalogStore {
     }
 }
 
-
-
-
-
-
-
-
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresCatalogStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryCatalogStore,
 }
 
@@ -824,11 +816,11 @@ async fn load_catalog_pg(pool: &PgPool) -> Result<CatalogData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(VendorRecord {
-            id: pg_u64_col(&row, "id")?,
-            name: pg_string_col(&row, "name")?,
-            description: pg_string_col(&row, "description")?,
-            icon: pg_string_col(&row, "icon")?,
-            status: pg_i32_col(&row, "status")?,
+            id:           pg_u64_col(&row, "id")?,
+            name:         pg_string_col(&row, "name")?,
+            description:  pg_string_col(&row, "description")?,
+            icon:         pg_string_col(&row, "icon")?,
+            status:       pg_i32_col(&row, "status")?,
             created_time: pg_i64_col(&row, "created_time")?,
             updated_time: pg_i64_col(&row, "updated_time")?,
         })
@@ -846,23 +838,23 @@ async fn load_catalog_pg(pool: &PgPool) -> Result<CatalogData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(ModelRecord {
-            id: pg_u64_col(&row, "id")?,
-            model_name: pg_string_col(&row, "model_name")?,
-            description: pg_string_col(&row, "description")?,
-            icon: pg_string_col(&row, "icon")?,
-            tags: pg_string_col(&row, "tags")?,
-            vendor_id: pg_u64_col(&row, "vendor_id")?,
-            endpoints: pg_string_col(&row, "endpoints")?,
-            status: pg_i32_col(&row, "status")?,
-            sync_official: pg_i32_col(&row, "sync_official")?,
-            created_time: pg_i64_col(&row, "created_time")?,
-            updated_time: pg_i64_col(&row, "updated_time")?,
+            id:             pg_u64_col(&row, "id")?,
+            model_name:     pg_string_col(&row, "model_name")?,
+            description:    pg_string_col(&row, "description")?,
+            icon:           pg_string_col(&row, "icon")?,
+            tags:           pg_string_col(&row, "tags")?,
+            vendor_id:      pg_u64_col(&row, "vendor_id")?,
+            endpoints:      pg_string_col(&row, "endpoints")?,
+            status:         pg_i32_col(&row, "status")?,
+            sync_official:  pg_i32_col(&row, "sync_official")?,
+            created_time:   pg_i64_col(&row, "created_time")?,
+            updated_time:   pg_i64_col(&row, "updated_time")?,
             bound_channels: Vec::new(),
-            enable_groups: Vec::new(),
-            quota_types: Vec::new(),
-            name_rule: pg_i32_col(&row, "name_rule")?,
+            enable_groups:  Vec::new(),
+            quota_types:    Vec::new(),
+            name_rule:      pg_i32_col(&row, "name_rule")?,
             matched_models: Vec::new(),
-            matched_count: 0,
+            matched_count:  0,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1084,11 +1076,11 @@ async fn load_catalog(pool: &SqlitePool) -> Result<CatalogData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(VendorRecord {
-            id: u64_col(&row, "id")?,
-            name: string_col(&row, "name")?,
-            description: string_col(&row, "description")?,
-            icon: string_col(&row, "icon")?,
-            status: i32_col(&row, "status")?,
+            id:           u64_col(&row, "id")?,
+            name:         string_col(&row, "name")?,
+            description:  string_col(&row, "description")?,
+            icon:         string_col(&row, "icon")?,
+            status:       i32_col(&row, "status")?,
             created_time: i64_col(&row, "created_time")?,
             updated_time: i64_col(&row, "updated_time")?,
         })
@@ -1106,23 +1098,23 @@ async fn load_catalog(pool: &SqlitePool) -> Result<CatalogData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(ModelRecord {
-            id: u64_col(&row, "id")?,
-            model_name: string_col(&row, "model_name")?,
-            description: string_col(&row, "description")?,
-            icon: string_col(&row, "icon")?,
-            tags: string_col(&row, "tags")?,
-            vendor_id: u64_col(&row, "vendor_id")?,
-            endpoints: string_col(&row, "endpoints")?,
-            status: i32_col(&row, "status")?,
-            sync_official: i32_col(&row, "sync_official")?,
-            created_time: i64_col(&row, "created_time")?,
-            updated_time: i64_col(&row, "updated_time")?,
+            id:             u64_col(&row, "id")?,
+            model_name:     string_col(&row, "model_name")?,
+            description:    string_col(&row, "description")?,
+            icon:           string_col(&row, "icon")?,
+            tags:           string_col(&row, "tags")?,
+            vendor_id:      u64_col(&row, "vendor_id")?,
+            endpoints:      string_col(&row, "endpoints")?,
+            status:         i32_col(&row, "status")?,
+            sync_official:  i32_col(&row, "sync_official")?,
+            created_time:   i64_col(&row, "created_time")?,
+            updated_time:   i64_col(&row, "updated_time")?,
             bound_channels: Vec::new(),
-            enable_groups: Vec::new(),
-            quota_types: Vec::new(),
-            name_rule: i32_col(&row, "name_rule")?,
+            enable_groups:  Vec::new(),
+            quota_types:    Vec::new(),
+            name_rule:      i32_col(&row, "name_rule")?,
             matched_models: Vec::new(),
-            matched_count: 0,
+            matched_count:  0,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1141,11 +1133,11 @@ async fn load_catalog_mysql(pool: &MySqlPool) -> Result<CatalogData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(VendorRecord {
-            id: u64_col_mysql(&row, "id")?,
-            name: string_col_mysql(&row, "name")?,
-            description: string_col_mysql(&row, "description")?,
-            icon: string_col_mysql(&row, "icon")?,
-            status: i32_col_mysql(&row, "status")?,
+            id:           u64_col_mysql(&row, "id")?,
+            name:         string_col_mysql(&row, "name")?,
+            description:  string_col_mysql(&row, "description")?,
+            icon:         string_col_mysql(&row, "icon")?,
+            status:       i32_col_mysql(&row, "status")?,
             created_time: i64_col_mysql(&row, "created_time")?,
             updated_time: i64_col_mysql(&row, "updated_time")?,
         })
@@ -1163,23 +1155,23 @@ async fn load_catalog_mysql(pool: &MySqlPool) -> Result<CatalogData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(ModelRecord {
-            id: u64_col_mysql(&row, "id")?,
-            model_name: string_col_mysql(&row, "model_name")?,
-            description: string_col_mysql(&row, "description")?,
-            icon: string_col_mysql(&row, "icon")?,
-            tags: string_col_mysql(&row, "tags")?,
-            vendor_id: u64_col_mysql(&row, "vendor_id")?,
-            endpoints: string_col_mysql(&row, "endpoints")?,
-            status: i32_col_mysql(&row, "status")?,
-            sync_official: i32_col_mysql(&row, "sync_official")?,
-            created_time: i64_col_mysql(&row, "created_time")?,
-            updated_time: i64_col_mysql(&row, "updated_time")?,
+            id:             u64_col_mysql(&row, "id")?,
+            model_name:     string_col_mysql(&row, "model_name")?,
+            description:    string_col_mysql(&row, "description")?,
+            icon:           string_col_mysql(&row, "icon")?,
+            tags:           string_col_mysql(&row, "tags")?,
+            vendor_id:      u64_col_mysql(&row, "vendor_id")?,
+            endpoints:      string_col_mysql(&row, "endpoints")?,
+            status:         i32_col_mysql(&row, "status")?,
+            sync_official:  i32_col_mysql(&row, "sync_official")?,
+            created_time:   i64_col_mysql(&row, "created_time")?,
+            updated_time:   i64_col_mysql(&row, "updated_time")?,
             bound_channels: Vec::new(),
-            enable_groups: Vec::new(),
-            quota_types: Vec::new(),
-            name_rule: i32_col_mysql(&row, "name_rule")?,
+            enable_groups:  Vec::new(),
+            quota_types:    Vec::new(),
+            name_rule:      i32_col_mysql(&row, "name_rule")?,
             matched_models: Vec::new(),
-            matched_count: 0,
+            matched_count:  0,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1369,7 +1361,7 @@ fn channels_for_model(model: &str, channels: &[ChannelRecord]) -> Vec<BoundChann
         .filter(|channel| channel.status == STATUS_ENABLED)
         .filter(|channel| channel.model_list().iter().any(|item| item == model))
         .map(|channel| BoundChannel {
-            name: channel.name.clone(),
+            name:         channel.name.clone(),
             channel_type: channel.channel_type,
         })
         .collect::<Vec<_>>();

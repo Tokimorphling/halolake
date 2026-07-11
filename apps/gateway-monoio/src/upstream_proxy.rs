@@ -5,8 +5,7 @@
 //! - `socks5` / `socks5h` → SOCKS5 CONNECT
 //! - bare `socks5://` is upgraded to remote-DNS mode (socks5h) to avoid DNS leaks
 
-use std::net::{IpAddr, ToSocketAddrs};
-
+use crate::timeout_opt;
 use anyhow::{Context, Result, bail};
 use http::Uri;
 use monoio::{
@@ -14,9 +13,10 @@ use monoio::{
     net::TcpStream,
 };
 use monoio_transports::connectors::{Connector, TcpConnector};
-
-use crate::timeout_opt;
-use std::time::Duration;
+use std::{
+    net::{IpAddr, ToSocketAddrs},
+    time::Duration,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProxyKind {
@@ -27,10 +27,10 @@ pub(crate) enum ProxyKind {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProxyEndpoint {
-    pub(crate) kind: ProxyKind,
-    pub(crate) host: String,
-    pub(crate) port: u16,
-    pub(crate) auth: Option<(String, String)>,
+    pub(crate) kind:      ProxyKind,
+    pub(crate) host:      String,
+    pub(crate) port:      u16,
+    pub(crate) auth:      Option<(String, String)>,
     /// Canonical URL string after socks5→socks5h upgrade (no password redaction).
     pub(crate) canonical: String,
 }
@@ -75,9 +75,9 @@ pub(crate) fn parse_proxy_endpoint(raw: &str) -> Result<ProxyEndpoint> {
             ProxyKind::Socks5RemoteDns
         }
         "socks5h" => ProxyKind::Socks5RemoteDns,
-        other => bail!(
-            "unsupported proxy scheme {other:?} (allowed: http, https, socks5, socks5h)"
-        ),
+        other => {
+            bail!("unsupported proxy scheme {other:?} (allowed: http, https, socks5, socks5h)")
+        }
     };
 
     let userinfo = auth

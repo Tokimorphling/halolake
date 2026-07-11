@@ -1,9 +1,3 @@
-use std::{
-    collections::BTreeMap,
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use halolake_control_plane::{
     AdjustUserQuotaRequest, BatchSetChannelTagRequest, BootstrapRootUserRequest,
     ChannelStatusUpdateRequest, CreateChannelRequest, CreateTokenRequest, CreateUserRequest,
@@ -30,6 +24,11 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    collections::BTreeMap,
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ManagementStore {
@@ -51,9 +50,7 @@ impl ManagementStore {
     }
 
     pub(crate) async fn mysql(url: &str, seed: ManagementData) -> Result<Self, ManagementError> {
-        Ok(Self::MySql(
-            MySqlManagementStore::connect(url, seed).await?,
-        ))
+        Ok(Self::MySql(MySqlManagementStore::connect(url, seed).await?))
     }
 
     pub(crate) async fn postgres(url: &str, seed: ManagementData) -> Result<Self, ManagementError> {
@@ -101,7 +98,7 @@ impl ManagementStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteManagementStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryManagementStore,
 }
 
@@ -321,7 +318,6 @@ where
     }
 }
 
-
 impl<P> Service<PublishManagementSnapshotRequest<P>> for PostgresManagementStore
 where
     P: SnapshotPublisher,
@@ -337,11 +333,9 @@ where
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlManagementStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryManagementStore,
 }
 
@@ -380,7 +374,7 @@ impl MySqlManagementStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresManagementStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryManagementStore,
 }
 
@@ -493,7 +487,9 @@ async fn migrate(pool: &SqlitePool) -> Result<(), ManagementError> {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
     }
     // Best-effort migration for existing DBs.
-    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id INTEGER").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id INTEGER")
+        .execute(pool)
+        .await;
     Ok(())
 }
 
@@ -573,7 +569,9 @@ async fn migrate_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
     }
     // Best-effort migration for existing DBs.
-    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id BIGINT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id BIGINT")
+        .execute(pool)
+        .await;
     Ok(())
 }
 
@@ -613,20 +611,20 @@ async fn load_data(pool: &SqlitePool) -> Result<ManagementData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(UserRecord {
-            id: u64_col(&row, "id")?,
-            username: string_col(&row, "username")?,
-            password: string_col(&row, "password")?,
-            access_token: opt_string_col(&row, "access_token")?,
-            display_name: string_col(&row, "display_name")?,
-            role: i32_col(&row, "role")?,
-            status: i32_col(&row, "status")?,
-            email: string_col(&row, "email")?,
-            quota: i64_col(&row, "quota")?,
-            used_quota: i64_col(&row, "used_quota")?,
-            group: string_col(&row, "user_group")?,
-            setting: string_col(&row, "setting")?,
-            remark: string_col(&row, "remark")?,
-            created_at: i64_col(&row, "created_at")?,
+            id:            u64_col(&row, "id")?,
+            username:      string_col(&row, "username")?,
+            password:      string_col(&row, "password")?,
+            access_token:  opt_string_col(&row, "access_token")?,
+            display_name:  string_col(&row, "display_name")?,
+            role:          i32_col(&row, "role")?,
+            status:        i32_col(&row, "status")?,
+            email:         string_col(&row, "email")?,
+            quota:         i64_col(&row, "quota")?,
+            used_quota:    i64_col(&row, "used_quota")?,
+            group:         string_col(&row, "user_group")?,
+            setting:       string_col(&row, "setting")?,
+            remark:        string_col(&row, "remark")?,
+            created_at:    i64_col(&row, "created_at")?,
             last_login_at: i64_col(&row, "last_login_at")?,
         })
     })
@@ -644,24 +642,24 @@ async fn load_data(pool: &SqlitePool) -> Result<ManagementData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(TokenRecord {
-            id: u64_col(&row, "id")?,
-            snapshot_id: opt_string_col(&row, "snapshot_id")?,
-            user_id: u64_col(&row, "user_id")?,
-            snapshot_user_id: opt_string_col(&row, "snapshot_user_id")?,
-            key: string_col(&row, "key")?,
-            status: i32_col(&row, "status")?,
-            name: string_col(&row, "name")?,
-            created_time: i64_col(&row, "created_time")?,
-            accessed_time: i64_col(&row, "accessed_time")?,
-            expired_time: i64_col(&row, "expired_time")?,
-            remain_quota: i64_col(&row, "remain_quota")?,
-            unlimited_quota: bool_col(&row, "unlimited_quota")?,
+            id:                   u64_col(&row, "id")?,
+            snapshot_id:          opt_string_col(&row, "snapshot_id")?,
+            user_id:              u64_col(&row, "user_id")?,
+            snapshot_user_id:     opt_string_col(&row, "snapshot_user_id")?,
+            key:                  string_col(&row, "key")?,
+            status:               i32_col(&row, "status")?,
+            name:                 string_col(&row, "name")?,
+            created_time:         i64_col(&row, "created_time")?,
+            accessed_time:        i64_col(&row, "accessed_time")?,
+            expired_time:         i64_col(&row, "expired_time")?,
+            remain_quota:         i64_col(&row, "remain_quota")?,
+            unlimited_quota:      bool_col(&row, "unlimited_quota")?,
             model_limits_enabled: bool_col(&row, "model_limits_enabled")?,
-            model_limits: string_col(&row, "model_limits")?,
-            allow_ips: opt_string_col(&row, "allow_ips")?,
-            used_quota: i64_col(&row, "used_quota")?,
-            group: string_col(&row, "token_group")?,
-            cross_group_retry: bool_col(&row, "cross_group_retry")?,
+            model_limits:         string_col(&row, "model_limits")?,
+            allow_ips:            opt_string_col(&row, "allow_ips")?,
+            used_quota:           i64_col(&row, "used_quota")?,
+            group:                string_col(&row, "token_group")?,
+            cross_group_retry:    bool_col(&row, "cross_group_retry")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -679,37 +677,38 @@ async fn load_data(pool: &SqlitePool) -> Result<ManagementData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(ChannelRecord {
-            id: u64_col(&row, "id")?,
-            snapshot_id: opt_string_col(&row, "snapshot_id")?,
-            channel_type: i32_col(&row, "channel_type")?,
-            key: string_col(&row, "key")?,
-            status: i32_col(&row, "status")?,
-            name: string_col(&row, "name")?,
-            weight: opt_u32_col(&row, "weight")?,
-            created_time: i64_col(&row, "created_time")?,
-            test_time: i64_col(&row, "test_time")?,
-            response_time: i32_col(&row, "response_time")?,
-            base_url: opt_string_col(&row, "base_url")?,
-            balance: f64_col(&row, "balance")?,
+            id:                   u64_col(&row, "id")?,
+            snapshot_id:          opt_string_col(&row, "snapshot_id")?,
+            channel_type:         i32_col(&row, "channel_type")?,
+            key:                  string_col(&row, "key")?,
+            status:               i32_col(&row, "status")?,
+            name:                 string_col(&row, "name")?,
+            weight:               opt_u32_col(&row, "weight")?,
+            created_time:         i64_col(&row, "created_time")?,
+            test_time:            i64_col(&row, "test_time")?,
+            response_time:        i32_col(&row, "response_time")?,
+            base_url:             opt_string_col(&row, "base_url")?,
+            balance:              f64_col(&row, "balance")?,
             balance_updated_time: i64_col(&row, "balance_updated_time")?,
-            models: string_col(&row, "models")?,
-            group: string_col(&row, "channel_group")?,
-            used_quota: i64_col(&row, "used_quota")?,
-            model_mapping: opt_string_col(&row, "model_mapping")?,
-            priority: opt_i64_col(&row, "priority")?,
-            auto_ban: opt_i32_col(&row, "auto_ban")?,
-            tag: opt_string_col(&row, "tag")?,
-            setting: opt_string_col(&row, "setting")?,
-            param_override: opt_string_col(&row, "param_override")?,
-            header_override: opt_string_col(&row, "header_override")?,
-            remark: opt_string_col(&row, "remark")?,
-            proxy_id: opt_u64_col(&row, "proxy_id")?,
+            models:               string_col(&row, "models")?,
+            group:                string_col(&row, "channel_group")?,
+            used_quota:           i64_col(&row, "used_quota")?,
+            model_mapping:        opt_string_col(&row, "model_mapping")?,
+            priority:             opt_i64_col(&row, "priority")?,
+            auto_ban:             opt_i32_col(&row, "auto_ban")?,
+            tag:                  opt_string_col(&row, "tag")?,
+            setting:              opt_string_col(&row, "setting")?,
+            param_override:       opt_string_col(&row, "param_override")?,
+            header_override:      opt_string_col(&row, "header_override")?,
+            remark:               opt_string_col(&row, "remark")?,
+            proxy_id:             opt_u64_col(&row, "proxy_id")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
 
     let model_mappings = sqlx::query(
-        "SELECT requested_model, channel_id, upstream_model FROM model_mappings ORDER BY requested_model",
+        "SELECT requested_model, channel_id, upstream_model FROM model_mappings ORDER BY \
+         requested_model",
     )
     .fetch_all(pool)
     .await
@@ -718,8 +717,8 @@ async fn load_data(pool: &SqlitePool) -> Result<ManagementData, ManagementError>
     .map(|row| {
         Ok(ModelMapping {
             requested_model: string_col(&row, "requested_model")?,
-            channel_id: string_col(&row, "channel_id")?,
-            upstream_model: string_col(&row, "upstream_model")?,
+            channel_id:      string_col(&row, "channel_id")?,
+            upstream_model:  string_col(&row, "upstream_model")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -753,20 +752,20 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(UserRecord {
-            id: u64_col_mysql(&row, "id")?,
-            username: string_col_mysql(&row, "username")?,
-            password: string_col_mysql(&row, "password")?,
-            access_token: opt_string_col_mysql(&row, "access_token")?,
-            display_name: string_col_mysql(&row, "display_name")?,
-            role: i32_col_mysql(&row, "role")?,
-            status: i32_col_mysql(&row, "status")?,
-            email: string_col_mysql(&row, "email")?,
-            quota: i64_col_mysql(&row, "quota")?,
-            used_quota: i64_col_mysql(&row, "used_quota")?,
-            group: string_col_mysql(&row, "user_group")?,
-            setting: string_col_mysql(&row, "setting")?,
-            remark: string_col_mysql(&row, "remark")?,
-            created_at: i64_col_mysql(&row, "created_at")?,
+            id:            u64_col_mysql(&row, "id")?,
+            username:      string_col_mysql(&row, "username")?,
+            password:      string_col_mysql(&row, "password")?,
+            access_token:  opt_string_col_mysql(&row, "access_token")?,
+            display_name:  string_col_mysql(&row, "display_name")?,
+            role:          i32_col_mysql(&row, "role")?,
+            status:        i32_col_mysql(&row, "status")?,
+            email:         string_col_mysql(&row, "email")?,
+            quota:         i64_col_mysql(&row, "quota")?,
+            used_quota:    i64_col_mysql(&row, "used_quota")?,
+            group:         string_col_mysql(&row, "user_group")?,
+            setting:       string_col_mysql(&row, "setting")?,
+            remark:        string_col_mysql(&row, "remark")?,
+            created_at:    i64_col_mysql(&row, "created_at")?,
             last_login_at: i64_col_mysql(&row, "last_login_at")?,
         })
     })
@@ -784,24 +783,24 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(TokenRecord {
-            id: u64_col_mysql(&row, "id")?,
-            snapshot_id: opt_string_col_mysql(&row, "snapshot_id")?,
-            user_id: u64_col_mysql(&row, "user_id")?,
-            snapshot_user_id: opt_string_col_mysql(&row, "snapshot_user_id")?,
-            key: string_col_mysql(&row, "key")?,
-            status: i32_col_mysql(&row, "status")?,
-            name: string_col_mysql(&row, "name")?,
-            created_time: i64_col_mysql(&row, "created_time")?,
-            accessed_time: i64_col_mysql(&row, "accessed_time")?,
-            expired_time: i64_col_mysql(&row, "expired_time")?,
-            remain_quota: i64_col_mysql(&row, "remain_quota")?,
-            unlimited_quota: bool_col_mysql(&row, "unlimited_quota")?,
+            id:                   u64_col_mysql(&row, "id")?,
+            snapshot_id:          opt_string_col_mysql(&row, "snapshot_id")?,
+            user_id:              u64_col_mysql(&row, "user_id")?,
+            snapshot_user_id:     opt_string_col_mysql(&row, "snapshot_user_id")?,
+            key:                  string_col_mysql(&row, "key")?,
+            status:               i32_col_mysql(&row, "status")?,
+            name:                 string_col_mysql(&row, "name")?,
+            created_time:         i64_col_mysql(&row, "created_time")?,
+            accessed_time:        i64_col_mysql(&row, "accessed_time")?,
+            expired_time:         i64_col_mysql(&row, "expired_time")?,
+            remain_quota:         i64_col_mysql(&row, "remain_quota")?,
+            unlimited_quota:      bool_col_mysql(&row, "unlimited_quota")?,
             model_limits_enabled: bool_col_mysql(&row, "model_limits_enabled")?,
-            model_limits: string_col_mysql(&row, "model_limits")?,
-            allow_ips: opt_string_col_mysql(&row, "allow_ips")?,
-            used_quota: i64_col_mysql(&row, "used_quota")?,
-            group: string_col_mysql(&row, "token_group")?,
-            cross_group_retry: bool_col_mysql(&row, "cross_group_retry")?,
+            model_limits:         string_col_mysql(&row, "model_limits")?,
+            allow_ips:            opt_string_col_mysql(&row, "allow_ips")?,
+            used_quota:           i64_col_mysql(&row, "used_quota")?,
+            group:                string_col_mysql(&row, "token_group")?,
+            cross_group_retry:    bool_col_mysql(&row, "cross_group_retry")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -819,37 +818,38 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(ChannelRecord {
-            id: u64_col_mysql(&row, "id")?,
-            snapshot_id: opt_string_col_mysql(&row, "snapshot_id")?,
-            channel_type: i32_col_mysql(&row, "channel_type")?,
-            key: string_col_mysql(&row, "key")?,
-            status: i32_col_mysql(&row, "status")?,
-            name: string_col_mysql(&row, "name")?,
-            weight: opt_u32_col_mysql(&row, "weight")?,
-            created_time: i64_col_mysql(&row, "created_time")?,
-            test_time: i64_col_mysql(&row, "test_time")?,
-            response_time: i32_col_mysql(&row, "response_time")?,
-            base_url: opt_string_col_mysql(&row, "base_url")?,
-            balance: f64_col_mysql(&row, "balance")?,
+            id:                   u64_col_mysql(&row, "id")?,
+            snapshot_id:          opt_string_col_mysql(&row, "snapshot_id")?,
+            channel_type:         i32_col_mysql(&row, "channel_type")?,
+            key:                  string_col_mysql(&row, "key")?,
+            status:               i32_col_mysql(&row, "status")?,
+            name:                 string_col_mysql(&row, "name")?,
+            weight:               opt_u32_col_mysql(&row, "weight")?,
+            created_time:         i64_col_mysql(&row, "created_time")?,
+            test_time:            i64_col_mysql(&row, "test_time")?,
+            response_time:        i32_col_mysql(&row, "response_time")?,
+            base_url:             opt_string_col_mysql(&row, "base_url")?,
+            balance:              f64_col_mysql(&row, "balance")?,
             balance_updated_time: i64_col_mysql(&row, "balance_updated_time")?,
-            models: string_col_mysql(&row, "models")?,
-            group: string_col_mysql(&row, "channel_group")?,
-            used_quota: i64_col_mysql(&row, "used_quota")?,
-            model_mapping: opt_string_col_mysql(&row, "model_mapping")?,
-            priority: opt_i64_col_mysql(&row, "priority")?,
-            auto_ban: opt_i32_col_mysql(&row, "auto_ban")?,
-            tag: opt_string_col_mysql(&row, "tag")?,
-            setting: opt_string_col_mysql(&row, "setting")?,
-            param_override: opt_string_col_mysql(&row, "param_override")?,
-            header_override: opt_string_col_mysql(&row, "header_override")?,
-            remark: opt_string_col_mysql(&row, "remark")?,
-            proxy_id: opt_u64_col_mysql(&row, "proxy_id")?,
+            models:               string_col_mysql(&row, "models")?,
+            group:                string_col_mysql(&row, "channel_group")?,
+            used_quota:           i64_col_mysql(&row, "used_quota")?,
+            model_mapping:        opt_string_col_mysql(&row, "model_mapping")?,
+            priority:             opt_i64_col_mysql(&row, "priority")?,
+            auto_ban:             opt_i32_col_mysql(&row, "auto_ban")?,
+            tag:                  opt_string_col_mysql(&row, "tag")?,
+            setting:              opt_string_col_mysql(&row, "setting")?,
+            param_override:       opt_string_col_mysql(&row, "param_override")?,
+            header_override:      opt_string_col_mysql(&row, "header_override")?,
+            remark:               opt_string_col_mysql(&row, "remark")?,
+            proxy_id:             opt_u64_col_mysql(&row, "proxy_id")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
 
     let model_mappings = sqlx::query(
-        "SELECT requested_model, channel_id, upstream_model FROM model_mappings ORDER BY requested_model",
+        "SELECT requested_model, channel_id, upstream_model FROM model_mappings ORDER BY \
+         requested_model",
     )
     .fetch_all(pool)
     .await
@@ -858,8 +858,8 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
     .map(|row| {
         Ok(ModelMapping {
             requested_model: string_col_mysql(&row, "requested_model")?,
-            channel_id: string_col_mysql(&row, "channel_id")?,
-            upstream_model: string_col_mysql(&row, "upstream_model")?,
+            channel_id:      string_col_mysql(&row, "channel_id")?,
+            upstream_model:  string_col_mysql(&row, "upstream_model")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1097,7 +1097,10 @@ async fn delete_orphans_sqlite(
             .map_err(storage_err)?;
         return Ok(());
     }
-    let placeholders = (0..keep_ids.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders = (0..keep_ids.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!("DELETE FROM {table} WHERE {column} NOT IN ({placeholders})");
     let mut q = sqlx::query(&sql);
     for id in keep_ids {
@@ -1245,7 +1248,8 @@ async fn save_data_tx_mysql(
         channel_ids.push(channel.id as i64);
         sqlx::query(
             "INSERT INTO channels (
-                id, snapshot_id, channel_type, `key`, status, name, weight, created_time, test_time,
+                id, snapshot_id, channel_type, `key`, status, name, weight, created_time, \
+             test_time,
                 response_time, base_url, balance, balance_updated_time, models, channel_group,
                 used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
                 header_override, remark, proxy_id
@@ -1342,7 +1346,10 @@ async fn delete_orphans_mysql(
             .map_err(storage_err)?;
         return Ok(());
     }
-    let placeholders = (0..keep_ids.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders = (0..keep_ids.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!("DELETE FROM {table} WHERE {column} NOT IN ({placeholders})");
     let mut q = sqlx::query(&sql);
     for id in keep_ids {
@@ -1409,7 +1416,10 @@ fn opt_i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option<i64>,
     row.try_get::<Option<i64>, _>(name).map_err(storage_err)
 }
 
-fn opt_i64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<i64>, ManagementError> {
+fn opt_i64_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<i64>, ManagementError> {
     row.try_get::<Option<i64>, _>(name).map_err(storage_err)
 }
 
@@ -1433,7 +1443,10 @@ fn opt_i32_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option<i32>,
     opt_i64_col(row, name).map(|value| value.map(|value| value as i32))
 }
 
-fn opt_i32_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<i32>, ManagementError> {
+fn opt_i32_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<i32>, ManagementError> {
     opt_i64_col_mysql(row, name).map(|value| value.map(|value| value as i32))
 }
 
@@ -1445,11 +1458,17 @@ fn opt_u64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option<u64>,
     opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u64))
 }
 
-fn opt_u32_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<u32>, ManagementError> {
+fn opt_u32_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<u32>, ManagementError> {
     opt_i64_col_mysql(row, name).map(|value| value.map(|value| value.max(0) as u32))
 }
 
-fn opt_u64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<u64>, ManagementError> {
+fn opt_u64_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<u64>, ManagementError> {
     opt_i64_col_mysql(row, name).map(|value| value.map(|value| value.max(0) as u64))
 }
 
@@ -1476,7 +1495,6 @@ fn bool_to_i64(value: bool) -> i64 {
 fn storage_err(err: impl std::fmt::Display) -> ManagementError {
     ManagementError::Storage(err.to_string())
 }
-
 
 async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
     for stmt in [
@@ -1554,7 +1572,9 @@ async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
     }
     // Best-effort migration for existing DBs.
-    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id BIGINT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE channels ADD COLUMN proxy_id BIGINT")
+        .execute(pool)
+        .await;
     Ok(())
 }
 
@@ -1586,20 +1606,20 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(UserRecord {
-            id: pg_u64_col(&row, "id")?,
-            username: pg_string_col(&row, "username")?,
-            password: pg_string_col(&row, "password")?,
-            access_token: pg_opt_string_col(&row, "access_token")?,
-            display_name: pg_string_col(&row, "display_name")?,
-            role: pg_i32_col(&row, "role")?,
-            status: pg_i32_col(&row, "status")?,
-            email: pg_string_col(&row, "email")?,
-            quota: pg_i64_col(&row, "quota")?,
-            used_quota: pg_i64_col(&row, "used_quota")?,
-            group: pg_string_col(&row, "user_group")?,
-            setting: pg_string_col(&row, "setting")?,
-            remark: pg_string_col(&row, "remark")?,
-            created_at: pg_i64_col(&row, "created_at")?,
+            id:            pg_u64_col(&row, "id")?,
+            username:      pg_string_col(&row, "username")?,
+            password:      pg_string_col(&row, "password")?,
+            access_token:  pg_opt_string_col(&row, "access_token")?,
+            display_name:  pg_string_col(&row, "display_name")?,
+            role:          pg_i32_col(&row, "role")?,
+            status:        pg_i32_col(&row, "status")?,
+            email:         pg_string_col(&row, "email")?,
+            quota:         pg_i64_col(&row, "quota")?,
+            used_quota:    pg_i64_col(&row, "used_quota")?,
+            group:         pg_string_col(&row, "user_group")?,
+            setting:       pg_string_col(&row, "setting")?,
+            remark:        pg_string_col(&row, "remark")?,
+            created_at:    pg_i64_col(&row, "created_at")?,
             last_login_at: pg_i64_col(&row, "last_login_at")?,
         })
     })
@@ -1617,24 +1637,24 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(TokenRecord {
-            id: pg_u64_col(&row, "id")?,
-            snapshot_id: pg_opt_string_col(&row, "snapshot_id")?,
-            user_id: pg_u64_col(&row, "user_id")?,
-            snapshot_user_id: pg_opt_string_col(&row, "snapshot_user_id")?,
-            key: pg_string_col(&row, "key")?,
-            status: pg_i32_col(&row, "status")?,
-            name: pg_string_col(&row, "name")?,
-            created_time: pg_i64_col(&row, "created_time")?,
-            accessed_time: pg_i64_col(&row, "accessed_time")?,
-            expired_time: pg_i64_col(&row, "expired_time")?,
-            remain_quota: pg_i64_col(&row, "remain_quota")?,
-            unlimited_quota: pg_bool_col(&row, "unlimited_quota")?,
+            id:                   pg_u64_col(&row, "id")?,
+            snapshot_id:          pg_opt_string_col(&row, "snapshot_id")?,
+            user_id:              pg_u64_col(&row, "user_id")?,
+            snapshot_user_id:     pg_opt_string_col(&row, "snapshot_user_id")?,
+            key:                  pg_string_col(&row, "key")?,
+            status:               pg_i32_col(&row, "status")?,
+            name:                 pg_string_col(&row, "name")?,
+            created_time:         pg_i64_col(&row, "created_time")?,
+            accessed_time:        pg_i64_col(&row, "accessed_time")?,
+            expired_time:         pg_i64_col(&row, "expired_time")?,
+            remain_quota:         pg_i64_col(&row, "remain_quota")?,
+            unlimited_quota:      pg_bool_col(&row, "unlimited_quota")?,
             model_limits_enabled: pg_bool_col(&row, "model_limits_enabled")?,
-            model_limits: pg_string_col(&row, "model_limits")?,
-            allow_ips: pg_opt_string_col(&row, "allow_ips")?,
-            used_quota: pg_i64_col(&row, "used_quota")?,
-            group: pg_string_col(&row, "token_group")?,
-            cross_group_retry: pg_bool_col(&row, "cross_group_retry")?,
+            model_limits:         pg_string_col(&row, "model_limits")?,
+            allow_ips:            pg_opt_string_col(&row, "allow_ips")?,
+            used_quota:           pg_i64_col(&row, "used_quota")?,
+            group:                pg_string_col(&row, "token_group")?,
+            cross_group_retry:    pg_bool_col(&row, "cross_group_retry")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1652,37 +1672,38 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(ChannelRecord {
-            id: pg_u64_col(&row, "id")?,
-            snapshot_id: pg_opt_string_col(&row, "snapshot_id")?,
-            channel_type: pg_i32_col(&row, "channel_type")?,
-            key: pg_string_col(&row, "key")?,
-            status: pg_i32_col(&row, "status")?,
-            name: pg_string_col(&row, "name")?,
-            weight: pg_opt_u32_col(&row, "weight")?,
-            created_time: pg_i64_col(&row, "created_time")?,
-            test_time: pg_i64_col(&row, "test_time")?,
-            response_time: pg_i32_col(&row, "response_time")?,
-            base_url: pg_opt_string_col(&row, "base_url")?,
-            balance: pg_f64_col(&row, "balance")?,
+            id:                   pg_u64_col(&row, "id")?,
+            snapshot_id:          pg_opt_string_col(&row, "snapshot_id")?,
+            channel_type:         pg_i32_col(&row, "channel_type")?,
+            key:                  pg_string_col(&row, "key")?,
+            status:               pg_i32_col(&row, "status")?,
+            name:                 pg_string_col(&row, "name")?,
+            weight:               pg_opt_u32_col(&row, "weight")?,
+            created_time:         pg_i64_col(&row, "created_time")?,
+            test_time:            pg_i64_col(&row, "test_time")?,
+            response_time:        pg_i32_col(&row, "response_time")?,
+            base_url:             pg_opt_string_col(&row, "base_url")?,
+            balance:              pg_f64_col(&row, "balance")?,
             balance_updated_time: pg_i64_col(&row, "balance_updated_time")?,
-            models: pg_string_col(&row, "models")?,
-            group: pg_string_col(&row, "channel_group")?,
-            used_quota: pg_i64_col(&row, "used_quota")?,
-            model_mapping: pg_opt_string_col(&row, "model_mapping")?,
-            priority: pg_opt_i64_col(&row, "priority")?,
-            auto_ban: pg_opt_i32_col(&row, "auto_ban")?,
-            tag: pg_opt_string_col(&row, "tag")?,
-            setting: pg_opt_string_col(&row, "setting")?,
-            param_override: pg_opt_string_col(&row, "param_override")?,
-            header_override: pg_opt_string_col(&row, "header_override")?,
-            remark: pg_opt_string_col(&row, "remark")?,
-            proxy_id: pg_opt_u64_col(&row, "proxy_id")?,
+            models:               pg_string_col(&row, "models")?,
+            group:                pg_string_col(&row, "channel_group")?,
+            used_quota:           pg_i64_col(&row, "used_quota")?,
+            model_mapping:        pg_opt_string_col(&row, "model_mapping")?,
+            priority:             pg_opt_i64_col(&row, "priority")?,
+            auto_ban:             pg_opt_i32_col(&row, "auto_ban")?,
+            tag:                  pg_opt_string_col(&row, "tag")?,
+            setting:              pg_opt_string_col(&row, "setting")?,
+            param_override:       pg_opt_string_col(&row, "param_override")?,
+            header_override:      pg_opt_string_col(&row, "header_override")?,
+            remark:               pg_opt_string_col(&row, "remark")?,
+            proxy_id:             pg_opt_u64_col(&row, "proxy_id")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
 
     let model_mappings = sqlx::query(
-        "SELECT requested_model, channel_id, upstream_model FROM model_mappings ORDER BY requested_model",
+        "SELECT requested_model, channel_id, upstream_model FROM model_mappings ORDER BY \
+         requested_model",
     )
     .fetch_all(pool)
     .await
@@ -1691,8 +1712,8 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
     .map(|row| {
         Ok(ModelMapping {
             requested_model: pg_string_col(&row, "requested_model")?,
-            channel_id: pg_string_col(&row, "channel_id")?,
-            upstream_model: pg_string_col(&row, "upstream_model")?,
+            channel_id:      pg_string_col(&row, "channel_id")?,
+            upstream_model:  pg_string_col(&row, "upstream_model")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1824,7 +1845,9 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
                 response_time, base_url, balance, balance_updated_time, models, channel_group,
                 used_quota, model_mapping, priority, auto_ban, tag, setting, param_override,
                 header_override, remark, proxy_id
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+             ) VALUES \
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,\
+             $24,$25)
              ON CONFLICT (id) DO UPDATE SET
                 snapshot_id = EXCLUDED.snapshot_id,
                 channel_type = EXCLUDED.channel_type,
@@ -2015,7 +2038,7 @@ fn pg_bool_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<bool, Manageme
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct OptionRecord {
-    pub(crate) key: String,
+    pub(crate) key:   String,
     pub(crate) value: String,
 }
 
@@ -2024,7 +2047,7 @@ pub(crate) struct ListOptionsRequest;
 
 #[derive(Debug, Clone)]
 pub(crate) struct UpdateOptionRequest {
-    pub(crate) key: String,
+    pub(crate) key:   String,
     pub(crate) value: String,
 }
 
@@ -2054,9 +2077,7 @@ impl OptionStore {
         url: &str,
         defaults: BTreeMap<String, String>,
     ) -> Result<Self, ManagementError> {
-        Ok(Self::MySql(
-            MySqlOptionStore::connect(url, defaults).await?,
-        ))
+        Ok(Self::MySql(MySqlOptionStore::connect(url, defaults).await?))
     }
 
     pub(crate) async fn postgres(
@@ -2139,7 +2160,7 @@ impl Service<UpdateOptionRequest> for MemoryOptionStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteOptionStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryOptionStore,
 }
 
@@ -2201,17 +2222,16 @@ impl Service<UpdateOptionRequest> for SqliteOptionStore {
         .map_err(storage_err)?;
         self.memory
             .call(UpdateOptionRequest {
-                key: key.to_string(),
+                key:   key.to_string(),
                 value: req.value,
             })
             .await
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlOptionStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryOptionStore,
 }
 
@@ -2270,18 +2290,16 @@ impl Service<UpdateOptionRequest> for MySqlOptionStore {
         .map_err(storage_err)?;
         self.memory
             .call(UpdateOptionRequest {
-                key: key.to_string(),
+                key:   key.to_string(),
                 value: req.value,
             })
             .await
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresOptionStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryOptionStore,
 }
 
@@ -2340,7 +2358,7 @@ impl Service<UpdateOptionRequest> for PostgresOptionStore {
         .map_err(storage_err)?;
         self.memory
             .call(UpdateOptionRequest {
-                key: key.to_string(),
+                key:   key.to_string(),
                 value: req.value,
             })
             .await
@@ -2499,7 +2517,7 @@ pub(crate) struct DeleteUsageAck {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RecordedUsageBatch {
-    pub(crate) ack: UsageAck,
+    pub(crate) ack:             UsageAck,
     pub(crate) accepted_events: Vec<UsageEvent>,
 }
 
@@ -2614,7 +2632,7 @@ impl Service<UsageEventBatch> for UsageStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteUsageStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryUsageEventSink,
 }
 
@@ -2788,7 +2806,8 @@ async fn migrate_usage(pool: &SqlitePool) -> Result<(), UsageError> {
     )
     .await?;
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON usage_events(created_at_unix_ms)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON \
+         usage_events(created_at_unix_ms)",
     )
     .execute(pool)
     .await
@@ -2830,7 +2849,8 @@ async fn migrate_usage_mysql(pool: &MySqlPool) -> Result<(), UsageError> {
     .await
     .map_err(usage_storage_err)?;
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON usage_events(created_at_unix_ms)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON \
+         usage_events(created_at_unix_ms)",
     )
     .execute(pool)
     .await
@@ -2860,7 +2880,8 @@ async fn ensure_usage_column(pool: &SqlitePool, column: &str, ddl: &str) -> Resu
 
 async fn load_usage_events(pool: &SqlitePool) -> Result<Vec<UsageEvent>, UsageError> {
     sqlx::query(
-        "SELECT request_id, user_id, token_id, channel_id, event_group, model, upstream_model, prompt_tokens,
+        "SELECT request_id, user_id, token_id, channel_id, event_group, model, upstream_model, \
+         prompt_tokens,
             completion_tokens, total_tokens, cache_read_tokens, cache_creation_tokens,
             image_tokens, audio_tokens, quota, status, latency_ms, is_stream, ip,
             upstream_request_id, created_at_unix_ms
@@ -2872,27 +2893,29 @@ async fn load_usage_events(pool: &SqlitePool) -> Result<Vec<UsageEvent>, UsageEr
     .into_iter()
     .map(|row| {
         Ok(UsageEvent {
-            request_id: usage_string_col(&row, "request_id")?,
-            user_id: usage_string_col(&row, "user_id")?,
-            token_id: usage_string_col(&row, "token_id")?,
-            channel_id: usage_string_col(&row, "channel_id")?,
-            group: usage_string_col(&row, "event_group")?,
-            model: usage_string_col(&row, "model")?,
-            upstream_model: usage_string_col(&row, "upstream_model")?,
-            prompt_tokens: usage_opt_u64_col(&row, "prompt_tokens")?,
-            completion_tokens: usage_opt_u64_col(&row, "completion_tokens")?,
-            total_tokens: usage_opt_u64_col(&row, "total_tokens")?,
-            cache_read_tokens: usage_opt_u64_col(&row, "cache_read_tokens")?,
+            request_id:            usage_string_col(&row, "request_id")?,
+            user_id:               usage_string_col(&row, "user_id")?,
+            token_id:              usage_string_col(&row, "token_id")?,
+            channel_id:            usage_string_col(&row, "channel_id")?,
+            group:                 usage_string_col(&row, "event_group")?,
+            model:                 usage_string_col(&row, "model")?,
+            upstream_model:        usage_string_col(&row, "upstream_model")?,
+            prompt_tokens:         usage_opt_u64_col(&row, "prompt_tokens")?,
+            completion_tokens:     usage_opt_u64_col(&row, "completion_tokens")?,
+            total_tokens:          usage_opt_u64_col(&row, "total_tokens")?,
+            cache_read_tokens:     usage_opt_u64_col(&row, "cache_read_tokens")?,
             cache_creation_tokens: usage_opt_u64_col(&row, "cache_creation_tokens")?,
-            image_tokens: usage_opt_u64_col(&row, "image_tokens")?,
-            audio_tokens: usage_opt_u64_col(&row, "audio_tokens")?,
-            quota: usage_opt_i64_col(&row, "quota")?,
-            status: usage_status_from_str(&usage_string_col(&row, "status")?),
-            latency_ms: usage_u64_col(&row, "latency_ms")?,
-            is_stream: usage_bool_col(&row, "is_stream")?,
-            ip: usage_string_col(&row, "ip")?,
-            upstream_request_id: usage_string_col(&row, "upstream_request_id")?,
-            created_at_unix_ms: usage_i64_col(&row, "created_at_unix_ms")?,
+            image_tokens:          usage_opt_u64_col(&row, "image_tokens")?,
+            audio_tokens:          usage_opt_u64_col(&row, "audio_tokens")?,
+            quota:                 usage_opt_i64_col(&row, "quota")?,
+            status:                usage_status_from_str(&usage_string_col(&row, "status")?),
+            latency_ms:            usage_u64_col(&row, "latency_ms")?,
+            // Live gateway events carry FRT in memory; not yet a DB column.
+            first_response_ms:     None,
+            is_stream:             usage_bool_col(&row, "is_stream")?,
+            ip:                    usage_string_col(&row, "ip")?,
+            upstream_request_id:   usage_string_col(&row, "upstream_request_id")?,
+            created_at_unix_ms:    usage_i64_col(&row, "created_at_unix_ms")?,
         })
     })
     .collect()
@@ -2900,7 +2923,8 @@ async fn load_usage_events(pool: &SqlitePool) -> Result<Vec<UsageEvent>, UsageEr
 
 async fn load_usage_events_mysql(pool: &MySqlPool) -> Result<Vec<UsageEvent>, UsageError> {
     sqlx::query(
-        "SELECT request_id, user_id, token_id, channel_id, event_group, model, upstream_model, prompt_tokens,
+        "SELECT request_id, user_id, token_id, channel_id, event_group, model, upstream_model, \
+         prompt_tokens,
             completion_tokens, total_tokens, cache_read_tokens, cache_creation_tokens,
             image_tokens, audio_tokens, quota, status, latency_ms, is_stream, ip,
             upstream_request_id, created_at_unix_ms
@@ -2912,36 +2936,36 @@ async fn load_usage_events_mysql(pool: &MySqlPool) -> Result<Vec<UsageEvent>, Us
     .into_iter()
     .map(|row| {
         Ok(UsageEvent {
-            request_id: usage_string_col_mysql(&row, "request_id")?,
-            user_id: usage_string_col_mysql(&row, "user_id")?,
-            token_id: usage_string_col_mysql(&row, "token_id")?,
-            channel_id: usage_string_col_mysql(&row, "channel_id")?,
-            group: usage_string_col_mysql(&row, "event_group")?,
-            model: usage_string_col_mysql(&row, "model")?,
-            upstream_model: usage_string_col_mysql(&row, "upstream_model")?,
-            prompt_tokens: usage_opt_u64_col_mysql(&row, "prompt_tokens")?,
-            completion_tokens: usage_opt_u64_col_mysql(&row, "completion_tokens")?,
-            total_tokens: usage_opt_u64_col_mysql(&row, "total_tokens")?,
-            cache_read_tokens: usage_opt_u64_col_mysql(&row, "cache_read_tokens")?,
+            request_id:            usage_string_col_mysql(&row, "request_id")?,
+            user_id:               usage_string_col_mysql(&row, "user_id")?,
+            token_id:              usage_string_col_mysql(&row, "token_id")?,
+            channel_id:            usage_string_col_mysql(&row, "channel_id")?,
+            group:                 usage_string_col_mysql(&row, "event_group")?,
+            model:                 usage_string_col_mysql(&row, "model")?,
+            upstream_model:        usage_string_col_mysql(&row, "upstream_model")?,
+            prompt_tokens:         usage_opt_u64_col_mysql(&row, "prompt_tokens")?,
+            completion_tokens:     usage_opt_u64_col_mysql(&row, "completion_tokens")?,
+            total_tokens:          usage_opt_u64_col_mysql(&row, "total_tokens")?,
+            cache_read_tokens:     usage_opt_u64_col_mysql(&row, "cache_read_tokens")?,
             cache_creation_tokens: usage_opt_u64_col_mysql(&row, "cache_creation_tokens")?,
-            image_tokens: usage_opt_u64_col_mysql(&row, "image_tokens")?,
-            audio_tokens: usage_opt_u64_col_mysql(&row, "audio_tokens")?,
-            quota: usage_opt_i64_col_mysql(&row, "quota")?,
-            status: usage_status_from_str(&usage_string_col_mysql(&row, "status")?),
-            latency_ms: usage_u64_col_mysql(&row, "latency_ms")?,
-            is_stream: usage_bool_col_mysql(&row, "is_stream")?,
-            ip: usage_string_col_mysql(&row, "ip")?,
-            upstream_request_id: usage_string_col_mysql(&row, "upstream_request_id")?,
-            created_at_unix_ms: usage_i64_col_mysql(&row, "created_at_unix_ms")?,
+            image_tokens:          usage_opt_u64_col_mysql(&row, "image_tokens")?,
+            audio_tokens:          usage_opt_u64_col_mysql(&row, "audio_tokens")?,
+            quota:                 usage_opt_i64_col_mysql(&row, "quota")?,
+            status:                usage_status_from_str(&usage_string_col_mysql(&row, "status")?),
+            latency_ms:            usage_u64_col_mysql(&row, "latency_ms")?,
+            first_response_ms:     None,
+            is_stream:             usage_bool_col_mysql(&row, "is_stream")?,
+            ip:                    usage_string_col_mysql(&row, "ip")?,
+            upstream_request_id:   usage_string_col_mysql(&row, "upstream_request_id")?,
+            created_at_unix_ms:    usage_i64_col_mysql(&row, "created_at_unix_ms")?,
         })
     })
     .collect()
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlUsageStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryUsageEventSink,
 }
 
@@ -3063,16 +3087,9 @@ impl Service<DeleteUsageBeforeRequest> for MySqlUsageStore {
     }
 }
 
-
-
-
-
-
-
-
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresUsageStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryUsageEventSink,
 }
 
@@ -3104,7 +3121,8 @@ impl PostgresUsageStore {
                     prompt_tokens, completion_tokens, total_tokens, cache_read_tokens,
                     cache_creation_tokens, image_tokens, audio_tokens, quota, status, latency_ms,
                     is_stream, ip, upstream_request_id, created_at_unix_ms
-                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                 ) VALUES \
+                 ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
                  ON CONFLICT (request_id) DO NOTHING",
             )
             .bind(&event.request_id)
@@ -3225,7 +3243,8 @@ async fn migrate_usage_pg(pool: &PgPool) -> Result<(), UsageError> {
     .await
     .map_err(usage_storage_err)?;
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON usage_events(created_at_unix_ms)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON \
+         usage_events(created_at_unix_ms)",
     )
     .execute(pool)
     .await
@@ -3239,7 +3258,8 @@ async fn migrate_usage_pg(pool: &PgPool) -> Result<(), UsageError> {
 
 async fn load_usage_events_pg(pool: &PgPool) -> Result<Vec<UsageEvent>, UsageError> {
     sqlx::query(
-        "SELECT request_id, user_id, token_id, channel_id, event_group, model, upstream_model, prompt_tokens,
+        "SELECT request_id, user_id, token_id, channel_id, event_group, model, upstream_model, \
+         prompt_tokens,
             completion_tokens, total_tokens, cache_read_tokens, cache_creation_tokens,
             image_tokens, audio_tokens, quota, status, latency_ms, is_stream, ip,
             upstream_request_id, created_at_unix_ms
@@ -3251,26 +3271,26 @@ async fn load_usage_events_pg(pool: &PgPool) -> Result<Vec<UsageEvent>, UsageErr
     .into_iter()
     .map(|row| {
         Ok(UsageEvent {
-            request_id: row.try_get("request_id").map_err(usage_storage_err)?,
-            user_id: row.try_get("user_id").map_err(usage_storage_err)?,
-            token_id: row.try_get("token_id").map_err(usage_storage_err)?,
-            channel_id: row.try_get("channel_id").map_err(usage_storage_err)?,
-            group: row.try_get("event_group").map_err(usage_storage_err)?,
-            model: row.try_get("model").map_err(usage_storage_err)?,
-            upstream_model: row.try_get("upstream_model").map_err(usage_storage_err)?,
-            prompt_tokens: row
+            request_id:            row.try_get("request_id").map_err(usage_storage_err)?,
+            user_id:               row.try_get("user_id").map_err(usage_storage_err)?,
+            token_id:              row.try_get("token_id").map_err(usage_storage_err)?,
+            channel_id:            row.try_get("channel_id").map_err(usage_storage_err)?,
+            group:                 row.try_get("event_group").map_err(usage_storage_err)?,
+            model:                 row.try_get("model").map_err(usage_storage_err)?,
+            upstream_model:        row.try_get("upstream_model").map_err(usage_storage_err)?,
+            prompt_tokens:         row
                 .try_get::<Option<i64>, _>("prompt_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
-            completion_tokens: row
+            completion_tokens:     row
                 .try_get::<Option<i64>, _>("completion_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
-            total_tokens: row
+            total_tokens:          row
                 .try_get::<Option<i64>, _>("total_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
-            cache_read_tokens: row
+            cache_read_tokens:     row
                 .try_get::<Option<i64>, _>("cache_read_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
@@ -3278,26 +3298,30 @@ async fn load_usage_events_pg(pool: &PgPool) -> Result<Vec<UsageEvent>, UsageErr
                 .try_get::<Option<i64>, _>("cache_creation_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
-            image_tokens: row
+            image_tokens:          row
                 .try_get::<Option<i64>, _>("image_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
-            audio_tokens: row
+            audio_tokens:          row
                 .try_get::<Option<i64>, _>("audio_tokens")
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
-            quota: row.try_get("quota").map_err(usage_storage_err)?,
-            status: usage_status_from_str(&row.try_get::<String, _>("status").map_err(usage_storage_err)?),
-            latency_ms: row
+            quota:                 row.try_get("quota").map_err(usage_storage_err)?,
+            status:                usage_status_from_str(
+                &row.try_get::<String, _>("status")
+                    .map_err(usage_storage_err)?,
+            ),
+            latency_ms:            row
                 .try_get::<i64, _>("latency_ms")
                 .map_err(usage_storage_err)?
                 .max(0) as u64,
-            is_stream: row.try_get("is_stream").map_err(usage_storage_err)?,
-            ip: row.try_get("ip").map_err(usage_storage_err)?,
-            upstream_request_id: row
+            first_response_ms:     None,
+            is_stream:             row.try_get("is_stream").map_err(usage_storage_err)?,
+            ip:                    row.try_get("ip").map_err(usage_storage_err)?,
+            upstream_request_id:   row
                 .try_get("upstream_request_id")
                 .map_err(usage_storage_err)?,
-            created_at_unix_ms: row
+            created_at_unix_ms:    row
                 .try_get("created_at_unix_ms")
                 .map_err(usage_storage_err)?,
         })
@@ -3354,7 +3378,10 @@ fn usage_opt_u64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option
         .map_err(usage_storage_err)
 }
 
-fn usage_opt_u64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<u64>, UsageError> {
+fn usage_opt_u64_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<u64>, UsageError> {
     row.try_get::<Option<i64>, _>(name)
         .map(|value| value.map(|value| value.max(0) as u64))
         .map_err(usage_storage_err)
@@ -3365,7 +3392,10 @@ fn usage_opt_i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<Option
         .map_err(usage_storage_err)
 }
 
-fn usage_opt_i64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<Option<i64>, UsageError> {
+fn usage_opt_i64_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<i64>, UsageError> {
     row.try_get::<Option<i64>, _>(name)
         .map_err(usage_storage_err)
 }

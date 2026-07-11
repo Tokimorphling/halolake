@@ -1,10 +1,35 @@
 //! User, auth, checkin, and token HTTP handlers.
 
-
+use crate::{
+    AppState, BatchIds, ModelUpdateQuery, PageQuery,
+    checkin::{CreateCheckinRequest, GetCheckinStatsRequest},
+    checkin_setting, generate_default_token_enabled,
+    http_auth::{
+        clear_session_cookie, current_user, login_payload, require_role,
+        require_secure_verification, self_payload, session_id_from_headers, set_session_cookie,
+        token_from_read_only_auth,
+    },
+    http_response::{
+        api_error_status, api_ok, api_ok_message, api_success, api_success_with_message,
+        management_error, security_error,
+    },
+    model_list_response, now_unix, option_bool, publish_management_snapshot,
+    security::{
+        AdminDisableTwoFaRequest, AdminResetPasskeyRequest, AdminTwoFaStatsRequest,
+        DeletePasskeyRequest, DisableTwoFaRequest, EnableTwoFaRequest, GetPasskeyStatusRequest,
+        GetTwoFaStatusRequest, PasskeyFlow, PasskeyFlowRequest, PasskeyFlowResponse,
+        PasskeyRequestContext, PasskeyUser, RegenerateTwoFaBackupCodesRequest,
+        StartTwoFaSetupRequest, UniversalVerifyRequest, VerificationMethod,
+    },
+    session::SessionSigner,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, Uri, header::{HOST, SET_COOKIE}},
+    http::{
+        HeaderMap, HeaderValue, StatusCode, Uri,
+        header::{HOST, SET_COOKIE},
+    },
     response::Response,
 };
 use halolake_control_plane::{
@@ -23,59 +48,33 @@ use serde_json::{Value as JsonValue, json};
 use service_async::Service;
 use uuid::Uuid;
 
-use crate::checkin::{
-    CreateCheckinRequest, GetCheckinStatsRequest,
-};
-use crate::http_auth::{
-    clear_session_cookie, current_user, login_payload, require_role, require_secure_verification,
-    self_payload, session_id_from_headers, set_session_cookie, token_from_read_only_auth,
-};
-use crate::http_response::{
-    api_error_status, api_ok, api_ok_message, api_success, api_success_with_message,
-    management_error, security_error,
-};
-use crate::security::{
-    AdminDisableTwoFaRequest, AdminResetPasskeyRequest, AdminTwoFaStatsRequest,
-    DeletePasskeyRequest, DisableTwoFaRequest, EnableTwoFaRequest, GetPasskeyStatusRequest,
-    GetTwoFaStatusRequest, PasskeyFlow, PasskeyFlowRequest, PasskeyFlowResponse,
-    PasskeyRequestContext, PasskeyUser, RegenerateTwoFaBackupCodesRequest,
-    StartTwoFaSetupRequest, UniversalVerifyRequest, VerificationMethod,
-};
-
-use crate::session::SessionSigner;
-use crate::{
-    AppState, BatchIds, ModelUpdateQuery, PageQuery, checkin_setting, generate_default_token_enabled, model_list_response, now_unix, option_bool, publish_management_snapshot,
-};
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TokenSearchQuery {
     #[serde(default = "crate::default_page")]
-    pub(crate) page: usize,
+    pub(crate) page:      usize,
     #[serde(default = "crate::default_page_size")]
     pub(crate) page_size: usize,
     #[serde(default)]
-    pub(crate) keyword: String,
+    pub(crate) keyword:   String,
     #[serde(default)]
-    pub(crate) token: String,
+    pub(crate) token:     String,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct UserSearchQuery {
     #[serde(default = "crate::default_page")]
-    pub(crate) page: usize,
+    pub(crate) page:      usize,
     #[serde(default = "crate::default_page_size")]
     pub(crate) page_size: usize,
     #[serde(default)]
-    pub(crate) keyword: String,
+    pub(crate) keyword:   String,
     #[serde(default)]
-    pub(crate) group: String,
+    pub(crate) group:     String,
     #[serde(default)]
-    pub(crate) role: Option<i32>,
+    pub(crate) role:      Option<i32>,
     #[serde(default)]
-    pub(crate) status: Option<i32>,
+    pub(crate) status:    Option<i32>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LoginRequest {
@@ -83,64 +82,57 @@ pub(crate) struct LoginRequest {
     pub(crate) password: String,
 }
 
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TwoFaCodePayload {
     #[serde(default)]
     pub(crate) code: String,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct UniversalVerifyPayload {
     pub(crate) method: VerificationMethod,
     #[serde(default)]
-    pub(crate) code: Option<String>,
+    pub(crate) code:   Option<String>,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RegisterPayload {
     #[serde(default)]
-    pub(crate) username: String,
+    pub(crate) username:          String,
     #[serde(default)]
-    pub(crate) password: String,
+    pub(crate) password:          String,
     #[serde(default)]
-    pub(crate) display_name: String,
+    pub(crate) display_name:      String,
     #[serde(default)]
-    pub(crate) email: String,
+    pub(crate) email:             String,
     #[serde(default)]
     pub(crate) verification_code: String,
     #[serde(default)]
-    pub(crate) aff_code: String,
+    pub(crate) aff_code:          String,
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CheckinSetting {
-    pub(crate) enabled: bool,
+    pub(crate) enabled:   bool,
     pub(crate) min_quota: i64,
     pub(crate) max_quota: i64,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct UserManagePayload {
-    pub(crate) id: u64,
+    pub(crate) id:     u64,
     pub(crate) action: String,
     #[serde(default)]
-    pub(crate) value: i64,
+    pub(crate) value:  i64,
     #[serde(default)]
-    pub(crate) mode: String,
+    pub(crate) mode:   String,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct CheckinQuery {
     #[serde(default)]
     pub(crate) month: String,
 }
-
 
 pub(crate) async fn register_user(
     State(state): State<AppState>,
@@ -201,28 +193,28 @@ pub(crate) async fn register_user(
     };
     let now = now_unix();
     let default_token = generate_default_token_enabled(&options).then(|| TokenRecord {
-        id: 0,
-        snapshot_id: None,
-        user_id: 0,
-        snapshot_user_id: None,
-        key: generate_token_key(),
-        status: STATUS_ENABLED,
-        name: format!("{username}的初始令牌"),
-        created_time: now,
-        accessed_time: now,
-        expired_time: -1,
-        remain_quota: 500_000,
-        unlimited_quota: true,
+        id:                   0,
+        snapshot_id:          None,
+        user_id:              0,
+        snapshot_user_id:     None,
+        key:                  generate_token_key(),
+        status:               STATUS_ENABLED,
+        name:                 format!("{username}的初始令牌"),
+        created_time:         now,
+        accessed_time:        now,
+        expired_time:         -1,
+        remain_quota:         500_000,
+        unlimited_quota:      true,
         model_limits_enabled: false,
-        model_limits: String::new(),
-        allow_ips: None,
-        used_quota: 0,
-        group: if option_bool(&options, "DefaultUseAutoGroup", false) {
+        model_limits:         String::new(),
+        allow_ips:            None,
+        used_quota:           0,
+        group:                if option_bool(&options, "DefaultUseAutoGroup", false) {
             "auto".to_string()
         } else {
             String::new()
         },
-        cross_group_retry: false,
+        cross_group_retry:    false,
     });
     let user = UserRecord {
         id: 0,
@@ -262,8 +254,10 @@ pub(crate) async fn register_user(
     }
 }
 
-
-pub(crate) async fn login_user(State(state): State<AppState>, Json(req): Json<LoginRequest>) -> Response {
+pub(crate) async fn login_user(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> Response {
     let user = match state
         .management
         .call(LoginUserRequest {
@@ -294,7 +288,9 @@ pub(crate) async fn login_user(State(state): State<AppState>, Json(req): Json<Lo
                 "require_2fa": true,
             }),
         );
-        if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer)) {
+        if let Ok(value) =
+            HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer))
+        {
             resp.headers_mut().insert(SET_COOKIE, value);
         }
         return resp;
@@ -304,15 +300,18 @@ pub(crate) async fn login_user(State(state): State<AppState>, Json(req): Json<Lo
         Err(err) => return management_error(err),
     };
     let mut resp = api_success(login_payload(&user));
-    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer)) {
+    if let Ok(value) =
+        HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer))
+    {
         resp.headers_mut().insert(SET_COOKIE, value);
     }
     resp
 }
 
-
 pub(crate) async fn logout_user(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    state.sessions.remove_from_headers(&headers, &state.session_signer);
+    state
+        .sessions
+        .remove_from_headers(&headers, &state.session_signer);
     let mut resp = api_ok();
     if let Ok(value) = HeaderValue::from_str(&clear_session_cookie()) {
         resp.headers_mut().insert(SET_COOKIE, value);
@@ -320,13 +319,15 @@ pub(crate) async fn logout_user(State(state): State<AppState>, headers: HeaderMa
     resp
 }
 
-
 pub(crate) async fn login_2fa(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<TwoFaCodePayload>,
 ) -> Response {
-    let user_id = match state.sessions.pending_user_id_from_headers(&headers, &state.session_signer) {
+    let user_id = match state
+        .sessions
+        .pending_user_id_from_headers(&headers, &state.session_signer)
+    {
         Ok(Some(user_id)) => user_id,
         Ok(None) => return api_error_status(StatusCode::OK, "会话已过期，请重新登录"),
         Err(err) => return management_error(err),
@@ -337,7 +338,8 @@ pub(crate) async fn login_2fa(
             user_id,
             method: VerificationMethod::TwoFa,
             code: Some(payload.code),
-            session_id: session_id_from_headers(&headers, &state.session_signer).map(str::to_string),
+            session_id: session_id_from_headers(&headers, &state.session_signer)
+                .map(str::to_string),
         })
         .await
     {
@@ -348,18 +350,22 @@ pub(crate) async fn login_2fa(
         Ok(user) => user,
         Err(err) => return management_error(err),
     };
-    let session_id = match state.sessions.promote_pending_from_headers(&headers, &state.session_signer) {
+    let session_id = match state
+        .sessions
+        .promote_pending_from_headers(&headers, &state.session_signer)
+    {
         Ok(Some(session_id)) => session_id,
         Ok(None) => return api_error_status(StatusCode::OK, "会话已过期，请重新登录"),
         Err(err) => return management_error(err),
     };
     let mut resp = api_success(login_payload(&user));
-    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer)) {
+    if let Ok(value) =
+        HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer))
+    {
         resp.headers_mut().insert(SET_COOKIE, value);
     }
     resp
 }
-
 
 pub(crate) async fn universal_verify(
     State(state): State<AppState>,
@@ -373,10 +379,11 @@ pub(crate) async fn universal_verify(
     match state
         .security
         .call(UniversalVerifyRequest {
-            user_id: user.id,
-            method: payload.method,
-            code: payload.code,
-            session_id: session_id_from_headers(&headers, &state.session_signer).map(str::to_string),
+            user_id:    user.id,
+            method:     payload.method,
+            code:       payload.code,
+            session_id: session_id_from_headers(&headers, &state.session_signer)
+                .map(str::to_string),
         })
         .await
     {
@@ -391,7 +398,6 @@ pub(crate) async fn universal_verify(
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn two_fa_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
@@ -408,7 +414,6 @@ pub(crate) async fn two_fa_status(State(state): State<AppState>, headers: Header
     }
 }
 
-
 pub(crate) async fn setup_two_fa(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,
@@ -417,9 +422,9 @@ pub(crate) async fn setup_two_fa(State(state): State<AppState>, headers: HeaderM
     match state
         .security
         .call(StartTwoFaSetupRequest {
-            user_id: user.id,
+            user_id:  user.id,
             username: user.username,
-            issuer: state.system_name.to_string(),
+            issuer:   state.system_name.to_string(),
         })
         .await
     {
@@ -430,7 +435,6 @@ pub(crate) async fn setup_two_fa(State(state): State<AppState>, headers: HeaderM
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn enable_two_fa(
     State(state): State<AppState>,
@@ -445,7 +449,7 @@ pub(crate) async fn enable_two_fa(
         .security
         .call(EnableTwoFaRequest {
             user_id: user.id,
-            code: payload.code,
+            code:    payload.code,
         })
         .await
     {
@@ -453,7 +457,6 @@ pub(crate) async fn enable_two_fa(
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn disable_two_fa(
     State(state): State<AppState>,
@@ -468,7 +471,7 @@ pub(crate) async fn disable_two_fa(
         .security
         .call(DisableTwoFaRequest {
             user_id: user.id,
-            code: payload.code,
+            code:    payload.code,
         })
         .await
     {
@@ -476,7 +479,6 @@ pub(crate) async fn disable_two_fa(
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn regenerate_two_fa_backup_codes(
     State(state): State<AppState>,
@@ -491,7 +493,7 @@ pub(crate) async fn regenerate_two_fa_backup_codes(
         .security
         .call(RegenerateTwoFaBackupCodesRequest {
             user_id: user.id,
-            code: payload.code,
+            code:    payload.code,
         })
         .await
     {
@@ -502,7 +504,6 @@ pub(crate) async fn regenerate_two_fa_backup_codes(
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn passkey_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
@@ -519,7 +520,6 @@ pub(crate) async fn passkey_status(State(state): State<AppState>, headers: Heade
     }
 }
 
-
 pub(crate) async fn passkey_register_begin(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -527,7 +527,6 @@ pub(crate) async fn passkey_register_begin(
 ) -> Response {
     passkey_user_flow(&state, &headers, &uri, PasskeyFlow::RegisterBegin, None).await
 }
-
 
 pub(crate) async fn passkey_register_finish(
     State(state): State<AppState>,
@@ -545,7 +544,6 @@ pub(crate) async fn passkey_register_finish(
     .await
 }
 
-
 pub(crate) async fn passkey_verify_begin(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -553,7 +551,6 @@ pub(crate) async fn passkey_verify_begin(
 ) -> Response {
     passkey_user_flow(&state, &headers, &uri, PasskeyFlow::VerifyBegin, None).await
 }
-
 
 pub(crate) async fn passkey_verify_finish(
     State(state): State<AppState>,
@@ -571,28 +568,28 @@ pub(crate) async fn passkey_verify_finish(
     .await
 }
 
-
 pub(crate) async fn passkey_login_begin(
     State(state): State<AppState>,
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let (session_id, set_cookie) = match state
-        .sessions
-        .passkey_session_id_from_headers(&headers, true, &state.session_signer)
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
-        Err(err) => return management_error(err),
-    };
+    let (session_id, set_cookie) =
+        match state
+            .sessions
+            .passkey_session_id_from_headers(&headers, true, &state.session_signer)
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
+            Err(err) => return management_error(err),
+        };
     match state
         .security
         .call(PasskeyFlowRequest {
-            user: None,
-            flow: PasskeyFlow::LoginBegin,
+            user:       None,
+            flow:       PasskeyFlow::LoginBegin,
             session_id: session_id.clone(),
-            request: passkey_request_context(&headers, &uri),
-            payload: None,
+            request:    passkey_request_context(&headers, &uri),
+            payload:    None,
         })
         .await
     {
@@ -610,21 +607,21 @@ pub(crate) async fn passkey_login_begin(
     }
 }
 
-
 pub(crate) async fn passkey_login_finish(
     State(state): State<AppState>,
     headers: HeaderMap,
     uri: Uri,
     Json(payload): Json<JsonValue>,
 ) -> Response {
-    let (session_id, _) = match state
-        .sessions
-        .passkey_session_id_from_headers(&headers, false, &state.session_signer)
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
-        Err(err) => return management_error(err),
-    };
+    let (session_id, _) =
+        match state
+            .sessions
+            .passkey_session_id_from_headers(&headers, false, &state.session_signer)
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
+            Err(err) => return management_error(err),
+        };
     match state
         .security
         .call(PasskeyFlowRequest {
@@ -659,7 +656,6 @@ pub(crate) async fn passkey_login_finish(
     }
 }
 
-
 pub(crate) async fn delete_passkey(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,
@@ -675,8 +671,10 @@ pub(crate) async fn delete_passkey(State(state): State<AppState>, headers: Heade
     }
 }
 
-
-pub(crate) async fn admin_two_fa_stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn admin_two_fa_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -695,7 +693,6 @@ pub(crate) async fn admin_two_fa_stats(State(state): State<AppState>, headers: H
     }
 }
 
-
 pub(crate) async fn admin_reset_passkey(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -712,8 +709,8 @@ pub(crate) async fn admin_reset_passkey(
     match state
         .security
         .call(AdminResetPasskeyRequest {
-            actor_role: actor.role,
-            target_role: target.role,
+            actor_role:     actor.role,
+            target_role:    target.role,
             target_user_id: target.id,
         })
         .await
@@ -722,7 +719,6 @@ pub(crate) async fn admin_reset_passkey(
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn admin_disable_two_fa(
     State(state): State<AppState>,
@@ -740,8 +736,8 @@ pub(crate) async fn admin_disable_two_fa(
     match state
         .security
         .call(AdminDisableTwoFaRequest {
-            actor_role: actor.role,
-            target_role: target.role,
+            actor_role:     actor.role,
+            target_role:    target.role,
             target_user_id: target.id,
         })
         .await
@@ -750,7 +746,6 @@ pub(crate) async fn admin_disable_two_fa(
         Err(err) => security_error(err),
     }
 }
-
 
 pub(crate) async fn passkey_user_flow(
     state: &AppState,
@@ -776,8 +771,8 @@ pub(crate) async fn passkey_user_flow(
         .security
         .call(PasskeyFlowRequest {
             user: Some(PasskeyUser {
-                id: user.id,
-                username: user.username,
+                id:           user.id,
+                username:     user.username,
                 display_name: user.display_name,
             }),
             flow,
@@ -803,7 +798,6 @@ pub(crate) async fn passkey_user_flow(
     }
 }
 
-
 pub(crate) async fn get_self(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,
@@ -811,7 +805,6 @@ pub(crate) async fn get_self(State(state): State<AppState>, headers: HeaderMap) 
     };
     api_success(self_payload(&user))
 }
-
 
 pub(crate) async fn get_checkin_status(
     State(state): State<AppState>,
@@ -852,7 +845,6 @@ pub(crate) async fn get_checkin_status(
     }
 }
 
-
 pub(crate) async fn do_checkin(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,
@@ -879,7 +871,7 @@ pub(crate) async fn do_checkin(State(state): State<AppState>, headers: HeaderMap
         Ok(record) => match state
             .management
             .call(AdjustUserQuotaRequest {
-                id: user.id,
+                id:    user.id,
                 delta: quota_awarded,
             })
             .await
@@ -897,7 +889,6 @@ pub(crate) async fn do_checkin(State(state): State<AppState>, headers: HeaderMap
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn update_self(
     State(state): State<AppState>,
@@ -941,7 +932,6 @@ pub(crate) async fn update_self(
     }
 }
 
-
 pub(crate) async fn delete_self(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let current = match current_user(&state, &headers).await {
         Ok(user) => user,
@@ -950,13 +940,15 @@ pub(crate) async fn delete_self(State(state): State<AppState>, headers: HeaderMa
     match state
         .management
         .call(DeleteUserRequest {
-            id: current.id,
+            id:         current.id,
             actor_role: ROLE_ROOT_USER,
         })
         .await
     {
         Ok(()) => {
-            state.sessions.remove_from_headers(&headers, &state.session_signer);
+            state
+                .sessions
+                .remove_from_headers(&headers, &state.session_signer);
             match publish_management_snapshot(&state).await {
                 Ok(()) => api_ok(),
                 Err(err) => management_error(err),
@@ -965,7 +957,6 @@ pub(crate) async fn delete_self(State(state): State<AppState>, headers: HeaderMa
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn user_groups(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let group = current_user(&state, &headers)
@@ -980,7 +971,6 @@ pub(crate) async fn user_groups(State(state): State<AppState>, headers: HeaderMa
     }))
 }
 
-
 pub(crate) async fn user_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = current_user(&state, &headers).await {
         return resp;
@@ -988,8 +978,10 @@ pub(crate) async fn user_models(State(state): State<AppState>, headers: HeaderMa
     model_list_response(&state).await
 }
 
-
-pub(crate) async fn generate_access_token(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn generate_access_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -1007,7 +999,6 @@ pub(crate) async fn generate_access_token(State(state): State<AppState>, headers
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn list_users(
     State(state): State<AppState>,
@@ -1031,7 +1022,6 @@ pub(crate) async fn list_users(
     }
 }
 
-
 pub(crate) async fn search_users(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1045,14 +1035,14 @@ pub(crate) async fn search_users(
         .management
         .call(SearchUsersRequest {
             search: SearchRequest {
-                page: PageRequest {
-                    page: query.page,
+                page:    PageRequest {
+                    page:      query.page,
                     page_size: query.page_size,
                 },
                 keyword: query.keyword,
             },
-            group: query.group,
-            role: query.role,
+            group:  query.group,
+            role:   query.role,
             status: query.status,
         })
         .await
@@ -1064,7 +1054,6 @@ pub(crate) async fn search_users(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_user(
     State(state): State<AppState>,
@@ -1080,7 +1069,6 @@ pub(crate) async fn get_user(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn create_user(
     State(state): State<AppState>,
@@ -1105,7 +1093,6 @@ pub(crate) async fn create_user(
     }
 }
 
-
 pub(crate) async fn update_user(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1127,7 +1114,6 @@ pub(crate) async fn update_user(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn delete_user(
     State(state): State<AppState>,
@@ -1154,7 +1140,6 @@ pub(crate) async fn delete_user(
     }
 }
 
-
 pub(crate) async fn manage_user(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1167,10 +1152,10 @@ pub(crate) async fn manage_user(
     match state
         .management
         .call(ManageUserRequest {
-            id: req.id,
-            action: req.action,
-            value: req.value,
-            mode: req.mode,
+            id:         req.id,
+            action:     req.action,
+            value:      req.value,
+            mode:       req.mode,
             actor_role: actor.role,
         })
         .await
@@ -1186,7 +1171,6 @@ pub(crate) async fn manage_user(
     }
 }
 
-
 pub(crate) async fn list_tokens(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1200,7 +1184,7 @@ pub(crate) async fn list_tokens(
         .management
         .call(ListTokensRequest {
             user_id: Some(user.id),
-            page: query.into(),
+            page:    query.into(),
         })
         .await
     {
@@ -1208,7 +1192,6 @@ pub(crate) async fn list_tokens(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn search_tokens(
     State(state): State<AppState>,
@@ -1223,14 +1206,14 @@ pub(crate) async fn search_tokens(
         .management
         .call(SearchTokensRequest {
             user_id: Some(user.id),
-            search: SearchRequest {
-                page: PageRequest {
-                    page: query.page,
+            search:  SearchRequest {
+                page:    PageRequest {
+                    page:      query.page,
                     page_size: query.page_size,
                 },
                 keyword: query.keyword,
             },
-            token: query.token,
+            token:   query.token,
         })
         .await
     {
@@ -1238,7 +1221,6 @@ pub(crate) async fn search_tokens(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_token(
     State(state): State<AppState>,
@@ -1261,7 +1243,6 @@ pub(crate) async fn get_token(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn reveal_token_key(
     State(state): State<AppState>,
@@ -1288,7 +1269,6 @@ pub(crate) async fn reveal_token_key(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn reveal_token_keys_batch(
     State(state): State<AppState>,
@@ -1325,7 +1305,6 @@ pub(crate) async fn reveal_token_keys_batch(
     api_success(json!({ "keys": keys }))
 }
 
-
 pub(crate) async fn create_token(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1348,7 +1327,6 @@ pub(crate) async fn create_token(
     }
 }
 
-
 pub(crate) async fn update_token(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1364,7 +1342,7 @@ pub(crate) async fn update_token(
     let current = match state
         .management
         .call(GetTokenRequest {
-            id: patch.id,
+            id:      patch.id,
             user_id: Some(user.id),
         })
         .await
@@ -1414,7 +1392,6 @@ pub(crate) async fn update_token(
     }
 }
 
-
 pub(crate) async fn delete_token(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1439,7 +1416,6 @@ pub(crate) async fn delete_token(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn delete_token_batch(
     State(state): State<AppState>,
@@ -1467,7 +1443,6 @@ pub(crate) async fn delete_token_batch(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_token_usage(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let token = match token_from_read_only_auth(&state, &headers) {
@@ -1497,7 +1472,6 @@ pub(crate) async fn get_token_usage(State(state): State<AppState>, headers: Head
     }))
 }
 
-
 pub(crate) fn checkin_award_quota(min_quota: i64, max_quota: i64) -> i64 {
     let min_quota = min_quota.max(0);
     let max_quota = max_quota.max(min_quota);
@@ -1512,17 +1486,14 @@ pub(crate) fn checkin_award_quota(min_quota: i64, max_quota: i64) -> i64 {
     min_quota.saturating_add((seed % span as u64) as i64)
 }
 
-
 pub(crate) fn current_utc_date() -> String {
     date_from_unix_days(now_unix().div_euclid(86_400))
 }
-
 
 pub(crate) fn date_from_unix_days(days: i64) -> String {
     let (year, month, day) = civil_from_days(days);
     format!("{year:04}-{month:02}-{day:02}")
 }
-
 
 pub(crate) fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let z = days + 719_468;
@@ -1538,16 +1509,14 @@ pub(crate) fn civil_from_days(days: i64) -> (i32, u32, u32) {
     (year as i32, month as u32, day as u32)
 }
 
-
 pub(crate) fn passkey_request_context(headers: &HeaderMap, uri: &Uri) -> PasskeyRequestContext {
     PasskeyRequestContext {
-        host: header_string(headers, HOST.as_str()),
+        host:            header_string(headers, HOST.as_str()),
         forwarded_proto: header_string(headers, "x-forwarded-proto")
             .or_else(|| header_string(headers, "x-forwarded-protocol")),
-        uri_scheme: uri.scheme_str().map(str::to_string),
+        uri_scheme:      uri.scheme_str().map(str::to_string),
     }
 }
-
 
 pub(crate) fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
@@ -1558,13 +1527,11 @@ pub(crate) fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-
 pub(crate) fn insert_session_cookie(resp: &mut Response, session_id: &str, signer: &SessionSigner) {
     if let Ok(value) = HeaderValue::from_str(&set_session_cookie(session_id, signer)) {
         resp.headers_mut().insert(SET_COOKIE, value);
     }
 }
-
 
 pub(crate) fn fill_new_token_defaults(token: &mut TokenRecord, user_id: u64) {
     // Callers must already have pinned token.user_id to the authenticated user
@@ -1586,7 +1553,6 @@ pub(crate) fn fill_new_token_defaults(token: &mut TokenRecord, user_id: u64) {
         token.accessed_time = now;
     }
 }
-
 
 /// Fields a self-service caller may set on create. Everything else is server-owned.
 pub(crate) fn sanitize_self_service_token_create(token: &mut TokenRecord, user_id: u64) {
@@ -1628,8 +1594,6 @@ pub(crate) fn sanitize_self_service_token_create(token: &mut TokenRecord, user_i
     };
 }
 
-
-
 pub(crate) fn fill_new_user_defaults(user: &mut UserRecord) {
     if user.display_name.is_empty() {
         user.display_name.clone_from(&user.username);
@@ -1642,7 +1606,6 @@ pub(crate) fn fill_new_user_defaults(user: &mut UserRecord) {
     }
 }
 
-
 pub(crate) fn generate_token_key() -> String {
     let mut key = String::with_capacity(48);
     while key.len() < 48 {
@@ -1651,5 +1614,3 @@ pub(crate) fn generate_token_key() -> String {
     key.truncate(48);
     key
 }
-
-

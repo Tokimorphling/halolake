@@ -1,35 +1,33 @@
-use std::collections::BTreeMap;
-
+use crate::storage::OptionStore;
 use halolake_control_plane::ManagementError;
 use serde::{Deserialize, Serialize};
 use service_async::Service;
-
-use crate::storage::OptionStore;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GetChannelAffinityCacheStatsRequest;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClearChannelAffinityCacheRequest {
-    pub(crate) all: bool,
+    pub(crate) all:       bool,
     pub(crate) rule_name: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct GetChannelAffinityUsageCacheStatsRequest {
-    pub(crate) rule_name: String,
+    pub(crate) rule_name:   String,
     pub(crate) using_group: String,
-    pub(crate) key_fp: String,
+    pub(crate) key_fp:      String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChannelAffinityCacheStats {
-    enabled: bool,
-    total: usize,
-    unknown: usize,
-    by_rule_name: BTreeMap<String, usize>,
+    enabled:        bool,
+    total:          usize,
+    unknown:        usize,
+    by_rule_name:   BTreeMap<String, usize>,
     cache_capacity: usize,
-    cache_algo: &'static str,
+    cache_algo:     &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,19 +37,19 @@ pub(crate) struct ChannelAffinityClearAck {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChannelAffinityUsageCacheStats {
-    rule_name: String,
-    using_group: String,
-    key_fp: String,
-    cached_token_rate_mode: String,
-    hit: i64,
-    total: i64,
-    window_seconds: i64,
-    prompt_tokens: i64,
-    completion_tokens: i64,
-    total_tokens: i64,
-    cached_tokens: i64,
+    rule_name:               String,
+    using_group:             String,
+    key_fp:                  String,
+    cached_token_rate_mode:  String,
+    hit:                     i64,
+    total:                   i64,
+    window_seconds:          i64,
+    prompt_tokens:           i64,
+    completion_tokens:       i64,
+    total_tokens:            i64,
+    cached_tokens:           i64,
     prompt_cache_hit_tokens: i64,
-    last_seen_at: i64,
+    last_seen_at:            i64,
 }
 
 #[derive(Debug, Clone)]
@@ -144,19 +142,19 @@ impl Service<GetChannelAffinityUsageCacheStatsRequest> for ChannelAffinityServic
             return Err(ManagementError::InvalidRequest("missing param: key_fp"));
         }
         Ok(ChannelAffinityUsageCacheStats {
-            rule_name: rule_name.to_string(),
-            using_group: req.using_group.trim().to_string(),
-            key_fp: key_fp.to_string(),
-            cached_token_rate_mode: String::new(),
-            hit: 0,
-            total: 0,
-            window_seconds: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            cached_tokens: 0,
+            rule_name:               rule_name.to_string(),
+            using_group:             req.using_group.trim().to_string(),
+            key_fp:                  key_fp.to_string(),
+            cached_token_rate_mode:  String::new(),
+            hit:                     0,
+            total:                   0,
+            window_seconds:          0,
+            prompt_tokens:           0,
+            completion_tokens:       0,
+            total_tokens:            0,
+            cached_tokens:           0,
             prompt_cache_hit_tokens: 0,
-            last_seen_at: 0,
+            last_seen_at:            0,
         })
     }
 }
@@ -164,7 +162,7 @@ impl Service<GetChannelAffinityUsageCacheStatsRequest> for ChannelAffinityServic
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ChannelAffinityRule {
     #[serde(default)]
-    name: String,
+    name:              String,
     #[serde(default)]
     include_rule_name: bool,
 }

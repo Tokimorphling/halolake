@@ -1,10 +1,3 @@
-use std::collections::BTreeMap;
-
-use halolake_control_plane::ManagementError;
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use service_async::Service;
-
 use crate::{
     catalog::{
         CatalogData, CatalogStore, CreateModelRequest, CreateVendorRequest, ModelRecord,
@@ -12,14 +5,19 @@ use crate::{
     },
     storage::ManagementStore,
 };
+use halolake_control_plane::ManagementError;
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use service_async::Service;
+use std::collections::BTreeMap;
 
 const DEFAULT_SYNC_UPSTREAM_BASE: &str = "https://basellm.github.io/llm-metadata";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModelSyncService {
     management: ManagementStore,
-    catalog: CatalogStore,
-    client: reqwest::Client,
+    catalog:    CatalogStore,
+    client:     reqwest::Client,
 }
 
 impl ModelSyncService {
@@ -185,7 +183,7 @@ impl Service<SyncUpstreamModelsRequest> for ModelSyncService {
                 if apply_overwrite_fields(&mut local, upstream, vendor_id, &overwrite.fields) {
                     self.catalog
                         .call(UpdateModelRequest {
-                            model: local,
+                            model:       local,
                             status_only: false,
                         })
                         .await?;
@@ -209,17 +207,17 @@ struct UpstreamModel {
     #[serde(default)]
     description: String,
     #[serde(default)]
-    endpoints: JsonValue,
+    endpoints:   JsonValue,
     #[serde(default)]
-    icon: String,
+    icon:        String,
     #[serde(default)]
-    model_name: String,
+    model_name:  String,
     #[serde(default)]
-    name_rule: i32,
+    name_rule:   i32,
     #[serde(default)]
-    status: i32,
+    status:      i32,
     #[serde(default)]
-    tags: String,
+    tags:        String,
     #[serde(default)]
     vendor_name: String,
 }
@@ -229,11 +227,11 @@ struct UpstreamVendor {
     #[serde(default)]
     description: String,
     #[serde(default)]
-    icon: String,
+    icon:        String,
     #[serde(default)]
-    name: String,
+    name:        String,
     #[serde(default)]
-    status: i32,
+    status:      i32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -247,21 +245,21 @@ pub(crate) struct SyncUpstreamModelsRequest {
     #[serde(default)]
     pub(crate) overwrite: Vec<OverwriteField>,
     #[serde(default)]
-    pub(crate) locale: String,
+    pub(crate) locale:    String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct OverwriteField {
     pub(crate) model_name: String,
     #[serde(default)]
-    pub(crate) fields: Vec<String>,
+    pub(crate) fields:     Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct SyncUpstreamPreviewResponse {
-    pub(crate) missing: Vec<String>,
-    pub(crate) conflicts: Vec<SyncConflict>,
-    pub(crate) source: SyncSource,
+    pub(crate) missing:          Vec<String>,
+    pub(crate) conflicts:        Vec<SyncConflict>,
+    pub(crate) source:           SyncSource,
     #[serde(skip_serializing_if = "is_zero_usize")]
     pub(crate) upstream_vendors: usize,
 }
@@ -269,31 +267,31 @@ pub(crate) struct SyncUpstreamPreviewResponse {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SyncConflict {
     pub(crate) model_name: String,
-    pub(crate) fields: Vec<SyncConflictField>,
+    pub(crate) fields:     Vec<SyncConflictField>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SyncConflictField {
-    pub(crate) field: String,
-    pub(crate) local: JsonValue,
+    pub(crate) field:    String,
+    pub(crate) local:    JsonValue,
     pub(crate) upstream: JsonValue,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct SyncUpstreamModelsResponse {
-    pub(crate) created_models: usize,
+    pub(crate) created_models:  usize,
     pub(crate) created_vendors: usize,
-    pub(crate) updated_models: usize,
-    pub(crate) skipped_models: Vec<String>,
-    pub(crate) created_list: Vec<String>,
-    pub(crate) updated_list: Vec<String>,
-    pub(crate) source: SyncSource,
+    pub(crate) updated_models:  usize,
+    pub(crate) skipped_models:  Vec<String>,
+    pub(crate) created_list:    Vec<String>,
+    pub(crate) updated_list:    Vec<String>,
+    pub(crate) source:          SyncSource,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct SyncSource {
-    pub(crate) locale: String,
-    pub(crate) models_url: String,
+    pub(crate) locale:      String,
+    pub(crate) models_url:  String,
     pub(crate) vendors_url: String,
 }
 
@@ -350,11 +348,11 @@ async fn ensure_vendor_id(
     let vendor = catalog
         .call(CreateVendorRequest {
             vendor: VendorRecord {
-                id: 0,
-                name: vendor_name.to_string(),
-                description: upstream.description,
-                icon: upstream.icon,
-                status: choose_status(upstream.status, 1),
+                id:           0,
+                name:         vendor_name.to_string(),
+                description:  upstream.description,
+                icon:         upstream.icon,
+                status:       choose_status(upstream.status, 1),
                 created_time: 0,
                 updated_time: 0,
             },
@@ -452,16 +450,16 @@ fn conflict_fields(
     );
     if local.name_rule != upstream.name_rule {
         fields.push(SyncConflictField {
-            field: "name_rule".to_string(),
-            local: JsonValue::from(local.name_rule),
+            field:    "name_rule".to_string(),
+            local:    JsonValue::from(local.name_rule),
             upstream: JsonValue::from(upstream.name_rule),
         });
     }
     let upstream_status = choose_status(upstream.status, local.status);
     if local.status != upstream_status {
         fields.push(SyncConflictField {
-            field: "status".to_string(),
-            local: JsonValue::from(local.status),
+            field:    "status".to_string(),
+            local:    JsonValue::from(local.status),
             upstream: JsonValue::from(upstream.status),
         });
     }
@@ -478,8 +476,8 @@ fn push_string_conflict(
         return;
     }
     fields.push(SyncConflictField {
-        field: name.to_string(),
-        local: JsonValue::from(local),
+        field:    name.to_string(),
+        local:    JsonValue::from(local),
         upstream: JsonValue::from(upstream),
     });
 }
@@ -566,23 +564,23 @@ mod tests {
     #[test]
     fn conflict_detects_vendor_by_name() {
         let local = ModelRecord {
-            id: 1,
-            model_name: "gpt-a".to_string(),
-            description: "old".to_string(),
-            icon: String::new(),
-            tags: String::new(),
-            vendor_id: 1,
-            endpoints: String::new(),
-            status: 1,
-            sync_official: 1,
-            created_time: 0,
-            updated_time: 0,
+            id:             1,
+            model_name:     "gpt-a".to_string(),
+            description:    "old".to_string(),
+            icon:           String::new(),
+            tags:           String::new(),
+            vendor_id:      1,
+            endpoints:      String::new(),
+            status:         1,
+            sync_official:  1,
+            created_time:   0,
+            updated_time:   0,
             bound_channels: Vec::new(),
-            enable_groups: Vec::new(),
-            quota_types: Vec::new(),
-            name_rule: 0,
+            enable_groups:  Vec::new(),
+            quota_types:    Vec::new(),
+            name_rule:      0,
             matched_models: Vec::new(),
-            matched_count: 0,
+            matched_count:  0,
         };
         let upstream = UpstreamModel {
             description: "new".to_string(),

@@ -7,16 +7,15 @@
 //!
 //! Stored channel key matches existing Codex OAuth JSON used by `channel_special`.
 
-use std::{
-    io::Cursor,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
 use data_encoding::BASE64URL_NOPAD;
 use halolake_control_plane::ManagementError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
+use std::{
+    io::Cursor,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const CLOCK_SKEW_SECS: i64 = 120;
 pub(crate) const CHANNEL_TYPE_CODEX: i32 = 57;
@@ -24,43 +23,43 @@ pub(crate) const CHANNEL_TYPE_CODEX: i32 = 57;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct CodexOAuthKey {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) id_token: Option<String>,
+    pub(crate) id_token:      Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) access_token: Option<String>,
+    pub(crate) access_token:  Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) account_id: Option<String>,
+    pub(crate) account_id:    Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) last_refresh: Option<String>,
+    pub(crate) last_refresh:  Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) email: Option<String>,
+    pub(crate) email:         Option<String>,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub(crate) key_type: Option<String>,
+    pub(crate) key_type:      Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) expired: Option<String>,
+    pub(crate) expired:       Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CodexAuthImportRequest {
     #[serde(default)]
-    pub(crate) content: String,
+    pub(crate) content:         String,
     #[serde(default)]
-    pub(crate) contents: Vec<String>,
+    pub(crate) contents:        Vec<String>,
     #[serde(default)]
-    pub(crate) name: String,
+    pub(crate) name:            String,
     #[serde(default)]
-    pub(crate) group: Option<String>,
+    pub(crate) group:           Option<String>,
     #[serde(default)]
-    pub(crate) models: Option<String>,
+    pub(crate) models:          Option<String>,
     #[serde(default)]
-    pub(crate) base_url: Option<String>,
+    pub(crate) base_url:        Option<String>,
     #[serde(default)]
-    pub(crate) proxy_id: Option<u64>,
+    pub(crate) proxy_id:        Option<u64>,
     #[serde(default)]
-    pub(crate) priority: Option<i64>,
+    pub(crate) priority:        Option<i64>,
     #[serde(default)]
-    pub(crate) weight: Option<u32>,
+    pub(crate) weight:          Option<u32>,
     #[serde(default = "default_true")]
     pub(crate) update_existing: bool,
 }
@@ -71,51 +70,51 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CodexAuthImportResult {
-    pub(crate) total: usize,
-    pub(crate) created: usize,
-    pub(crate) updated: usize,
-    pub(crate) skipped: usize,
-    pub(crate) failed: usize,
-    pub(crate) items: Vec<CodexAuthImportItem>,
+    pub(crate) total:    usize,
+    pub(crate) created:  usize,
+    pub(crate) updated:  usize,
+    pub(crate) skipped:  usize,
+    pub(crate) failed:   usize,
+    pub(crate) items:    Vec<CodexAuthImportItem>,
     pub(crate) warnings: Vec<CodexAuthImportMessage>,
-    pub(crate) errors: Vec<CodexAuthImportMessage>,
+    pub(crate) errors:   Vec<CodexAuthImportMessage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CodexAuthImportItem {
-    pub(crate) index: usize,
+    pub(crate) index:      usize,
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub(crate) name: String,
-    pub(crate) action: String,
+    pub(crate) name:       String,
+    pub(crate) action:     String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) channel_id: Option<u64>,
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub(crate) message: String,
+    pub(crate) message:    String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CodexAuthImportMessage {
-    pub(crate) index: usize,
+    pub(crate) index:   usize,
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub(crate) name: String,
+    pub(crate) name:    String,
     pub(crate) message: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedCodexAuth {
-    pub(crate) name: String,
-    pub(crate) key: CodexOAuthKey,
-    pub(crate) email: String,
+    pub(crate) name:                  String,
+    pub(crate) key:                   CodexOAuthKey,
+    pub(crate) email:                 String,
     #[allow(dead_code)]
-    pub(crate) account_id: String,
+    pub(crate) account_id:            String,
     #[allow(dead_code)]
-    pub(crate) user_id: String,
+    pub(crate) user_id:               String,
     #[allow(dead_code)]
-    pub(crate) access_token: String,
+    pub(crate) access_token:          String,
     #[allow(dead_code)]
-    pub(crate) refresh_token: String,
-    pub(crate) identity_keys: Vec<String>,
-    pub(crate) warnings: Vec<String>,
+    pub(crate) refresh_token:         String,
+    pub(crate) identity_keys:         Vec<String>,
+    pub(crate) warnings:              Vec<String>,
     #[allow(dead_code)]
     pub(crate) token_expires_at_unix: Option<i64>,
 }
@@ -320,90 +319,65 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
             access_token = raw.trim().to_string();
         }
         JsonValue::Object(map) => {
-            access_token = first_string(
-                &map,
-                &[
-                    &["tokens", "access_token"],
-                    &["tokens", "accessToken"],
-                    &["access_token"],
-                    &["accessToken"],
-                    &["token"],
-                ],
-            );
-            refresh_token = first_string(
-                &map,
-                &[
-                    &["tokens", "refresh_token"],
-                    &["tokens", "refreshToken"],
-                    &["refresh_token"],
-                    &["refreshToken"],
-                ],
-            );
-            id_token = first_string(
-                &map,
-                &[
-                    &["tokens", "id_token"],
-                    &["tokens", "idToken"],
-                    &["id_token"],
-                    &["idToken"],
-                ],
-            );
+            access_token = first_string(&map, &[
+                &["tokens", "access_token"],
+                &["tokens", "accessToken"],
+                &["access_token"],
+                &["accessToken"],
+                &["token"],
+            ]);
+            refresh_token = first_string(&map, &[
+                &["tokens", "refresh_token"],
+                &["tokens", "refreshToken"],
+                &["refresh_token"],
+                &["refreshToken"],
+            ]);
+            id_token = first_string(&map, &[
+                &["tokens", "id_token"],
+                &["tokens", "idToken"],
+                &["id_token"],
+                &["idToken"],
+            ]);
             email = first_string(&map, &[&["email"], &["user", "email"]]);
-            account_id = first_string(
-                &map,
-                &[
-                    &["chatgpt_account_id"],
-                    &["chatgptAccountId"],
-                    &["account_id"],
-                    &["accountId"],
-                    &["account", "id"],
-                    &["account", "account_id"],
-                    &["account", "chatgpt_account_id"],
-                ],
-            );
-            user_id = first_string(
-                &map,
-                &[
-                    &["chatgpt_user_id"],
-                    &["chatgptUserId"],
-                    &["user_id"],
-                    &["userId"],
-                    &["user", "id"],
-                ],
-            );
-            plan_type = first_string(
-                &map,
-                &[
-                    &["plan_type"],
-                    &["planType"],
-                    &["account", "plan_type"],
-                    &["account", "planType"],
-                ],
-            );
-            organization = first_string(
-                &map,
-                &[
-                    &["organization_id"],
-                    &["organizationId"],
-                    &["org_id"],
-                    &["orgId"],
-                ],
-            );
+            account_id = first_string(&map, &[
+                &["chatgpt_account_id"],
+                &["chatgptAccountId"],
+                &["account_id"],
+                &["accountId"],
+                &["account", "id"],
+                &["account", "account_id"],
+                &["account", "chatgpt_account_id"],
+            ]);
+            user_id = first_string(&map, &[
+                &["chatgpt_user_id"],
+                &["chatgptUserId"],
+                &["user_id"],
+                &["userId"],
+                &["user", "id"],
+            ]);
+            plan_type = first_string(&map, &[
+                &["plan_type"],
+                &["planType"],
+                &["account", "plan_type"],
+                &["account", "planType"],
+            ]);
+            organization = first_string(&map, &[
+                &["organization_id"],
+                &["organizationId"],
+                &["org_id"],
+                &["orgId"],
+            ]);
             name_hint = first_string(&map, &[&["name"], &["user", "name"]]);
             if !first_string(&map, &[&["session_token"], &["sessionToken"]]).is_empty() {
-                warnings.push(
-                    "sessionToken ignored; not stored as OAuth refresh_token".to_string(),
-                );
+                warnings
+                    .push("sessionToken ignored; not stored as OAuth refresh_token".to_string());
             }
-            if let Some(exp) = first_time(
-                &map,
-                &[
-                    &["tokens", "expires_at"],
-                    &["tokens", "expiresAt"],
-                    &["expires_at"],
-                    &["expiresAt"],
-                ],
-            ) {
+            if let Some(exp) = first_time(&map, &[
+                &["tokens", "expires_at"],
+                &["tokens", "expiresAt"],
+                &["expires_at"],
+                &["expiresAt"],
+            ]) {
                 if exp <= now - CLOCK_SKEW_SECS {
                     return Err(ManagementError::InvalidRequest(
                         "access_token already expired",
@@ -453,14 +427,11 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
     )?;
 
     if token_expires_at_unix.is_none() {
-        warnings.push(
-            "could not parse access_token expiry; verify token validity after import".into(),
-        );
+        warnings
+            .push("could not parse access_token expiry; verify token validity after import".into());
     }
     if refresh_token.is_empty() {
-        warnings.push(
-            "no refresh_token; access_token cannot be auto-renewed after expiry".into(),
-        );
+        warnings.push("no refresh_token; access_token cannot be auto-renewed after expiry".into());
         if token_expires_at_unix.is_none() {
             return Err(ManagementError::InvalidRequest(
                 "no refresh_token and access_token expiry unknown",
@@ -472,14 +443,14 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
         .unwrap_or_else(|| format!("Codex import {index}"));
 
     let key = CodexOAuthKey {
-        id_token: non_empty(id_token),
-        access_token: Some(access_token.clone()),
+        id_token:      non_empty(id_token),
+        access_token:  Some(access_token.clone()),
         refresh_token: non_empty(refresh_token.clone()),
-        account_id: non_empty(account_id.clone()),
-        last_refresh: None,
-        email: non_empty(email.clone()),
-        key_type: Some("codex".to_string()),
-        expired: token_expires_at_unix.map(|ts| ts.to_string()),
+        account_id:    non_empty(account_id.clone()),
+        last_refresh:  None,
+        email:         non_empty(email.clone()),
+        key_type:      Some("codex".to_string()),
+        expired:       token_expires_at_unix.map(|ts| ts.to_string()),
     };
 
     let identity_keys =
@@ -513,9 +484,8 @@ fn enrich_from_jwt(
 ) -> Result<(), ManagementError> {
     let Some(claims) = decode_jwt_claims(token) else {
         if validate_expiry {
-            warnings.push(
-                "accessToken is not a parseable JWT; cannot verify expiry/identity".into(),
-            );
+            warnings
+                .push("accessToken is not a parseable JWT; cannot verify expiry/identity".into());
         }
         return Ok(());
     };
@@ -580,11 +550,11 @@ fn enrich_from_jwt(
 #[derive(Debug, Default, Deserialize)]
 struct JwtClaims {
     #[serde(default)]
-    sub: Option<String>,
+    sub:         Option<String>,
     #[serde(default)]
-    email: Option<String>,
+    email:       Option<String>,
     #[serde(default)]
-    exp: Option<i64>,
+    exp:         Option<i64>,
     #[serde(default, rename = "https://api.openai.com/auth")]
     openai_auth: Option<OpenAiAuthClaims>,
 }
@@ -594,21 +564,21 @@ struct OpenAiAuthClaims {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
     #[serde(default)]
-    chatgpt_user_id: Option<String>,
+    chatgpt_user_id:    Option<String>,
     #[serde(default)]
-    chatgpt_plan_type: Option<String>,
+    chatgpt_plan_type:  Option<String>,
     #[serde(default)]
-    user_id: Option<String>,
+    user_id:            Option<String>,
     #[serde(default)]
-    poid: Option<String>,
+    poid:               Option<String>,
     #[serde(default)]
-    organizations: Option<Vec<OrgClaim>>,
+    organizations:      Option<Vec<OrgClaim>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct OrgClaim {
     #[serde(default)]
-    id: String,
+    id:         String,
     #[serde(default)]
     is_default: bool,
 }

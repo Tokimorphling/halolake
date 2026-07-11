@@ -1,23 +1,20 @@
 //! Auth / session helpers for control-api handlers.
 
+use crate::{
+    AppState, INTERNAL_KEY_HEADER, NEW_API_USER_HEADER, SESSION_COOKIE_NAME,
+    TOKEN_STATUS_EXHAUSTED, TOKEN_STATUS_EXPIRED,
+    http_response::{api_error_status, management_error},
+    session::{SecureVerificationError, SessionSigner},
+};
 use axum::{
     Json,
     http::{HeaderMap, StatusCode, header::COOKIE},
     response::{IntoResponse, Response},
 };
 use halolake_control_plane::{GetUserRequest, ValidateUserAccessTokenRequest};
-use halolake_domain::{
-    ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, TokenRecord, UserRecord,
-};
+use halolake_domain::{ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, TokenRecord, UserRecord};
 use serde_json::json;
 use service_async::Service;
-
-use crate::http_response::{api_error_status, management_error};
-use crate::session::{SecureVerificationError, SessionSigner};
-use crate::{
-    AppState, INTERNAL_KEY_HEADER, NEW_API_USER_HEADER, SESSION_COOKIE_NAME, TOKEN_STATUS_EXHAUSTED,
-    TOKEN_STATUS_EXPIRED,
-};
 
 /// Length-independent, byte-by-byte comparison that avoids the early-exit
 /// timing signal of `==`. Not a substitute for a constant-time-length
@@ -38,7 +35,9 @@ pub(crate) fn require_secure_verification(
     headers: &HeaderMap,
 ) -> Result<(), Response> {
     let Some(session_id) = session_id_from_headers(headers, &state.session_signer) else {
-        return Err(secure_verification_response(SecureVerificationError::Required));
+        return Err(secure_verification_response(
+            SecureVerificationError::Required,
+        ));
     };
     match state.sessions.require_secure_verified(session_id) {
         Ok(()) => Ok(()),
@@ -71,11 +70,13 @@ pub(crate) async fn current_user(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<UserRecord, Response> {
-    let session_user_id =
-        match state.sessions.user_id_from_headers(headers, &state.session_signer) {
-            Ok(user_id) => user_id,
-            Err(err) => return Err(management_error(err)),
-        };
+    let session_user_id = match state
+        .sessions
+        .user_id_from_headers(headers, &state.session_signer)
+    {
+        Ok(user_id) => user_id,
+        Err(err) => return Err(management_error(err)),
+    };
     let access_token = if session_user_id.is_none() {
         access_token_from_headers(headers)
     } else {
@@ -153,7 +154,7 @@ pub(crate) fn token_from_read_only_auth(
 }
 
 pub(crate) struct AuthorizationTokenKeys {
-    exact: String,
+    exact:        String,
     split_prefix: Option<String>,
 }
 
@@ -167,7 +168,9 @@ impl AuthorizationTokenKeys {
     }
 }
 
-pub(crate) fn authorization_token_keys(headers: &HeaderMap) -> Result<AuthorizationTokenKeys, Response> {
+pub(crate) fn authorization_token_keys(
+    headers: &HeaderMap,
+) -> Result<AuthorizationTokenKeys, Response> {
     let Some(raw) = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -342,9 +345,7 @@ pub(crate) fn new_api_user_id(headers: &HeaderMap) -> Option<Result<u64, ()>> {
 
 pub(crate) fn set_session_cookie(session_id: &str, signer: &SessionSigner) -> String {
     let value = signer.sign(session_id);
-    format!(
-        "{SESSION_COOKIE_NAME}={value}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict"
-    )
+    format!("{SESSION_COOKIE_NAME}={value}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict")
 }
 
 pub(crate) fn clear_session_cookie() -> String {

@@ -1,8 +1,3 @@
-use std::{
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use halolake_control_plane::ManagementError;
 use halolake_domain::{PageRequest, PageResult};
 use serde::{Deserialize, Serialize};
@@ -12,6 +7,10 @@ use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
+use std::{
+    str::FromStr,
+    sync::{Arc, RwLock},
 };
 use uuid::Uuid;
 
@@ -26,57 +25,57 @@ const PAYMENT_PROVIDER_STRIPE: &str = "stripe";
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BillingData {
     pub(crate) redemptions: Vec<RedemptionRecord>,
-    pub(crate) topups: Vec<TopUpRecord>,
+    pub(crate) topups:      Vec<TopUpRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct RedemptionRecord {
     #[serde(default)]
-    pub(crate) id: u64,
+    pub(crate) id:            u64,
     #[serde(default)]
-    pub(crate) user_id: u64,
+    pub(crate) user_id:       u64,
     #[serde(default)]
-    pub(crate) key: String,
+    pub(crate) key:           String,
     #[serde(default = "default_redemption_status")]
-    pub(crate) status: i32,
+    pub(crate) status:        i32,
     #[serde(default)]
-    pub(crate) name: String,
+    pub(crate) name:          String,
     #[serde(default = "default_redemption_quota")]
-    pub(crate) quota: i64,
+    pub(crate) quota:         i64,
     #[serde(default)]
-    pub(crate) created_time: i64,
+    pub(crate) created_time:  i64,
     #[serde(default)]
     pub(crate) redeemed_time: i64,
     #[serde(default)]
-    pub(crate) count: usize,
+    pub(crate) count:         usize,
     #[serde(default)]
-    pub(crate) used_user_id: u64,
+    pub(crate) used_user_id:  u64,
     #[serde(default)]
-    pub(crate) expired_time: i64,
+    pub(crate) expired_time:  i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub(crate) struct TopUpRecord {
     #[serde(default)]
-    pub(crate) id: u64,
+    pub(crate) id:               u64,
     #[serde(default)]
-    pub(crate) user_id: u64,
+    pub(crate) user_id:          u64,
     #[serde(default)]
-    pub(crate) amount: i64,
+    pub(crate) amount:           i64,
     #[serde(default)]
-    pub(crate) money: f64,
+    pub(crate) money:            f64,
     #[serde(default)]
-    pub(crate) trade_no: String,
+    pub(crate) trade_no:         String,
     #[serde(default)]
-    pub(crate) payment_method: String,
+    pub(crate) payment_method:   String,
     #[serde(default)]
     pub(crate) payment_provider: String,
     #[serde(default)]
-    pub(crate) create_time: i64,
+    pub(crate) create_time:      i64,
     #[serde(default)]
-    pub(crate) complete_time: i64,
+    pub(crate) complete_time:    i64,
     #[serde(default = "default_topup_status")]
-    pub(crate) status: String,
+    pub(crate) status:           String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,9 +85,9 @@ pub(crate) struct ListRedemptionsRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SearchRedemptionsRequest {
-    pub(crate) page: PageRequest,
+    pub(crate) page:    PageRequest,
     pub(crate) keyword: String,
-    pub(crate) status: String,
+    pub(crate) status:  String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,12 +98,12 @@ pub(crate) struct GetRedemptionRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct CreateRedemptionsRequest {
     pub(crate) redemption: RedemptionRecord,
-    pub(crate) user_id: u64,
+    pub(crate) user_id:    u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct UpdateRedemptionRequest {
-    pub(crate) redemption: RedemptionRecord,
+    pub(crate) redemption:  RedemptionRecord,
     pub(crate) status_only: bool,
 }
 
@@ -118,27 +117,27 @@ pub(crate) struct DeleteInvalidRedemptionsRequest;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RedeemRedemptionRequest {
-    pub(crate) key: String,
+    pub(crate) key:     String,
     pub(crate) user_id: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RollbackRedeemRedemptionRequest {
-    pub(crate) id: u64,
+    pub(crate) id:      u64,
     pub(crate) user_id: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RedeemedRedemption {
-    pub(crate) id: u64,
+    pub(crate) id:    u64,
     pub(crate) quota: i64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ListTopUpsRequest {
-    pub(crate) user_id: Option<u64>,
-    pub(crate) page: PageRequest,
-    pub(crate) keyword: String,
+    pub(crate) user_id:     Option<u64>,
+    pub(crate) page:        PageRequest,
+    pub(crate) keyword:     String,
     pub(crate) recent_only: bool,
 }
 
@@ -149,7 +148,7 @@ pub(crate) struct CreateTopUpRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CompleteTopUpRequest {
-    pub(crate) trade_no: String,
+    pub(crate) trade_no:       String,
     pub(crate) quota_per_unit: f64,
 }
 
@@ -323,17 +322,17 @@ impl Service<CreateRedemptionsRequest> for MemoryBillingStore {
             for _ in 0..template.count {
                 let key = unique_redemption_key(&data.redemptions);
                 let record = RedemptionRecord {
-                    id: next,
-                    user_id: req.user_id,
-                    key: key.clone(),
-                    status: REDEMPTION_STATUS_ENABLED,
-                    name: template.name.clone(),
-                    quota: template.quota,
-                    created_time: now,
+                    id:            next,
+                    user_id:       req.user_id,
+                    key:           key.clone(),
+                    status:        REDEMPTION_STATUS_ENABLED,
+                    name:          template.name.clone(),
+                    quota:         template.quota,
+                    created_time:  now,
                     redeemed_time: 0,
-                    count: 0,
-                    used_user_id: 0,
-                    expired_time: template.expired_time,
+                    count:         0,
+                    used_user_id:  0,
+                    expired_time:  template.expired_time,
                 };
                 data.redemptions.push(record);
                 keys.push(key);
@@ -445,7 +444,7 @@ impl Service<RedeemRedemptionRequest> for MemoryBillingStore {
             redemption.redeemed_time = now_unix();
             redemption.used_user_id = req.user_id;
             Ok(RedeemedRedemption {
-                id: redemption.id,
+                id:    redemption.id,
                 quota: redemption.quota,
             })
         })
@@ -563,7 +562,7 @@ impl Service<CompleteTopUpRequest> for MemoryBillingStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteBillingStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryBillingStore,
 }
 
@@ -721,17 +720,17 @@ async fn load_billing(pool: &SqlitePool) -> Result<BillingData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(RedemptionRecord {
-            id: u64_col(&row, "id")?,
-            user_id: u64_col(&row, "user_id")?,
-            key: string_col(&row, "key")?,
-            status: i32_col(&row, "status")?,
-            name: string_col(&row, "name")?,
-            quota: i64_col(&row, "quota")?,
-            created_time: i64_col(&row, "created_time")?,
+            id:            u64_col(&row, "id")?,
+            user_id:       u64_col(&row, "user_id")?,
+            key:           string_col(&row, "key")?,
+            status:        i32_col(&row, "status")?,
+            name:          string_col(&row, "name")?,
+            quota:         i64_col(&row, "quota")?,
+            created_time:  i64_col(&row, "created_time")?,
             redeemed_time: i64_col(&row, "redeemed_time")?,
-            count: 0,
-            used_user_id: u64_col(&row, "used_user_id")?,
-            expired_time: i64_col(&row, "expired_time")?,
+            count:         0,
+            used_user_id:  u64_col(&row, "used_user_id")?,
+            expired_time:  i64_col(&row, "expired_time")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -747,16 +746,16 @@ async fn load_billing(pool: &SqlitePool) -> Result<BillingData, ManagementError>
     .into_iter()
     .map(|row| {
         Ok(TopUpRecord {
-            id: u64_col(&row, "id")?,
-            user_id: u64_col(&row, "user_id")?,
-            amount: i64_col(&row, "amount")?,
-            money: f64_col(&row, "money")?,
-            trade_no: string_col(&row, "trade_no")?,
-            payment_method: string_col(&row, "payment_method")?,
+            id:               u64_col(&row, "id")?,
+            user_id:          u64_col(&row, "user_id")?,
+            amount:           i64_col(&row, "amount")?,
+            money:            f64_col(&row, "money")?,
+            trade_no:         string_col(&row, "trade_no")?,
+            payment_method:   string_col(&row, "payment_method")?,
             payment_provider: string_col(&row, "payment_provider")?,
-            create_time: i64_col(&row, "create_time")?,
-            complete_time: i64_col(&row, "complete_time")?,
-            status: string_col(&row, "status")?,
+            create_time:      i64_col(&row, "create_time")?,
+            complete_time:    i64_col(&row, "complete_time")?,
+            status:           string_col(&row, "status")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -832,17 +831,15 @@ async fn save_billing_tx(
     Ok(())
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlBillingStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryBillingStore,
 }
 
 impl MySqlBillingStore {
     async fn connect(url: &str) -> Result<Self, ManagementError> {
-        let options = MySqlConnectOptions::from_str(url)
-            .map_err(storage_err)?;
+        let options = MySqlConnectOptions::from_str(url).map_err(storage_err)?;
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -861,8 +858,6 @@ impl MySqlBillingStore {
         save_billing_mysql(&self.pool, &data).await
     }
 }
-
-
 
 async fn migrate_billing_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
     for stmt in [
@@ -911,17 +906,17 @@ async fn load_billing_mysql(pool: &MySqlPool) -> Result<BillingData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(RedemptionRecord {
-            id: u64_col_mysql(&row, "id")?,
-            user_id: u64_col_mysql(&row, "user_id")?,
-            key: string_col_mysql(&row, "key")?,
-            status: i32_col_mysql(&row, "status")?,
-            name: string_col_mysql(&row, "name")?,
-            quota: i64_col_mysql(&row, "quota")?,
-            created_time: i64_col_mysql(&row, "created_time")?,
+            id:            u64_col_mysql(&row, "id")?,
+            user_id:       u64_col_mysql(&row, "user_id")?,
+            key:           string_col_mysql(&row, "key")?,
+            status:        i32_col_mysql(&row, "status")?,
+            name:          string_col_mysql(&row, "name")?,
+            quota:         i64_col_mysql(&row, "quota")?,
+            created_time:  i64_col_mysql(&row, "created_time")?,
             redeemed_time: i64_col_mysql(&row, "redeemed_time")?,
-            count: 0,
-            used_user_id: u64_col_mysql(&row, "used_user_id")?,
-            expired_time: i64_col_mysql(&row, "expired_time")?,
+            count:         0,
+            used_user_id:  u64_col_mysql(&row, "used_user_id")?,
+            expired_time:  i64_col_mysql(&row, "expired_time")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -937,16 +932,16 @@ async fn load_billing_mysql(pool: &MySqlPool) -> Result<BillingData, ManagementE
     .into_iter()
     .map(|row| {
         Ok(TopUpRecord {
-            id: u64_col_mysql(&row, "id")?,
-            user_id: u64_col_mysql(&row, "user_id")?,
-            amount: i64_col_mysql(&row, "amount")?,
-            money: f64_col_mysql(&row, "money")?,
-            trade_no: string_col_mysql(&row, "trade_no")?,
-            payment_method: string_col_mysql(&row, "payment_method")?,
+            id:               u64_col_mysql(&row, "id")?,
+            user_id:          u64_col_mysql(&row, "user_id")?,
+            amount:           i64_col_mysql(&row, "amount")?,
+            money:            f64_col_mysql(&row, "money")?,
+            trade_no:         string_col_mysql(&row, "trade_no")?,
+            payment_method:   string_col_mysql(&row, "payment_method")?,
             payment_provider: string_col_mysql(&row, "payment_provider")?,
-            create_time: i64_col_mysql(&row, "create_time")?,
-            complete_time: i64_col_mysql(&row, "complete_time")?,
-            status: string_col_mysql(&row, "status")?,
+            create_time:      i64_col_mysql(&row, "create_time")?,
+            complete_time:    i64_col_mysql(&row, "complete_time")?,
+            status:           string_col_mysql(&row, "status")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1014,11 +1009,9 @@ async fn save_billing_mysql(pool: &MySqlPool, data: &BillingData) -> Result<(), 
     tx.commit().await.map_err(storage_err)
 }
 
-
-
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresBillingStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryBillingStore,
 }
 
@@ -1091,17 +1084,17 @@ async fn load_billing_pg(pool: &PgPool) -> Result<BillingData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(RedemptionRecord {
-            id: pg_u64_col(&row, "id")?,
-            user_id: pg_u64_col(&row, "user_id")?,
-            key: pg_string_col(&row, "key")?,
-            status: pg_i32_col(&row, "status")?,
-            name: pg_string_col(&row, "name")?,
-            quota: pg_i64_col(&row, "quota")?,
-            created_time: pg_i64_col(&row, "created_time")?,
+            id:            pg_u64_col(&row, "id")?,
+            user_id:       pg_u64_col(&row, "user_id")?,
+            key:           pg_string_col(&row, "key")?,
+            status:        pg_i32_col(&row, "status")?,
+            name:          pg_string_col(&row, "name")?,
+            quota:         pg_i64_col(&row, "quota")?,
+            created_time:  pg_i64_col(&row, "created_time")?,
             redeemed_time: pg_i64_col(&row, "redeemed_time")?,
-            count: 0,
-            used_user_id: pg_u64_col(&row, "used_user_id")?,
-            expired_time: pg_i64_col(&row, "expired_time")?,
+            count:         0,
+            used_user_id:  pg_u64_col(&row, "used_user_id")?,
+            expired_time:  pg_i64_col(&row, "expired_time")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
@@ -1117,21 +1110,24 @@ async fn load_billing_pg(pool: &PgPool) -> Result<BillingData, ManagementError> 
     .into_iter()
     .map(|row| {
         Ok(TopUpRecord {
-            id: pg_u64_col(&row, "id")?,
-            user_id: pg_u64_col(&row, "user_id")?,
-            amount: pg_i64_col(&row, "amount")?,
-            money: pg_f64_col(&row, "money")?,
-            trade_no: pg_string_col(&row, "trade_no")?,
-            payment_method: pg_string_col(&row, "payment_method")?,
+            id:               pg_u64_col(&row, "id")?,
+            user_id:          pg_u64_col(&row, "user_id")?,
+            amount:           pg_i64_col(&row, "amount")?,
+            money:            pg_f64_col(&row, "money")?,
+            trade_no:         pg_string_col(&row, "trade_no")?,
+            payment_method:   pg_string_col(&row, "payment_method")?,
             payment_provider: pg_string_col(&row, "payment_provider")?,
-            create_time: pg_i64_col(&row, "create_time")?,
-            complete_time: pg_i64_col(&row, "complete_time")?,
-            status: pg_string_col(&row, "status")?,
+            create_time:      pg_i64_col(&row, "create_time")?,
+            complete_time:    pg_i64_col(&row, "complete_time")?,
+            status:           pg_string_col(&row, "status")?,
         })
     })
     .collect::<Result<Vec<_>, ManagementError>>()?;
 
-    Ok(BillingData { redemptions, topups })
+    Ok(BillingData {
+        redemptions,
+        topups,
+    })
 }
 
 async fn save_billing_pg(pool: &PgPool, data: &BillingData) -> Result<(), ManagementError> {

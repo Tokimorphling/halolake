@@ -13,32 +13,32 @@ pub const CHANNEL_TYPE_GEMINI: i32 = 24;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UserRecord {
     #[serde(default)]
-    pub id: u64,
-    pub username: String,
+    pub id:            u64,
+    pub username:      String,
     #[serde(default, skip_serializing)]
-    pub password: String,
+    pub password:      String,
     #[serde(default, skip_serializing)]
-    pub access_token: Option<String>,
+    pub access_token:  Option<String>,
     #[serde(default)]
-    pub display_name: String,
+    pub display_name:  String,
     #[serde(default = "default_common_role")]
-    pub role: i32,
+    pub role:          i32,
     #[serde(default = "default_enabled_status")]
-    pub status: i32,
+    pub status:        i32,
     #[serde(default)]
-    pub email: String,
+    pub email:         String,
     #[serde(default)]
-    pub quota: i64,
+    pub quota:         i64,
     #[serde(default)]
-    pub used_quota: i64,
+    pub used_quota:    i64,
     #[serde(default = "default_group")]
-    pub group: String,
+    pub group:         String,
     #[serde(default)]
-    pub setting: String,
+    pub setting:       String,
     #[serde(default)]
-    pub remark: String,
+    pub remark:        String,
     #[serde(default)]
-    pub created_at: i64,
+    pub created_at:    i64,
     #[serde(default)]
     pub last_login_at: i64,
 }
@@ -54,41 +54,41 @@ impl UserRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TokenRecord {
     #[serde(default)]
-    pub id: u64,
+    pub id:                   u64,
     #[serde(default, skip)]
-    pub snapshot_id: Option<String>,
+    pub snapshot_id:          Option<String>,
     #[serde(default)]
-    pub user_id: u64,
+    pub user_id:              u64,
     #[serde(default, skip)]
-    pub snapshot_user_id: Option<String>,
+    pub snapshot_user_id:     Option<String>,
     #[serde(default)]
-    pub key: String,
+    pub key:                  String,
     #[serde(default = "default_enabled_status")]
-    pub status: i32,
+    pub status:               i32,
     #[serde(default)]
-    pub name: String,
+    pub name:                 String,
     #[serde(default)]
-    pub created_time: i64,
+    pub created_time:         i64,
     #[serde(default)]
-    pub accessed_time: i64,
+    pub accessed_time:        i64,
     #[serde(default = "default_never_expires")]
-    pub expired_time: i64,
+    pub expired_time:         i64,
     #[serde(default)]
-    pub remain_quota: i64,
+    pub remain_quota:         i64,
     #[serde(default)]
-    pub unlimited_quota: bool,
+    pub unlimited_quota:      bool,
     #[serde(default)]
     pub model_limits_enabled: bool,
     #[serde(default)]
-    pub model_limits: String,
+    pub model_limits:         String,
     #[serde(default)]
-    pub allow_ips: Option<String>,
+    pub allow_ips:            Option<String>,
     #[serde(default)]
-    pub used_quota: i64,
+    pub used_quota:           i64,
     #[serde(default)]
-    pub group: String,
+    pub group:                String,
     #[serde(default)]
-    pub cross_group_retry: bool,
+    pub cross_group_retry:    bool,
 }
 
 impl TokenRecord {
@@ -113,54 +113,54 @@ impl TokenRecord {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ChannelRecord {
     #[serde(default)]
-    pub id: u64,
+    pub id:                   u64,
     #[serde(default, skip)]
-    pub snapshot_id: Option<String>,
+    pub snapshot_id:          Option<String>,
     #[serde(rename = "type", default = "default_openai_channel_type")]
-    pub channel_type: i32,
-    pub key: String,
+    pub channel_type:         i32,
+    pub key:                  String,
     #[serde(default = "default_enabled_status")]
-    pub status: i32,
+    pub status:               i32,
     #[serde(default)]
-    pub name: String,
+    pub name:                 String,
     #[serde(default)]
-    pub weight: Option<u32>,
+    pub weight:               Option<u32>,
     #[serde(default)]
-    pub created_time: i64,
+    pub created_time:         i64,
     #[serde(default)]
-    pub test_time: i64,
+    pub test_time:            i64,
     #[serde(default)]
-    pub response_time: i32,
+    pub response_time:        i32,
     #[serde(default)]
-    pub base_url: Option<String>,
+    pub base_url:             Option<String>,
     #[serde(default)]
-    pub balance: f64,
+    pub balance:              f64,
     #[serde(default)]
     pub balance_updated_time: i64,
     #[serde(default)]
-    pub models: String,
+    pub models:               String,
     #[serde(default = "default_group")]
-    pub group: String,
+    pub group:                String,
     #[serde(default)]
-    pub used_quota: i64,
+    pub used_quota:           i64,
     #[serde(default)]
-    pub model_mapping: Option<String>,
+    pub model_mapping:        Option<String>,
     #[serde(default)]
-    pub priority: Option<i64>,
+    pub priority:             Option<i64>,
     #[serde(default)]
-    pub auto_ban: Option<i32>,
+    pub auto_ban:             Option<i32>,
     #[serde(default)]
-    pub tag: Option<String>,
+    pub tag:                  Option<String>,
     #[serde(default)]
-    pub setting: Option<String>,
+    pub setting:              Option<String>,
     #[serde(default)]
-    pub param_override: Option<String>,
+    pub param_override:       Option<String>,
     #[serde(default)]
-    pub header_override: Option<String>,
+    pub header_override:      Option<String>,
     #[serde(default)]
-    pub remark: Option<String>,
+    pub remark:               Option<String>,
     #[serde(default)]
-    pub proxy_id: Option<u64>,
+    pub proxy_id:             Option<u64>,
 }
 
 impl ChannelRecord {
@@ -193,7 +193,7 @@ impl ChannelRecord {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PageRequest {
     #[serde(default = "default_page")]
-    pub page: usize,
+    pub page:      usize,
     #[serde(default = "default_page_size")]
     pub page_size: usize,
 }
@@ -211,16 +211,16 @@ impl PageRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SearchRequest {
     #[serde(flatten)]
-    pub page: PageRequest,
+    pub page:    PageRequest,
     #[serde(default)]
     pub keyword: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PageResult<T> {
-    pub items: Vec<T>,
-    pub total: usize,
-    pub page: usize,
+    pub items:     Vec<T>,
+    pub total:     usize,
+    pub page:      usize,
     pub page_size: usize,
 }
 
@@ -246,39 +246,43 @@ pub enum UsageStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UsageEvent {
-    pub request_id: String,
-    pub user_id: String,
-    pub token_id: String,
-    pub channel_id: String,
+    pub request_id:            String,
+    pub user_id:               String,
+    pub token_id:              String,
+    pub channel_id:            String,
     #[serde(default)]
-    pub group: String,
-    pub model: String,
-    pub upstream_model: String,
+    pub group:                 String,
+    pub model:                 String,
+    pub upstream_model:        String,
     #[serde(default)]
-    pub prompt_tokens: Option<u64>,
+    pub prompt_tokens:         Option<u64>,
     #[serde(default)]
-    pub completion_tokens: Option<u64>,
+    pub completion_tokens:     Option<u64>,
     #[serde(default)]
-    pub total_tokens: Option<u64>,
+    pub total_tokens:          Option<u64>,
     #[serde(default)]
-    pub cache_read_tokens: Option<u64>,
+    pub cache_read_tokens:     Option<u64>,
     #[serde(default)]
     pub cache_creation_tokens: Option<u64>,
     #[serde(default)]
-    pub image_tokens: Option<u64>,
+    pub image_tokens:          Option<u64>,
     #[serde(default)]
-    pub audio_tokens: Option<u64>,
+    pub audio_tokens:          Option<u64>,
     #[serde(default)]
-    pub quota: Option<i64>,
-    pub status: UsageStatus,
-    pub latency_ms: u64,
+    pub quota:                 Option<i64>,
+    pub status:                UsageStatus,
+    pub latency_ms:            u64,
+    /// Time-to-first-response in milliseconds (new-api log `other.frt`).
+    /// Stream: first upstream body chunk; non-stream: often unset.
     #[serde(default)]
-    pub is_stream: bool,
+    pub first_response_ms:     Option<u64>,
     #[serde(default)]
-    pub ip: String,
+    pub is_stream:             bool,
     #[serde(default)]
-    pub upstream_request_id: String,
-    pub created_at_unix_ms: i64,
+    pub ip:                    String,
+    #[serde(default)]
+    pub upstream_request_id:   String,
+    pub created_at_unix_ms:    i64,
 }
 
 impl UsageEvent {

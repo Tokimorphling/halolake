@@ -1,5 +1,6 @@
 //! HTTP response helpers shared by control-api handlers.
 
+use crate::{security::SecurityError, system_task::SystemTaskRecord};
 use axum::{
     Json,
     http::StatusCode,
@@ -7,16 +8,13 @@ use axum::{
 };
 use halolake_api_contract::ApiResponse;
 use halolake_control_plane::{ChannelFeedbackError, ManagementError, UsageError};
+use halolake_domain::{PageRequest, PageResult};
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 
-use crate::security::SecurityError;
-use crate::system_task::SystemTaskRecord;
-use halolake_domain::{PageRequest, PageResult};
-
 #[derive(Debug, Serialize)]
 pub(crate) struct HealthResponse {
-    pub(crate) status: &'static str,
+    pub(crate) status:           &'static str,
     pub(crate) snapshot_version: u64,
 }
 
@@ -46,7 +44,7 @@ pub(crate) fn api_success_with_message<T: Serialize>(message: &str, data: T) -> 
     Json(ApiResponse {
         success: true,
         message: message.to_string(),
-        data: Some(data),
+        data:    Some(data),
     })
     .into_response()
 }
@@ -59,7 +57,7 @@ pub(crate) fn api_ok_message(message: &str) -> Response {
     Json(ApiResponse::<()> {
         success: true,
         message: message.to_string(),
-        data: None,
+        data:    None,
     })
     .into_response()
 }
@@ -78,7 +76,7 @@ pub(crate) fn api_error_status_with_data<T: Serialize>(
         Json(ApiResponse {
             success: false,
             message: message.to_string(),
-            data: Some(data),
+            data:    Some(data),
         }),
     )
         .into_response()

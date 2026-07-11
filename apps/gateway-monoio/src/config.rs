@@ -3,33 +3,33 @@ use super::*;
 #[derive(Debug, Clone, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default)]
-    pub server: ServerConfig,
+    pub server:           ServerConfig,
     #[serde(default)]
-    pub protocol: ProtocolConfig,
+    pub protocol:         ProtocolConfig,
     #[serde(default)]
-    pub upstream: UpstreamConfig,
+    pub upstream:         UpstreamConfig,
     #[serde(default)]
-    pub auth: AuthConfig,
+    pub auth:             AuthConfig,
     #[serde(default)]
-    pub control: ControlPlaneConfig,
+    pub control:          ControlPlaneConfig,
     #[serde(default = "default_version")]
-    pub version: u64,
+    pub version:          u64,
     #[serde(default)]
-    pub tokens: Vec<halolake_router_core::TokenConfig>,
+    pub tokens:           Vec<halolake_router_core::TokenConfig>,
     #[serde(default)]
-    pub channels: Vec<ChannelConfig>,
+    pub channels:         Vec<ChannelConfig>,
     #[serde(default)]
-    pub model_mappings: Vec<halolake_router_core::ModelMapping>,
+    pub model_mappings:   Vec<halolake_router_core::ModelMapping>,
     #[serde(default)]
     pub channel_affinity: halolake_router_core::ChannelAffinityConfig,
     #[serde(default)]
-    pub group_routing: halolake_router_core::GroupRoutingConfig,
+    pub group_routing:    halolake_router_core::GroupRoutingConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_listen")]
-    pub listen: SocketAddr,
+    pub listen:                   SocketAddr,
     #[serde(default = "default_body_limit")]
     pub request_body_limit_bytes: usize,
     /// Number of thread-per-core workers. Each worker runs its own monoio
@@ -37,15 +37,15 @@ pub struct ServerConfig {
     /// load-balances connections across cores with no shared accept lock.
     /// `0` (the default) means "one per available core".
     #[serde(default)]
-    pub workers: usize,
+    pub workers:                  usize,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            listen: default_listen(),
+            listen:                   default_listen(),
             request_body_limit_bytes: default_body_limit(),
-            workers: 0,
+            workers:                  0,
         }
     }
 }
@@ -53,19 +53,19 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProtocolConfig {
     #[serde(default = "default_claude_version")]
-    pub claude_version: String,
+    pub claude_version:      String,
     #[serde(default = "default_true")]
     pub pass_anthropic_beta: bool,
     #[serde(default = "default_gemini_api_version")]
-    pub gemini_api_version: String,
+    pub gemini_api_version:  String,
 }
 
 impl Default for ProtocolConfig {
     fn default() -> Self {
         Self {
-            claude_version: default_claude_version(),
+            claude_version:      default_claude_version(),
             pass_anthropic_beta: true,
-            gemini_api_version: default_gemini_api_version(),
+            gemini_api_version:  default_gemini_api_version(),
         }
     }
 }
@@ -75,13 +75,13 @@ pub struct UpstreamConfig {
     #[serde(default)]
     pub connect_timeout_ms: Option<u64>,
     #[serde(default)]
-    pub read_timeout_ms: Option<u64>,
+    pub read_timeout_ms:    Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct AuthConfig {
     #[serde(default = "default_true")]
-    pub accept_bearer: bool,
+    pub accept_bearer:    bool,
     #[serde(default = "default_true")]
     pub accept_x_api_key: bool,
 }
@@ -89,17 +89,17 @@ pub struct AuthConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ControlPlaneConfig {
     #[serde(default)]
-    pub snapshot_url: Option<String>,
+    pub snapshot_url:              Option<String>,
     #[serde(default)]
-    pub usage_url: Option<String>,
+    pub usage_url:                 Option<String>,
     #[serde(default)]
-    pub channel_feedback_url: Option<String>,
+    pub channel_feedback_url:      Option<String>,
     #[serde(default)]
-    pub internal_key: Option<String>,
+    pub internal_key:              Option<String>,
     #[serde(default)]
-    pub connect_timeout_ms: Option<u64>,
+    pub connect_timeout_ms:        Option<u64>,
     #[serde(default)]
-    pub read_timeout_ms: Option<u64>,
+    pub read_timeout_ms:           Option<u64>,
     #[serde(default)]
     pub snapshot_poll_interval_ms: Option<u64>,
 }
@@ -107,7 +107,7 @@ pub struct ControlPlaneConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            accept_bearer: true,
+            accept_bearer:    true,
             accept_x_api_key: true,
         }
     }

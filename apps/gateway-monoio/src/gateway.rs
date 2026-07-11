@@ -4,29 +4,29 @@ use service_async::stack::FactoryStack;
 
 #[derive(Clone)]
 pub struct Gateway {
-    pub(crate) snapshots: SnapshotStore,
+    pub(crate) snapshots:                SnapshotStore,
     pub(crate) request_body_limit_bytes: usize,
-    pub(crate) chat: ChatGatewayService,
-    pub(crate) image: ImageGatewayService,
-    pub(crate) claude: ClaudeMessagesGatewayService,
-    pub(crate) gemini: GeminiGatewayService,
-    pub(crate) raw_openai: RawOpenAiGatewayService,
+    pub(crate) chat:                     ChatGatewayService,
+    pub(crate) image:                    ImageGatewayService,
+    pub(crate) claude:                   ClaudeMessagesGatewayService,
+    pub(crate) gemini:                   GeminiGatewayService,
+    pub(crate) raw_openai:               RawOpenAiGatewayService,
 }
 
 #[derive(Clone)]
 pub(crate) struct AppParams {
-    snapshots: SnapshotStore,
-    protocol: ProtocolConfig,
-    upstream: UpstreamConfig,
-    auth: AuthConfig,
-    usage: UsageReporter,
-    channel_feedback: ChannelFeedbackReporter,
+    snapshots:                SnapshotStore,
+    protocol:                 ProtocolConfig,
+    upstream:                 UpstreamConfig,
+    auth:                     AuthConfig,
+    usage:                    UsageReporter,
+    channel_feedback:         ChannelFeedbackReporter,
     request_body_limit_bytes: usize,
 }
 
 #[derive(Clone)]
 pub(crate) struct SnapshotStore {
-    inner: Arc<ArcSwap<SnapshotState>>,
+    inner:          Arc<ArcSwap<SnapshotState>>,
     // The affinity cache lives here, NOT inside the atomically-swapped
     // SnapshotState, so recorded affinities survive snapshot refresh. Held
     // behind an Arc so a future per-worker/shared deployment can decide the
@@ -36,7 +36,7 @@ pub(crate) struct SnapshotStore {
 
 pub(crate) struct SnapshotState {
     pub(crate) snapshot: IndexedSnapshot,
-    pub(crate) models: Arc<[String]>,
+    pub(crate) models:   Arc<[String]>,
 }
 
 impl SnapshotStore {
@@ -311,8 +311,7 @@ pub async fn serve(addr: SocketAddr, gateway: Gateway) -> Result<()> {
     // reuse_port lets every worker thread bind the same address so the kernel
     // load-balances accepted connections across the per-core runtimes.
     let opts = ListenerOpts::new().reuse_port(true).reuse_addr(true);
-    let listener =
-        TcpListener::bind_with_config(addr, &opts).context("bind gateway listener")?;
+    let listener = TcpListener::bind_with_config(addr, &opts).context("bind gateway listener")?;
 
     // monolake-style FactoryStack:
     //   Gateway
@@ -386,12 +385,12 @@ impl GatewayConfig {
 
     fn into_snapshot(self) -> GatewaySnapshot {
         GatewaySnapshot {
-            version: self.version,
-            tokens: self.tokens,
-            channels: self.channels,
-            model_mappings: self.model_mappings,
+            version:          self.version,
+            tokens:           self.tokens,
+            channels:         self.channels,
+            model_mappings:   self.model_mappings,
             channel_affinity: self.channel_affinity,
-            group_routing: self.group_routing,
+            group_routing:    self.group_routing,
         }
     }
 
@@ -412,13 +411,13 @@ impl Gateway {
     ) -> Result<Self> {
         let params = AppParams::try_from_config(config, affinity_cache)?;
         Ok(Self {
-            snapshots: params.param(),
+            snapshots:                params.param(),
             request_body_limit_bytes: Param::<RequestBodyLimit>::param(&params).0,
-            chat: ChatGatewayService::from_params(&params),
-            image: ImageGatewayService::from_params(&params),
-            claude: ClaudeMessagesGatewayService::from_params(&params),
-            gemini: GeminiGatewayService::from_params(&params),
-            raw_openai: RawOpenAiGatewayService::from_params(&params),
+            chat:                     ChatGatewayService::from_params(&params),
+            image:                    ImageGatewayService::from_params(&params),
+            claude:                   ClaudeMessagesGatewayService::from_params(&params),
+            gemini:                   GeminiGatewayService::from_params(&params),
+            raw_openai:               RawOpenAiGatewayService::from_params(&params),
         })
     }
 

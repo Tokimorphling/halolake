@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-
+use crate::storage::{ManagementStore, OptionStore};
 use halolake_control_plane::{
     ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError, ChannelFeedbackEvent,
     ChannelFeedbackReason, UpdateChannelRequest,
@@ -7,14 +6,13 @@ use halolake_control_plane::{
 use halolake_domain::{ChannelRecord, STATUS_AUTO_DISABLED, STATUS_ENABLED};
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
+use std::collections::BTreeMap;
 use tracing::warn;
-
-use crate::storage::{ManagementStore, OptionStore};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelFeedbackService {
     management: ManagementStore,
-    options: OptionStore,
+    options:    OptionStore,
 }
 
 impl ChannelFeedbackService {
@@ -34,9 +32,9 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
         let options = self.options.values().map_err(feedback_storage)?;
         let policy = DisablePolicy::from_options(&options);
         let mut ack = ChannelFeedbackAck {
-            accepted: req.len(),
+            accepted:          req.len(),
             disabled_channels: 0,
-            disabled_keys: 0,
+            disabled_keys:     0,
         };
 
         if !policy.enabled {
@@ -90,9 +88,9 @@ impl ChannelFeedbackService {
 
 #[derive(Debug, Clone)]
 struct DisablePolicy {
-    enabled: bool,
+    enabled:       bool,
     status_ranges: Vec<StatusCodeRange>,
-    keywords: Vec<String>,
+    keywords:      Vec<String>,
 }
 
 impl DisablePolicy {
@@ -149,9 +147,9 @@ impl DisablePolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DisableResult {
-    changed: bool,
+    changed:          bool,
     channel_disabled: bool,
-    key_disabled: bool,
+    key_disabled:     bool,
 }
 
 fn apply_auto_disable(channel: &mut ChannelRecord, event: &ChannelFeedbackEvent) -> DisableResult {
@@ -180,26 +178,26 @@ fn apply_auto_disable(channel: &mut ChannelRecord, event: &ChannelFeedbackEvent)
             save_channel_status_info(channel, "All keys are disabled", event.created_at_unix_ms);
         }
         return DisableResult {
-            changed: !already_disabled
+            changed:          !already_disabled
                 || !channel_was_disabled && channel.status == STATUS_AUTO_DISABLED,
             channel_disabled: !channel_was_disabled && channel.status == STATUS_AUTO_DISABLED,
-            key_disabled: !already_disabled,
+            key_disabled:     !already_disabled,
         };
     }
 
     if channel.status == STATUS_AUTO_DISABLED {
         return DisableResult {
-            changed: false,
+            changed:          false,
             channel_disabled: false,
-            key_disabled: false,
+            key_disabled:     false,
         };
     }
     channel.status = STATUS_AUTO_DISABLED;
     save_channel_status_info(channel, &reason, event.created_at_unix_ms);
     DisableResult {
-        changed: true,
+        changed:          true,
         channel_disabled: true,
-        key_disabled: false,
+        key_disabled:     false,
     }
 }
 
@@ -220,16 +218,16 @@ fn feedback_reason(event: &ChannelFeedbackEvent) -> String {
 
 #[derive(Debug, Clone, Default)]
 struct MultiKeyState {
-    status: BTreeMap<usize, i32>,
-    disabled_time: BTreeMap<usize, i64>,
+    status:          BTreeMap<usize, i32>,
+    disabled_time:   BTreeMap<usize, i64>,
     disabled_reason: BTreeMap<usize, String>,
 }
 
 fn multi_key_state(channel: &ChannelRecord) -> MultiKeyState {
     let value = channel_setting_json(channel);
     MultiKeyState {
-        status: json_usize_i32_map(value.get("multi_key_status_list")),
-        disabled_time: json_usize_i64_map(value.get("multi_key_disabled_time")),
+        status:          json_usize_i32_map(value.get("multi_key_status_list")),
+        disabled_time:   json_usize_i64_map(value.get("multi_key_disabled_time")),
         disabled_reason: json_usize_string_map(value.get("multi_key_disabled_reason")),
     }
 }
@@ -296,7 +294,7 @@ fn channel_key_count(key: &str) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StatusCodeRange {
     start: u16,
-    end: u16,
+    end:   u16,
 }
 
 impl StatusCodeRange {
@@ -366,7 +364,7 @@ fn parse_status_code_token(token: &str) -> Result<StatusCodeRange, ()> {
     let code = parse_http_status(&token)?;
     Ok(StatusCodeRange {
         start: code,
-        end: code,
+        end:   code,
     })
 }
 
@@ -465,11 +463,11 @@ mod tests {
             vec![
                 StatusCodeRange {
                     start: 401,
-                    end: 403
+                    end:   403,
                 },
                 StatusCodeRange {
                     start: 500,
-                    end: 505
+                    end:   505,
                 }
             ]
         );
@@ -479,44 +477,41 @@ mod tests {
     #[test]
     fn disables_multi_key_by_original_index_and_channel_when_all_keys_disabled() {
         let mut channel = ChannelRecord {
-            id: 7,
-            snapshot_id: Some("openai-main".to_string()),
-            channel_type: 1,
-            key: "key-a\nkey-b".to_string(),
-            status: STATUS_ENABLED,
-            name: "openai-main".to_string(),
-            weight: Some(1),
-            created_time: 0,
-            test_time: 0,
-            response_time: 0,
-            base_url: None,
-            balance: 0.0,
+            id:                   7,
+            snapshot_id:          Some("openai-main".to_string()),
+            channel_type:         1,
+            key:                  "key-a\nkey-b".to_string(),
+            status:               STATUS_ENABLED,
+            name:                 "openai-main".to_string(),
+            weight:               Some(1),
+            created_time:         0,
+            test_time:            0,
+            response_time:        0,
+            base_url:             None,
+            balance:              0.0,
             balance_updated_time: 0,
-            models: "gpt-4o".to_string(),
-            group: "default".to_string(),
-            used_quota: 0,
-            model_mapping: None,
-            priority: Some(0),
-            auto_ban: Some(1),
-            tag: None,
-            setting: Some(r#"{"multi_key_status_list":{"0":3}}"#.to_string()),
-            param_override: None,
-            header_override: None,
-            remark: None,
-            proxy_id: None,
+            models:               "gpt-4o".to_string(),
+            group:                "default".to_string(),
+            used_quota:           0,
+            model_mapping:        None,
+            priority:             Some(0),
+            auto_ban:             Some(1),
+            tag:                  None,
+            setting:              Some(r#"{"multi_key_status_list":{"0":3}}"#.to_string()),
+            param_override:       None,
+            header_override:      None,
+            remark:               None,
+            proxy_id:             None,
         };
-        let result = apply_auto_disable(
-            &mut channel,
-            &ChannelFeedbackEvent {
-                request_id: "req".to_string(),
-                channel_id: "openai-main".to_string(),
-                api_key_index: Some(1),
-                status_code: Some(401),
-                reason: ChannelFeedbackReason::UpstreamStatus,
-                message: "unauthorized".to_string(),
-                created_at_unix_ms: 1_700_000_000_000,
-            },
-        );
+        let result = apply_auto_disable(&mut channel, &ChannelFeedbackEvent {
+            request_id:         "req".to_string(),
+            channel_id:         "openai-main".to_string(),
+            api_key_index:      Some(1),
+            status_code:        Some(401),
+            reason:             ChannelFeedbackReason::UpstreamStatus,
+            message:            "unauthorized".to_string(),
+            created_at_unix_ms: 1_700_000_000_000,
+        });
         assert!(result.changed);
         assert!(result.key_disabled);
         assert!(result.channel_disabled);

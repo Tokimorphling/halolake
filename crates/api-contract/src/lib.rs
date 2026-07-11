@@ -9,7 +9,7 @@ pub struct ApiResponse<T> {
     pub success: bool,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<T>,
+    pub data:    Option<T>,
 }
 
 impl<T> ApiResponse<T> {
@@ -17,7 +17,7 @@ impl<T> ApiResponse<T> {
         Self {
             success: true,
             message: String::new(),
-            data: Some(data),
+            data:    Some(data),
         }
     }
 
@@ -25,7 +25,7 @@ impl<T> ApiResponse<T> {
         ApiResponse {
             success: true,
             message: String::new(),
-            data: None,
+            data:    None,
         }
     }
 
@@ -33,15 +33,15 @@ impl<T> ApiResponse<T> {
         ApiResponse {
             success: false,
             message: message.into(),
-            data: None,
+            data:    None,
         }
     }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Page<T> {
-    pub items: Vec<T>,
-    pub total: usize,
-    pub page: usize,
+    pub items:     Vec<T>,
+    pub total:     usize,
+    pub page:      usize,
     pub page_size: usize,
 }

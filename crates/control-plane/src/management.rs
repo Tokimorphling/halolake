@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::{Arc, RwLock},
-};
-
+use crate::{PublishSnapshotRequest, SnapshotError, SnapshotPublished, SnapshotPublisher};
 use bcrypt::{DEFAULT_COST, hash, verify};
 use halolake_domain::{
     CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, PageRequest,
@@ -12,9 +8,11 @@ use halolake_domain::{
 use halolake_router_core::{ChannelConfig, GatewaySnapshot, ModelMapping, Provider, TokenConfig};
 use serde_json::Value as JsonValue;
 use service_async::Service;
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::{Arc, RwLock},
+};
 use thiserror::Error;
-
-use crate::{PublishSnapshotRequest, SnapshotError, SnapshotPublished, SnapshotPublisher};
 
 const CHANNEL_TYPE_OLLAMA: i32 = 4;
 const CHANNEL_TYPE_CUSTOM: i32 = 8;
@@ -43,10 +41,10 @@ const TOKEN_STATUS_EXHAUSTED: i32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct ManagementData {
-    pub version: u64,
-    pub users: Vec<UserRecord>,
-    pub tokens: Vec<TokenRecord>,
-    pub channels: Vec<ChannelRecord>,
+    pub version:        u64,
+    pub users:          Vec<UserRecord>,
+    pub tokens:         Vec<TokenRecord>,
+    pub channels:       Vec<ChannelRecord>,
     pub model_mappings: Vec<ModelMapping>,
 }
 
@@ -75,28 +73,29 @@ impl ManagementData {
             .into_iter()
             .enumerate()
             .map(|(idx, token)| TokenRecord {
-                id: token.id.parse().unwrap_or((idx + 1) as u64),
-                snapshot_id: Some(token.id.clone()),
-                user_id: token.user_id.parse().unwrap_or(1),
-                snapshot_user_id: Some(token.user_id),
-                key: token.token,
-                status: if token.enabled { STATUS_ENABLED } else { 0 },
-                name: token.id,
-                created_time: 0,
-                accessed_time: 0,
-                expired_time: -1,
-                remain_quota: 0,
-                unlimited_quota: true,
+                id:                   token.id.parse().unwrap_or((idx + 1) as u64),
+                snapshot_id:          Some(token.id.clone()),
+                user_id:              token.user_id.parse().unwrap_or(1),
+                snapshot_user_id:     Some(token.user_id),
+                key:                  token.token,
+                status:               if token.enabled { STATUS_ENABLED } else { 0 },
+                name:                 token.id,
+                created_time:         0,
+                accessed_time:        0,
+                expired_time:         -1,
+                remain_quota:         0,
+                unlimited_quota:      true,
                 model_limits_enabled: !token.allowed_models.is_empty(),
-                model_limits: token.allowed_models.join(","),
-                allow_ips: (!token.allowed_ips.is_empty()).then(|| token.allowed_ips.join("\n")),
-                used_quota: 0,
-                group: if token.token_group.trim().is_empty() {
+                model_limits:         token.allowed_models.join(","),
+                allow_ips:            (!token.allowed_ips.is_empty())
+                    .then(|| token.allowed_ips.join("\n")),
+                used_quota:           0,
+                group:                if token.token_group.trim().is_empty() {
                     token.group
                 } else {
                     token.token_group
                 },
-                cross_group_retry: false,
+                cross_group_retry:    false,
             })
             .collect::<Vec<_>>();
 
@@ -268,8 +267,8 @@ pub struct ListUsersRequest {
 #[derive(Debug, Clone)]
 pub struct SearchUsersRequest {
     pub search: SearchRequest,
-    pub group: String,
-    pub role: Option<i32>,
+    pub group:  String,
+    pub role:   Option<i32>,
     pub status: Option<i32>,
 }
 
@@ -285,7 +284,7 @@ pub struct ValidateUserAccessTokenRequest {
 
 #[derive(Debug, Clone)]
 pub struct UpdateUserAccessTokenRequest {
-    pub id: u64,
+    pub id:           u64,
     pub access_token: String,
 }
 
@@ -297,97 +296,97 @@ pub struct BootstrapRootUserRequest {
 
 #[derive(Debug, Clone)]
 pub struct RegisterUserRequest {
-    pub user: UserRecord,
+    pub user:          UserRecord,
     pub default_token: Option<TokenRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredUser {
-    pub user: UserRecord,
+    pub user:          UserRecord,
     pub default_token: Option<TokenRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CreateUserRequest {
-    pub user: UserRecord,
+    pub user:       UserRecord,
     pub actor_role: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateUserRequest {
-    pub user: UserRecord,
+    pub user:       UserRecord,
     pub actor_role: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct DeleteUserRequest {
-    pub id: u64,
+    pub id:         u64,
     pub actor_role: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct ManageUserRequest {
-    pub id: u64,
-    pub action: String,
-    pub value: i64,
-    pub mode: String,
+    pub id:         u64,
+    pub action:     String,
+    pub value:      i64,
+    pub mode:       String,
     pub actor_role: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct AdjustUserQuotaRequest {
-    pub id: u64,
+    pub id:    u64,
     pub delta: i64,
 }
 
 #[derive(Debug, Clone)]
 pub struct SettleUsageRequest {
-    pub events: Vec<UsageEvent>,
+    pub events:  Vec<UsageEvent>,
     pub pricing: UsagePricing,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageSettlement {
-    pub settled: usize,
-    pub skipped: usize,
-    pub quota: i64,
+    pub settled:          usize,
+    pub skipped:          usize,
+    pub quota:            i64,
     pub tokens_exhausted: usize,
-    pub event_quotas: Vec<UsageEventQuota>,
+    pub event_quotas:     Vec<UsageEventQuota>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEventQuota {
     pub request_id: String,
-    pub quota: i64,
+    pub quota:      i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsagePricing {
-    pub quota_per_unit: f64,
-    pub model_ratio: BTreeMap<String, f64>,
-    pub model_price: BTreeMap<String, f64>,
-    pub completion_ratio: BTreeMap<String, f64>,
-    pub cache_ratio: BTreeMap<String, f64>,
+    pub quota_per_unit:       f64,
+    pub model_ratio:          BTreeMap<String, f64>,
+    pub model_price:          BTreeMap<String, f64>,
+    pub completion_ratio:     BTreeMap<String, f64>,
+    pub cache_ratio:          BTreeMap<String, f64>,
     pub cache_creation_ratio: BTreeMap<String, f64>,
-    pub image_ratio: BTreeMap<String, f64>,
-    pub audio_ratio: BTreeMap<String, f64>,
-    pub group_ratio: BTreeMap<String, f64>,
-    pub group_group_ratio: BTreeMap<String, BTreeMap<String, f64>>,
+    pub image_ratio:          BTreeMap<String, f64>,
+    pub audio_ratio:          BTreeMap<String, f64>,
+    pub group_ratio:          BTreeMap<String, f64>,
+    pub group_group_ratio:    BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 impl Default for UsagePricing {
     fn default() -> Self {
         Self {
-            quota_per_unit: 500_000.0,
-            model_ratio: BTreeMap::new(),
-            model_price: BTreeMap::new(),
-            completion_ratio: BTreeMap::new(),
-            cache_ratio: BTreeMap::new(),
+            quota_per_unit:       500_000.0,
+            model_ratio:          BTreeMap::new(),
+            model_price:          BTreeMap::new(),
+            completion_ratio:     BTreeMap::new(),
+            cache_ratio:          BTreeMap::new(),
             cache_creation_ratio: BTreeMap::new(),
-            image_ratio: BTreeMap::new(),
-            audio_ratio: BTreeMap::new(),
-            group_ratio: BTreeMap::from([("default".to_string(), 1.0)]),
-            group_group_ratio: BTreeMap::new(),
+            image_ratio:          BTreeMap::new(),
+            audio_ratio:          BTreeMap::new(),
+            group_ratio:          BTreeMap::from([("default".to_string(), 1.0)]),
+            group_group_ratio:    BTreeMap::new(),
         }
     }
 }
@@ -395,25 +394,25 @@ impl Default for UsagePricing {
 #[derive(Debug, Clone, Copy)]
 pub struct ListTokensRequest {
     pub user_id: Option<u64>,
-    pub page: PageRequest,
+    pub page:    PageRequest,
 }
 
 #[derive(Debug, Clone)]
 pub struct SearchTokensRequest {
     pub user_id: Option<u64>,
-    pub search: SearchRequest,
-    pub token: String,
+    pub search:  SearchRequest,
+    pub token:   String,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct GetTokenRequest {
-    pub id: u64,
+    pub id:      u64,
     pub user_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct RevealTokenKeyRequest {
-    pub id: u64,
+    pub id:      u64,
     pub user_id: Option<u64>,
 }
 
@@ -429,13 +428,13 @@ pub struct CreateTokenRequest {
 
 #[derive(Debug, Clone)]
 pub struct UpdateTokenRequest {
-    pub token: TokenRecord,
+    pub token:   TokenRecord,
     pub user_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct DeleteTokenRequest {
-    pub id: u64,
+    pub id:      u64,
     pub user_id: Option<u64>,
 }
 
@@ -481,7 +480,7 @@ pub struct DeleteChannelRequest {
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub struct ChannelStatusUpdateRequest {
-    pub id: u64,
+    pub id:     u64,
     pub status: i32,
 }
 
@@ -496,20 +495,20 @@ pub struct BatchSetChannelTagRequest {
 
 #[derive(Debug, Clone, Default)]
 pub struct ChannelTagPatch {
-    pub status: Option<i32>,
-    pub new_tag: Option<String>,
-    pub priority: Option<i64>,
-    pub weight: Option<u32>,
-    pub model_mapping: Option<String>,
-    pub models: Option<String>,
-    pub groups: Option<String>,
-    pub param_override: Option<String>,
+    pub status:          Option<i32>,
+    pub new_tag:         Option<String>,
+    pub priority:        Option<i64>,
+    pub weight:          Option<u32>,
+    pub model_mapping:   Option<String>,
+    pub models:          Option<String>,
+    pub groups:          Option<String>,
+    pub param_override:  Option<String>,
     pub header_override: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateChannelsByTagRequest {
-    pub tag: String,
+    pub tag:   String,
     pub patch: ChannelTagPatch,
 }
 
@@ -702,20 +701,20 @@ impl Service<BootstrapRootUserRequest> for MemoryManagementStore {
                 return Err(ManagementError::Duplicate);
             }
             let mut user = UserRecord {
-                id: next_id(data.users.iter().map(|user| user.id)),
-                username: req.username.trim().to_string(),
-                password: req.password,
-                access_token: None,
-                display_name: "Root User".to_string(),
-                role: ROLE_ROOT_USER,
-                status: STATUS_ENABLED,
-                email: String::new(),
-                quota: 100_000_000,
-                used_quota: 0,
-                group: "default".to_string(),
-                setting: String::new(),
-                remark: String::new(),
-                created_at: now_unix(),
+                id:            next_id(data.users.iter().map(|user| user.id)),
+                username:      req.username.trim().to_string(),
+                password:      req.password,
+                access_token:  None,
+                display_name:  "Root User".to_string(),
+                role:          ROLE_ROOT_USER,
+                status:        STATUS_ENABLED,
+                email:         String::new(),
+                quota:         100_000_000,
+                used_quota:    0,
+                group:         "default".to_string(),
+                setting:       String::new(),
+                remark:        String::new(),
+                created_at:    now_unix(),
                 last_login_at: 0,
             };
             validate_user_for_write(&user)?;
@@ -842,7 +841,7 @@ impl Service<RegisterUserRequest> for MemoryManagementStore {
                 data.tokens.push(token.clone());
             }
             Ok(RegisteredUser {
-                user: user.sanitized(),
+                user:          user.sanitized(),
                 default_token: default_token.map(TokenRecord::masked),
             })
         })
@@ -1548,8 +1547,8 @@ fn channel_model_mappings(channel: &ChannelRecord) -> Result<Vec<ModelMapping>, 
             .into_iter()
             .map(|model| ModelMapping {
                 requested_model: model.clone(),
-                channel_id: channel_snapshot_id(channel),
-                upstream_model: model,
+                channel_id:      channel_snapshot_id(channel),
+                upstream_model:  model,
             })
             .collect());
     };
@@ -1557,7 +1556,7 @@ fn channel_model_mappings(channel: &ChannelRecord) -> Result<Vec<ModelMapping>, 
     let parsed: HashMap<String, String> =
         serde_json::from_str(mapping).map_err(|err| ManagementError::InvalidModelMapping {
             channel_id: channel.id,
-            message: err.to_string(),
+            message:    err.to_string(),
         })?;
     Ok(parsed
         .into_iter()
@@ -2008,15 +2007,13 @@ fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use halolake_domain::CHANNEL_TYPE_OPENAI;
+    use service_async::Service;
     use std::{
         future::Future,
         task::{Context, Poll, Waker},
     };
-
-    use halolake_domain::CHANNEL_TYPE_OPENAI;
-    use service_async::Service;
-
-    use super::*;
 
     fn block_on<F: Future>(future: F) -> F::Output {
         let waker = Waker::noop();
@@ -2077,39 +2074,39 @@ mod tests {
     fn settles_usage_by_snapshot_ids() {
         block_on(async {
             let snapshot = GatewaySnapshot {
-                version: 1,
-                tokens: vec![TokenConfig {
-                    id: "dev-token".to_string(),
-                    token: "secret".to_string(),
-                    user_id: "1".to_string(),
-                    user_group: "default".to_string(),
-                    token_group: String::new(),
-                    group: "default".to_string(),
-                    enabled: true,
+                version:          1,
+                tokens:           vec![TokenConfig {
+                    id:             "dev-token".to_string(),
+                    token:          "secret".to_string(),
+                    user_id:        "1".to_string(),
+                    user_group:     "default".to_string(),
+                    token_group:    String::new(),
+                    group:          "default".to_string(),
+                    enabled:        true,
                     allowed_models: Vec::new(),
-                    allowed_ips: Vec::new(),
+                    allowed_ips:    Vec::new(),
                 }],
-                channels: vec![ChannelConfig {
-                    id: "openai-main".to_string(),
-                    provider: Provider::OpenAi,
-                    base_url: "https://example.com".to_string(),
-                    api_key: "upstream".to_string(),
-                    api_keys: vec!["upstream".to_string()],
+                channels:         vec![ChannelConfig {
+                    id:              "openai-main".to_string(),
+                    provider:        Provider::OpenAi,
+                    base_url:        "https://example.com".to_string(),
+                    api_key:         "upstream".to_string(),
+                    api_keys:        vec!["upstream".to_string()],
                     api_key_indexes: Vec::new(),
-                    api_key_env: None,
-                    enabled: true,
-                    weight: 1,
-                    models: vec!["gpt-4o".to_string()],
-                    groups: Vec::new(),
-                    proxy: None,
+                    api_key_env:     None,
+                    enabled:         true,
+                    weight:          1,
+                    models:          vec!["gpt-4o".to_string()],
+                    groups:          Vec::new(),
+                    proxy:           None,
                 }],
-                model_mappings: vec![ModelMapping {
+                model_mappings:   vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
-                    channel_id: "openai-main".to_string(),
-                    upstream_model: "gpt-4o".to_string(),
+                    channel_id:      "openai-main".to_string(),
+                    upstream_model:  "gpt-4o".to_string(),
                 }],
                 channel_affinity: Default::default(),
-                group_routing: Default::default(),
+                group_routing:    Default::default(),
             };
             let mut data = ManagementData::from_snapshot(snapshot);
             let mut root = user(1, "root", ROLE_ROOT_USER);
@@ -2121,28 +2118,29 @@ mod tests {
             let settlement = store
                 .call(SettleUsageRequest {
                     pricing: UsagePricing::default(),
-                    events: vec![UsageEvent {
-                        request_id: "req-1".to_string(),
-                        user_id: "1".to_string(),
-                        token_id: "dev-token".to_string(),
-                        channel_id: "openai-main".to_string(),
-                        group: String::new(),
-                        model: "gpt-4o".to_string(),
-                        upstream_model: "gpt-4o".to_string(),
-                        prompt_tokens: Some(10),
-                        completion_tokens: Some(32),
-                        total_tokens: None,
-                        cache_read_tokens: None,
+                    events:  vec![UsageEvent {
+                        request_id:            "req-1".to_string(),
+                        user_id:               "1".to_string(),
+                        token_id:              "dev-token".to_string(),
+                        channel_id:            "openai-main".to_string(),
+                        group:                 String::new(),
+                        model:                 "gpt-4o".to_string(),
+                        upstream_model:        "gpt-4o".to_string(),
+                        prompt_tokens:         Some(10),
+                        completion_tokens:     Some(32),
+                        total_tokens:          None,
+                        cache_read_tokens:     None,
                         cache_creation_tokens: None,
-                        image_tokens: None,
-                        audio_tokens: None,
-                        quota: None,
-                        status: UsageStatus::Success,
-                        latency_ms: 123,
-                        is_stream: false,
-                        ip: String::new(),
-                        upstream_request_id: String::new(),
-                        created_at_unix_ms: 1_700_000_000_000,
+                        image_tokens:          None,
+                        audio_tokens:          None,
+                        quota:                 None,
+                        status:                UsageStatus::Success,
+                        latency_ms:            123,
+                        first_response_ms:     None,
+                        is_stream:             false,
+                        ip:                    String::new(),
+                        upstream_request_id:   String::new(),
+                        created_at_unix_ms:    1_700_000_000_000,
                     }],
                 })
                 .await
@@ -2176,28 +2174,29 @@ mod tests {
             let settlement = store
                 .call(SettleUsageRequest {
                     pricing: UsagePricing::default(),
-                    events: vec![UsageEvent {
-                        request_id: "req-1".to_string(),
-                        user_id: "1".to_string(),
-                        token_id: "1".to_string(),
-                        channel_id: String::new(),
-                        group: String::new(),
-                        model: "gpt-4o".to_string(),
-                        upstream_model: "gpt-4o".to_string(),
-                        prompt_tokens: Some(2),
-                        completion_tokens: None,
-                        total_tokens: None,
-                        cache_read_tokens: None,
+                    events:  vec![UsageEvent {
+                        request_id:            "req-1".to_string(),
+                        user_id:               "1".to_string(),
+                        token_id:              "1".to_string(),
+                        channel_id:            String::new(),
+                        group:                 String::new(),
+                        model:                 "gpt-4o".to_string(),
+                        upstream_model:        "gpt-4o".to_string(),
+                        prompt_tokens:         Some(2),
+                        completion_tokens:     None,
+                        total_tokens:          None,
+                        cache_read_tokens:     None,
                         cache_creation_tokens: None,
-                        image_tokens: None,
-                        audio_tokens: None,
-                        quota: None,
-                        status: UsageStatus::Success,
-                        latency_ms: 1,
-                        is_stream: false,
-                        ip: String::new(),
-                        upstream_request_id: String::new(),
-                        created_at_unix_ms: 1_700_000_000_000,
+                        image_tokens:          None,
+                        audio_tokens:          None,
+                        quota:                 None,
+                        status:                UsageStatus::Success,
+                        latency_ms:            1,
+                        first_response_ms:     None,
+                        is_stream:             false,
+                        ip:                    String::new(),
+                        upstream_request_id:   String::new(),
+                        created_at_unix_ms:    1_700_000_000_000,
                     }],
                 })
                 .await
@@ -2228,28 +2227,29 @@ mod tests {
             let settlement = store
                 .call(SettleUsageRequest {
                     pricing: UsagePricing::default(),
-                    events: vec![UsageEvent {
-                        request_id: "req-1".to_string(),
-                        user_id: "1".to_string(),
-                        token_id: "1".to_string(),
-                        channel_id: String::new(),
-                        group: String::new(),
-                        model: "gpt-4o".to_string(),
-                        upstream_model: "gpt-4o".to_string(),
-                        prompt_tokens: None,
-                        completion_tokens: None,
-                        total_tokens: None,
-                        cache_read_tokens: None,
+                    events:  vec![UsageEvent {
+                        request_id:            "req-1".to_string(),
+                        user_id:               "1".to_string(),
+                        token_id:              "1".to_string(),
+                        channel_id:            String::new(),
+                        group:                 String::new(),
+                        model:                 "gpt-4o".to_string(),
+                        upstream_model:        "gpt-4o".to_string(),
+                        prompt_tokens:         None,
+                        completion_tokens:     None,
+                        total_tokens:          None,
+                        cache_read_tokens:     None,
                         cache_creation_tokens: None,
-                        image_tokens: None,
-                        audio_tokens: None,
-                        quota: None,
-                        status: UsageStatus::UpstreamError,
-                        latency_ms: 1,
-                        is_stream: false,
-                        ip: String::new(),
-                        upstream_request_id: String::new(),
-                        created_at_unix_ms: 1_700_000_000_000,
+                        image_tokens:          None,
+                        audio_tokens:          None,
+                        quota:                 None,
+                        status:                UsageStatus::UpstreamError,
+                        latency_ms:            1,
+                        first_response_ms:     None,
+                        is_stream:             false,
+                        ip:                    String::new(),
+                        upstream_request_id:   String::new(),
+                        created_at_unix_ms:    1_700_000_000_000,
                     }],
                 })
                 .await
@@ -2268,39 +2268,39 @@ mod tests {
     fn settles_usage_with_model_and_group_ratios() {
         block_on(async {
             let snapshot = GatewaySnapshot {
-                version: 1,
-                tokens: vec![TokenConfig {
-                    id: "dev-token".to_string(),
-                    token: "secret".to_string(),
-                    user_id: "1".to_string(),
-                    user_group: "default".to_string(),
-                    token_group: String::new(),
-                    group: "default".to_string(),
-                    enabled: true,
+                version:          1,
+                tokens:           vec![TokenConfig {
+                    id:             "dev-token".to_string(),
+                    token:          "secret".to_string(),
+                    user_id:        "1".to_string(),
+                    user_group:     "default".to_string(),
+                    token_group:    String::new(),
+                    group:          "default".to_string(),
+                    enabled:        true,
                     allowed_models: Vec::new(),
-                    allowed_ips: Vec::new(),
+                    allowed_ips:    Vec::new(),
                 }],
-                channels: vec![ChannelConfig {
-                    id: "openai-main".to_string(),
-                    provider: Provider::OpenAi,
-                    base_url: "https://example.com".to_string(),
-                    api_key: "upstream".to_string(),
-                    api_keys: vec!["upstream".to_string()],
+                channels:         vec![ChannelConfig {
+                    id:              "openai-main".to_string(),
+                    provider:        Provider::OpenAi,
+                    base_url:        "https://example.com".to_string(),
+                    api_key:         "upstream".to_string(),
+                    api_keys:        vec!["upstream".to_string()],
                     api_key_indexes: Vec::new(),
-                    api_key_env: None,
-                    enabled: true,
-                    weight: 1,
-                    models: vec!["gpt-4o".to_string()],
-                    groups: Vec::new(),
-                    proxy: None,
+                    api_key_env:     None,
+                    enabled:         true,
+                    weight:          1,
+                    models:          vec!["gpt-4o".to_string()],
+                    groups:          Vec::new(),
+                    proxy:           None,
                 }],
-                model_mappings: vec![ModelMapping {
+                model_mappings:   vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
-                    channel_id: "openai-main".to_string(),
-                    upstream_model: "gpt-4o".to_string(),
+                    channel_id:      "openai-main".to_string(),
+                    upstream_model:  "gpt-4o".to_string(),
                 }],
                 channel_affinity: Default::default(),
-                group_routing: Default::default(),
+                group_routing:    Default::default(),
             };
             let mut data = ManagementData::from_snapshot(snapshot);
             let mut root = user(1, "root", ROLE_ROOT_USER);
@@ -2322,28 +2322,29 @@ mod tests {
                         )]),
                         ..UsagePricing::default()
                     },
-                    events: vec![UsageEvent {
-                        request_id: "req-1".to_string(),
-                        user_id: "1".to_string(),
-                        token_id: "dev-token".to_string(),
-                        channel_id: "openai-main".to_string(),
-                        group: "paid".to_string(),
-                        model: "gpt-4o".to_string(),
-                        upstream_model: "gpt-4o".to_string(),
-                        prompt_tokens: Some(100),
-                        completion_tokens: Some(50),
-                        total_tokens: Some(150),
-                        cache_read_tokens: None,
+                    events:  vec![UsageEvent {
+                        request_id:            "req-1".to_string(),
+                        user_id:               "1".to_string(),
+                        token_id:              "dev-token".to_string(),
+                        channel_id:            "openai-main".to_string(),
+                        group:                 "paid".to_string(),
+                        model:                 "gpt-4o".to_string(),
+                        upstream_model:        "gpt-4o".to_string(),
+                        prompt_tokens:         Some(100),
+                        completion_tokens:     Some(50),
+                        total_tokens:          Some(150),
+                        cache_read_tokens:     None,
                         cache_creation_tokens: None,
-                        image_tokens: None,
-                        audio_tokens: None,
-                        quota: None,
-                        status: UsageStatus::Success,
-                        latency_ms: 123,
-                        is_stream: false,
-                        ip: String::new(),
-                        upstream_request_id: String::new(),
-                        created_at_unix_ms: 1_700_000_000_000,
+                        image_tokens:          None,
+                        audio_tokens:          None,
+                        quota:                 None,
+                        status:                UsageStatus::Success,
+                        latency_ms:            123,
+                        first_response_ms:     None,
+                        is_stream:             false,
+                        ip:                    String::new(),
+                        upstream_request_id:   String::new(),
+                        created_at_unix_ms:    1_700_000_000_000,
                     }],
                 })
                 .await
@@ -2384,28 +2385,29 @@ mod tests {
                         audio_ratio: BTreeMap::from([("gpt-4o".to_string(), 3.0)]),
                         ..UsagePricing::default()
                     },
-                    events: vec![UsageEvent {
-                        request_id: "req-cache".to_string(),
-                        user_id: "1".to_string(),
-                        token_id: "1".to_string(),
-                        channel_id: String::new(),
-                        group: String::new(),
-                        model: "gpt-4o".to_string(),
-                        upstream_model: "gpt-4o".to_string(),
-                        prompt_tokens: Some(130),
-                        completion_tokens: Some(10),
-                        total_tokens: Some(140),
-                        cache_read_tokens: Some(40),
+                    events:  vec![UsageEvent {
+                        request_id:            "req-cache".to_string(),
+                        user_id:               "1".to_string(),
+                        token_id:              "1".to_string(),
+                        channel_id:            String::new(),
+                        group:                 String::new(),
+                        model:                 "gpt-4o".to_string(),
+                        upstream_model:        "gpt-4o".to_string(),
+                        prompt_tokens:         Some(130),
+                        completion_tokens:     Some(10),
+                        total_tokens:          Some(140),
+                        cache_read_tokens:     Some(40),
                         cache_creation_tokens: Some(20),
-                        image_tokens: Some(20),
-                        audio_tokens: Some(10),
-                        quota: None,
-                        status: UsageStatus::Success,
-                        latency_ms: 1,
-                        is_stream: false,
-                        ip: String::new(),
-                        upstream_request_id: String::new(),
-                        created_at_unix_ms: 1_700_000_000_000,
+                        image_tokens:          Some(20),
+                        audio_tokens:          Some(10),
+                        quota:                 None,
+                        status:                UsageStatus::Success,
+                        latency_ms:            1,
+                        first_response_ms:     None,
+                        is_stream:             false,
+                        ip:                    String::new(),
+                        upstream_request_id:   String::new(),
+                        created_at_unix_ms:    1_700_000_000_000,
                     }],
                 })
                 .await
@@ -2425,51 +2427,51 @@ mod tests {
             3,
             Vec::new(),
             vec![TokenRecord {
-                id: 1,
-                snapshot_id: None,
-                user_id: 7,
-                snapshot_user_id: None,
-                key: "dev-token".to_string(),
-                status: STATUS_ENABLED,
-                name: "Dev".to_string(),
-                created_time: 0,
-                accessed_time: 0,
-                expired_time: -1,
-                remain_quota: 0,
-                unlimited_quota: true,
+                id:                   1,
+                snapshot_id:          None,
+                user_id:              7,
+                snapshot_user_id:     None,
+                key:                  "dev-token".to_string(),
+                status:               STATUS_ENABLED,
+                name:                 "Dev".to_string(),
+                created_time:         0,
+                accessed_time:        0,
+                expired_time:         -1,
+                remain_quota:         0,
+                unlimited_quota:      true,
                 model_limits_enabled: true,
-                model_limits: "gpt-4o,claude".to_string(),
-                allow_ips: None,
-                used_quota: 0,
-                group: String::new(),
-                cross_group_retry: false,
+                model_limits:         "gpt-4o,claude".to_string(),
+                allow_ips:            None,
+                used_quota:           0,
+                group:                String::new(),
+                cross_group_retry:    false,
             }],
             vec![ChannelRecord {
-                id: 2,
-                snapshot_id: None,
-                channel_type: CHANNEL_TYPE_OPENAI,
-                key: "upstream".to_string(),
-                status: STATUS_ENABLED,
-                name: "OpenAI".to_string(),
-                weight: Some(1),
-                created_time: 0,
-                test_time: 0,
-                response_time: 0,
-                base_url: Some("https://example.com".to_string()),
-                balance: 0.0,
+                id:                   2,
+                snapshot_id:          None,
+                channel_type:         CHANNEL_TYPE_OPENAI,
+                key:                  "upstream".to_string(),
+                status:               STATUS_ENABLED,
+                name:                 "OpenAI".to_string(),
+                weight:               Some(1),
+                created_time:         0,
+                test_time:            0,
+                response_time:        0,
+                base_url:             Some("https://example.com".to_string()),
+                balance:              0.0,
                 balance_updated_time: 0,
-                models: "gpt-4o".to_string(),
-                group: "default".to_string(),
-                used_quota: 0,
-                model_mapping: Some(r#"{"gpt-4o":"upstream-gpt"}"#.to_string()),
-                priority: Some(0),
-                auto_ban: Some(1),
-                tag: None,
-                setting: None,
-                param_override: None,
-                header_override: None,
-                remark: None,
-                proxy_id: None,
+                models:               "gpt-4o".to_string(),
+                group:                "default".to_string(),
+                used_quota:           0,
+                model_mapping:        Some(r#"{"gpt-4o":"upstream-gpt"}"#.to_string()),
+                priority:             Some(0),
+                auto_ban:             Some(1),
+                tag:                  None,
+                setting:              None,
+                param_override:       None,
+                header_override:      None,
+                remark:               None,
+                proxy_id:             None,
             }],
             Vec::new(),
         );
@@ -2530,31 +2532,31 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec![ChannelRecord {
-                id: 2,
-                snapshot_id: None,
-                channel_type: CHANNEL_TYPE_OPENAI,
-                key: "key-a\nkey-b\nkey-c".to_string(),
-                status: STATUS_ENABLED,
-                name: "OpenAI".to_string(),
-                weight: Some(1),
-                created_time: 0,
-                test_time: 0,
-                response_time: 0,
-                base_url: Some("https://example.com".to_string()),
-                balance: 0.0,
+                id:                   2,
+                snapshot_id:          None,
+                channel_type:         CHANNEL_TYPE_OPENAI,
+                key:                  "key-a\nkey-b\nkey-c".to_string(),
+                status:               STATUS_ENABLED,
+                name:                 "OpenAI".to_string(),
+                weight:               Some(1),
+                created_time:         0,
+                test_time:            0,
+                response_time:        0,
+                base_url:             Some("https://example.com".to_string()),
+                balance:              0.0,
                 balance_updated_time: 0,
-                models: "gpt-4o".to_string(),
-                group: "default".to_string(),
-                used_quota: 0,
-                model_mapping: None,
-                priority: Some(0),
-                auto_ban: Some(1),
-                tag: None,
-                setting: Some(r#"{"multi_key_status_list":{"1":2}}"#.to_string()),
-                param_override: None,
-                header_override: None,
-                remark: None,
-                proxy_id: None,
+                models:               "gpt-4o".to_string(),
+                group:                "default".to_string(),
+                used_quota:           0,
+                model_mapping:        None,
+                priority:             Some(0),
+                auto_ban:             Some(1),
+                tag:                  None,
+                setting:              Some(r#"{"multi_key_status_list":{"1":2}}"#.to_string()),
+                param_override:       None,
+                header_override:      None,
+                remark:               None,
+                proxy_id:             None,
             }],
             Vec::new(),
         );
@@ -2567,29 +2569,29 @@ mod tests {
     #[test]
     fn keeps_explicit_snapshot_model_mappings() {
         let original = GatewaySnapshot {
-            version: 9,
-            tokens: Vec::new(),
-            channels: vec![ChannelConfig {
-                id: "1".to_string(),
-                provider: Provider::OpenAi,
-                base_url: "https://example.com".to_string(),
-                api_key: "key".to_string(),
-                api_keys: vec!["key".to_string(), "key-b".to_string()],
+            version:          9,
+            tokens:           Vec::new(),
+            channels:         vec![ChannelConfig {
+                id:              "1".to_string(),
+                provider:        Provider::OpenAi,
+                base_url:        "https://example.com".to_string(),
+                api_key:         "key".to_string(),
+                api_keys:        vec!["key".to_string(), "key-b".to_string()],
                 api_key_indexes: Vec::new(),
-                api_key_env: None,
-                enabled: true,
-                weight: 1,
-                models: vec!["upstream".to_string()],
-                groups: Vec::new(),
-                proxy: None,
+                api_key_env:     None,
+                enabled:         true,
+                weight:          1,
+                models:          vec!["upstream".to_string()],
+                groups:          Vec::new(),
+                proxy:           None,
             }],
-            model_mappings: vec![ModelMapping {
+            model_mappings:   vec![ModelMapping {
                 requested_model: "requested".to_string(),
-                channel_id: "1".to_string(),
-                upstream_model: "upstream".to_string(),
+                channel_id:      "1".to_string(),
+                upstream_model:  "upstream".to_string(),
             }],
             channel_affinity: Default::default(),
-            group_routing: Default::default(),
+            group_routing:    Default::default(),
         };
 
         let rebuilt = ManagementData::from_snapshot(original)
@@ -2603,39 +2605,39 @@ mod tests {
     #[test]
     fn preserves_non_numeric_snapshot_ids() {
         let original = GatewaySnapshot {
-            version: 9,
-            tokens: vec![TokenConfig {
-                id: "dev-token-id".to_string(),
-                token: "dev-token".to_string(),
-                user_id: "dev-user".to_string(),
-                user_group: "default".to_string(),
-                token_group: String::new(),
-                group: "default".to_string(),
-                enabled: true,
+            version:          9,
+            tokens:           vec![TokenConfig {
+                id:             "dev-token-id".to_string(),
+                token:          "dev-token".to_string(),
+                user_id:        "dev-user".to_string(),
+                user_group:     "default".to_string(),
+                token_group:    String::new(),
+                group:          "default".to_string(),
+                enabled:        true,
                 allowed_models: vec!["deepseek-v4-pro".to_string()],
-                allowed_ips: Vec::new(),
+                allowed_ips:    Vec::new(),
             }],
-            channels: vec![ChannelConfig {
-                id: "openai-main".to_string(),
-                provider: Provider::OpenAi,
-                base_url: "https://example.com".to_string(),
-                api_key: "key".to_string(),
-                api_keys: vec!["key".to_string(), "key-b".to_string()],
+            channels:         vec![ChannelConfig {
+                id:              "openai-main".to_string(),
+                provider:        Provider::OpenAi,
+                base_url:        "https://example.com".to_string(),
+                api_key:         "key".to_string(),
+                api_keys:        vec!["key".to_string(), "key-b".to_string()],
                 api_key_indexes: Vec::new(),
-                api_key_env: None,
-                enabled: true,
-                weight: 1,
-                models: vec!["deepseek-v4-pro".to_string()],
-                groups: Vec::new(),
-                proxy: None,
+                api_key_env:     None,
+                enabled:         true,
+                weight:          1,
+                models:          vec!["deepseek-v4-pro".to_string()],
+                groups:          Vec::new(),
+                proxy:           None,
             }],
-            model_mappings: vec![ModelMapping {
+            model_mappings:   vec![ModelMapping {
                 requested_model: "deepseek-v4-pro".to_string(),
-                channel_id: "openai-main".to_string(),
-                upstream_model: "deepseek-v4-pro".to_string(),
+                channel_id:      "openai-main".to_string(),
+                upstream_model:  "deepseek-v4-pro".to_string(),
             }],
             channel_affinity: Default::default(),
-            group_routing: Default::default(),
+            group_routing:    Default::default(),
         };
 
         let rebuilt = ManagementData::from_snapshot(original)
@@ -2736,7 +2738,7 @@ mod tests {
 
             let registered = store
                 .call(RegisterUserRequest {
-                    user: alice,
+                    user:          alice,
                     default_token: Some(initial_token),
                 })
                 .await
@@ -2762,7 +2764,7 @@ mod tests {
             duplicate.password = "password".to_string();
             let err = store
                 .call(RegisterUserRequest {
-                    user: duplicate,
+                    user:          duplicate,
                     default_token: None,
                 })
                 .await
@@ -2784,7 +2786,7 @@ mod tests {
 
             let created = store
                 .call(CreateUserRequest {
-                    user: user(0, "alice", ROLE_COMMON_USER),
+                    user:       user(0, "alice", ROLE_COMMON_USER),
                     actor_role: ROLE_ROOT_USER,
                 })
                 .await
@@ -2793,7 +2795,7 @@ mod tests {
 
             let err = store
                 .call(CreateUserRequest {
-                    user: user(0, "peer-root", ROLE_ROOT_USER),
+                    user:       user(0, "peer-root", ROLE_ROOT_USER),
                     actor_role: ROLE_ROOT_USER,
                 })
                 .await
@@ -2815,7 +2817,7 @@ mod tests {
 
             let token = store
                 .call(UpdateUserAccessTokenRequest {
-                    id: 1,
+                    id:           1,
                     access_token: "access-token".to_string(),
                 })
                 .await

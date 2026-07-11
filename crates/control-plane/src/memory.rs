@@ -1,13 +1,11 @@
-use std::sync::{Arc, RwLock};
-
-use halolake_domain::UsageEvent;
-use halolake_router_core::GatewaySnapshot;
-use service_async::Service;
-
 use crate::{
     PublishSnapshotRequest, SnapshotError, SnapshotPublished, SnapshotRequest, SnapshotResponse,
     UsageAck, UsageError, UsageEventBatch, UsageEventQuota, snapshot::snapshot_response,
 };
+use halolake_domain::UsageEvent;
+use halolake_router_core::GatewaySnapshot;
+use service_async::Service;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct MemorySnapshotBus {
@@ -54,7 +52,7 @@ impl Service<PublishSnapshotRequest> for MemorySnapshotBus {
             .map_err(|_| SnapshotError::Poisoned("snapshot"))?;
         if req.snapshot.version < current.version {
             return Err(SnapshotError::StaleVersion {
-                current: current.version,
+                current:   current.version,
                 attempted: req.snapshot.version,
             });
         }
@@ -128,15 +126,13 @@ impl Service<UsageEventBatch> for MemoryUsageEventSink {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use halolake_router_core::GatewaySnapshot;
+    use service_async::Service;
     use std::{
         future::Future,
         task::{Context, Poll, Waker},
     };
-
-    use halolake_router_core::GatewaySnapshot;
-    use service_async::Service;
-
-    use super::*;
 
     fn block_on<F: Future>(future: F) -> F::Output {
         let waker = Waker::noop();

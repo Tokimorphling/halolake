@@ -34,10 +34,7 @@ async fn playground_chat_completions(
     };
 
     let gateway_base = gateway_base_url(&state);
-    let url = format!(
-        "{}/v1/chat/completions",
-        gateway_base.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/chat/completions", gateway_base.trim_end_matches('/'));
 
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
@@ -71,8 +68,8 @@ async fn playground_chat_completions(
         }
     };
 
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = upstream
         .headers()
         .get(CONTENT_TYPE)
@@ -81,9 +78,9 @@ async fn playground_chat_completions(
         .to_string();
 
     // Stream SSE and buffered JSON the same way: pipe the response body.
-    let stream = upstream.bytes_stream().map(|chunk| {
-        chunk.map_err(|err| std::io::Error::other(err.to_string()))
-    });
+    let stream = upstream
+        .bytes_stream()
+        .map(|chunk| chunk.map_err(|err| std::io::Error::other(err.to_string())));
     let mut response = Response::new(Body::from_stream(stream));
     *response.status_mut() = status;
     if let Ok(value) = HeaderValue::from_str(&content_type) {
@@ -91,10 +88,9 @@ async fn playground_chat_completions(
     }
     // Disable buffering proxies for SSE.
     if content_type.contains("text/event-stream") {
-        response.headers_mut().insert(
-            CACHE_CONTROL,
-            HeaderValue::from_static("no-cache"),
-        );
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         response
             .headers_mut()
             .insert("x-accel-buffering", HeaderValue::from_static("no"));

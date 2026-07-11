@@ -1,15 +1,3 @@
-use std::{
-    convert::Infallible,
-    error::Error,
-    fs,
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
@@ -31,16 +19,12 @@ use halolake_protocol::{
     openai_chat_to_gemini_response, openai_image_to_gemini_imagen_request,
 };
 use halolake_router_core::{
-    ChannelAffinityCache, ChannelAffinityCandidate, ChannelConfig, GatewaySnapshot, IndexedSnapshot,
-    Provider, RouteError,
+    ChannelAffinityCache, ChannelAffinityCandidate, ChannelConfig, GatewaySnapshot,
+    IndexedSnapshot, Provider, RouteError,
 };
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, header};
 use monoio::{
-    io::{
-        sink::SinkExt,
-        stream::Stream,
-        AsyncReadRent, AsyncWriteRent,
-    },
+    io::{AsyncReadRent, AsyncWriteRent, sink::SinkExt, stream::Stream},
     net::{ListenerOpts, TcpListener, TcpStream},
 };
 use monoio_http::{
@@ -50,7 +34,7 @@ use monoio_http::{
     },
     h1::{
         codec::ClientCodec,
-        payload::{stream_payload_pair, Payload},
+        payload::{Payload, stream_payload_pair},
     },
 };
 use monoio_transports::{
@@ -59,6 +43,17 @@ use monoio_transports::{
 };
 use serde::{Deserialize, Serialize};
 use service_async::Service;
+use std::{
+    convert::Infallible,
+    error::Error,
+    fs,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tracing::{Instrument, debug, error, info, warn};
 use uuid::Uuid;
 
@@ -70,13 +65,13 @@ type HttpsUpstream = HttpConnector<TlsConnector<TcpConnector>, TcpTlsAddr, TlsSt
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ResponseUsage {
-    pub(crate) prompt_tokens: Option<u64>,
-    pub(crate) completion_tokens: Option<u64>,
-    pub(crate) total_tokens: Option<u64>,
-    pub(crate) cache_read_tokens: Option<u64>,
+    pub(crate) prompt_tokens:         Option<u64>,
+    pub(crate) completion_tokens:     Option<u64>,
+    pub(crate) total_tokens:          Option<u64>,
+    pub(crate) cache_read_tokens:     Option<u64>,
     pub(crate) cache_creation_tokens: Option<u64>,
-    pub(crate) image_tokens: Option<u64>,
-    pub(crate) audio_tokens: Option<u64>,
+    pub(crate) image_tokens:          Option<u64>,
+    pub(crate) audio_tokens:          Option<u64>,
 }
 
 impl ResponseUsage {
@@ -110,13 +105,13 @@ impl ResponseUsage {
                 .unwrap_or(0),
         );
         Self {
-            prompt_tokens: nonzero_u32(usage.prompt_tokens),
-            completion_tokens: nonzero_u32(usage.completion_tokens),
-            total_tokens: nonzero_u32(usage.total_tokens),
-            cache_read_tokens: nonzero_u32(cache_read_tokens),
+            prompt_tokens:         nonzero_u32(usage.prompt_tokens),
+            completion_tokens:     nonzero_u32(usage.completion_tokens),
+            total_tokens:          nonzero_u32(usage.total_tokens),
+            cache_read_tokens:     nonzero_u32(cache_read_tokens),
             cache_creation_tokens: nonzero_u32(cache_creation_tokens),
-            image_tokens: nonzero_u32(image_tokens),
-            audio_tokens: nonzero_u32(audio_tokens),
+            image_tokens:          nonzero_u32(image_tokens),
+            audio_tokens:          nonzero_u32(audio_tokens),
         }
     }
 
@@ -127,13 +122,13 @@ impl ResponseUsage {
             .saturating_add(usage.cache_read_input_tokens);
         let total_tokens = prompt_tokens.saturating_add(usage.output_tokens);
         Self {
-            prompt_tokens: nonzero_u32(prompt_tokens),
-            completion_tokens: nonzero_u32(usage.output_tokens),
-            total_tokens: nonzero_u32(total_tokens),
-            cache_read_tokens: nonzero_u32(usage.cache_read_input_tokens),
+            prompt_tokens:         nonzero_u32(prompt_tokens),
+            completion_tokens:     nonzero_u32(usage.output_tokens),
+            total_tokens:          nonzero_u32(total_tokens),
+            cache_read_tokens:     nonzero_u32(usage.cache_read_input_tokens),
             cache_creation_tokens: nonzero_u32(usage.cache_creation_input_tokens),
-            image_tokens: None,
-            audio_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
         }
     }
 
@@ -150,13 +145,13 @@ impl ResponseUsage {
             prompt_tokens.saturating_add(completion_tokens)
         };
         Self {
-            prompt_tokens: nonzero_u32(prompt_tokens),
-            completion_tokens: nonzero_u32(completion_tokens),
-            total_tokens: nonzero_u32(total_tokens),
-            cache_read_tokens: nonzero_u32(usage.cached_content_token_count),
+            prompt_tokens:         nonzero_u32(prompt_tokens),
+            completion_tokens:     nonzero_u32(completion_tokens),
+            total_tokens:          nonzero_u32(total_tokens),
+            cache_read_tokens:     nonzero_u32(usage.cached_content_token_count),
             cache_creation_tokens: None,
-            image_tokens: None,
-            audio_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
         }
     }
 
@@ -191,10 +186,9 @@ mod util;
 pub use config::{
     AuthConfig, ControlPlaneConfig, GatewayConfig, ProtocolConfig, ServerConfig, UpstreamConfig,
 };
-pub use gateway::{Gateway, run_from_config_file, serve};
-
 pub(crate) use context::*;
 pub(crate) use control::*;
+pub use gateway::{Gateway, run_from_config_file, serve};
 pub(crate) use image::*;
 pub(crate) use relay::*;
 pub(crate) use request::*;

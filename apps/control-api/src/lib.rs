@@ -1,18 +1,8 @@
-use std::{
-    collections::BTreeMap,
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
-
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{
-        HeaderMap, HeaderValue, StatusCode,
-        header::CACHE_CONTROL,
-    },
+    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -21,16 +11,25 @@ use halolake_control_plane::{
     ensure_user_password_hashed,
 };
 use halolake_domain::{
-    PageRequest, PageResult, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, TokenRecord, UserRecord,
+    PageRequest, PageResult, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, TokenRecord,
+    UserRecord,
 };
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-mod config;
+mod api_catalog;
+mod api_channel;
+mod api_system;
+mod api_usage;
+mod api_user;
+mod api_web;
+mod auth_import;
 mod billing;
+mod bootstrap_credentials;
 mod catalog;
 mod channel_affinity;
 mod channel_feedback;
@@ -39,84 +38,55 @@ mod channel_probe;
 mod channel_special;
 mod channel_task;
 mod checkin;
-mod auth_import;
-mod bootstrap_credentials;
 mod codex_auth_import;
-mod sub2api_data_import;
 mod compat;
+mod config;
+mod http_auth;
+mod http_response;
 mod model_sync;
+mod options_util;
 mod playground;
 mod prefill;
 mod proxy;
 mod ratio_sync;
 mod security;
 mod session;
-mod storage;
-mod system_instance;
-mod store_open;
 mod snapshot_publish;
-mod http_response;
-mod http_auth;
-mod api_channel;
-mod api_web;
-mod api_usage;
-mod api_user;
-mod api_catalog;
-mod api_system;
-mod options_util;
+mod storage;
+mod store_open;
+mod sub2api_data_import;
+mod system_instance;
 mod system_task;
-use billing::BillingStore;
-use catalog::{
-    CatalogData, CatalogStore,
-};
-use channel_task::{
-    ChannelTaskSchedulerConfig, spawn_channel_task_scheduler,
-};
-use checkin::CheckinStore;
-use prefill::PrefillStore;
-use proxy::ProxyStore;
-use session::{SessionSigner, SessionStore};
-use security::{
-    SecurityService, SecurityStore,
-};
-use storage::{
-    ManagementStore, OptionStore, UsageStore,
-};
-use system_instance::{
-    SystemInstanceStore, spawn_system_instance_reporter,
-};
-use system_task::SystemTaskStore;
-
-
-
-pub(crate) use config::{
-    ensure_supported_storage_backend, storage_backend_name,
-};
-
-
-pub(crate) use http_response::{
-    api_error_status, api_ok, api_ok_message, api_success,
-    management_error,
-};
-pub(crate) use http_auth::{
-    current_user,
-    require_role,
-};
+pub(crate) use api_catalog::*;
 pub(crate) use api_channel::*;
-pub(crate) use api_web::*;
+pub(crate) use api_system::*;
 pub(crate) use api_usage::*;
 pub(crate) use api_user::*;
-pub(crate) use api_catalog::*;
-pub(crate) use api_system::*;
+pub(crate) use api_web::*;
+use billing::BillingStore;
+use catalog::{CatalogData, CatalogStore};
+use channel_task::{ChannelTaskSchedulerConfig, spawn_channel_task_scheduler};
+use checkin::CheckinStore;
+pub use config::{
+    ControlApiConfig, InternalConfig, LogStorageBackend, ServerConfig, SessionConfig,
+    StorageBackend, StorageConfig, SystemConfig, WebConfig,
+};
+pub(crate) use config::{ensure_supported_storage_backend, storage_backend_name};
+pub(crate) use http_auth::{current_user, require_role};
+pub(crate) use http_response::{
+    api_error_status, api_ok, api_ok_message, api_success, management_error,
+};
 pub(crate) use options_util::*;
+use prefill::PrefillStore;
+use proxy::ProxyStore;
+use security::{SecurityService, SecurityStore};
+use session::{SessionSigner, SessionStore};
 pub(crate) use snapshot_publish::{
     publish_enriched_management_snapshot, publish_management_snapshot,
 };
-
-pub use config::{
-    ControlApiConfig, InternalConfig, LogStorageBackend, ServerConfig, SessionConfig, StorageBackend,
-    StorageConfig, SystemConfig, WebConfig,
-};
+use storage::{ManagementStore, OptionStore, UsageStore};
+use system_instance::{SystemInstanceStore, spawn_system_instance_reporter};
+use system_task::SystemTaskStore;
 
 pub(crate) const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
 pub(crate) const SNAPSHOT_VERSION_HEADER: &str = "x-halolake-snapshot-version";
@@ -130,7 +100,7 @@ pub(crate) const DEFAULT_CHANNEL_AFFINITY_RULES_JSON: &str = r#"[{"name":"codex 
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EmbeddedAsset {
-    pub(crate) path: &'static str,
+    pub(crate) path:  &'static str,
     pub(crate) bytes: &'static [u8],
 }
 
@@ -139,7 +109,6 @@ include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 
 // DEFAULT_WEB_ASSETS / CLASSIC_WEB_ASSETS come from include! above.
 
-
 #[derive(Debug, Clone)]
 pub struct ControlApi {
     state: AppState,
@@ -147,33 +116,32 @@ pub struct ControlApi {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
-    pub(crate) snapshots: MemorySnapshotBus,
-    pub(crate) management: ManagementStore,
-    pub(crate) usage_events: UsageStore,
-    pub(crate) catalog: CatalogStore,
-    pub(crate) options: OptionStore,
-    pub(crate) billing: BillingStore,
-    pub(crate) checkins: CheckinStore,
-    pub(crate) prefill: PrefillStore,
-    pub(crate) proxies: ProxyStore,
-    pub(crate) security: SecurityService,
-    pub(crate) system_tasks: SystemTaskStore,
+    pub(crate) snapshots:        MemorySnapshotBus,
+    pub(crate) management:       ManagementStore,
+    pub(crate) usage_events:     UsageStore,
+    pub(crate) catalog:          CatalogStore,
+    pub(crate) options:          OptionStore,
+    pub(crate) billing:          BillingStore,
+    pub(crate) checkins:         CheckinStore,
+    pub(crate) prefill:          PrefillStore,
+    pub(crate) proxies:          ProxyStore,
+    pub(crate) security:         SecurityService,
+    pub(crate) system_tasks:     SystemTaskStore,
     pub(crate) system_instances: SystemInstanceStore,
-    pub(crate) sessions: SessionStore,
-    pub(crate) session_signer: SessionSigner,
-    pub(crate) web: WebConfig,
-    pub(crate) internal_secret: Option<Arc<str>>,
+    pub(crate) sessions:         SessionStore,
+    pub(crate) session_signer:   SessionSigner,
+    pub(crate) web:              WebConfig,
+    pub(crate) internal_secret:  Option<Arc<str>>,
     pub(crate) gateway_base_url: Option<String>,
-    pub(crate) start_time_unix: i64,
-    pub(crate) system_name: Arc<str>,
-    pub(crate) storage_backend: StorageBackend,
+    pub(crate) start_time_unix:  i64,
+    pub(crate) system_name:      Arc<str>,
+    pub(crate) storage_backend:  StorageBackend,
 }
-
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub(crate) struct PageQuery {
     #[serde(default = "default_page")]
-    page: usize,
+    page:      usize,
     #[serde(default = "default_page_size")]
     page_size: usize,
 }
@@ -181,7 +149,7 @@ pub(crate) struct PageQuery {
 impl From<PageQuery> for PageRequest {
     fn from(query: PageQuery) -> Self {
         Self {
-            page: query.page,
+            page:      query.page,
             page_size: query.page_size,
         }
     }
@@ -190,11 +158,11 @@ impl From<PageQuery> for PageRequest {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelSearchQuery {
     #[serde(default = "default_page")]
-    page: usize,
+    page:      usize,
     #[serde(default = "default_page_size")]
     page_size: usize,
     #[serde(default)]
-    keyword: String,
+    keyword:   String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -215,21 +183,21 @@ pub(crate) struct StatusUpdate {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ChannelTagPayload {
-    tag: String,
+    tag:             String,
     #[serde(default)]
-    new_tag: Option<String>,
+    new_tag:         Option<String>,
     #[serde(default)]
-    priority: Option<i64>,
+    priority:        Option<i64>,
     #[serde(default)]
-    weight: Option<u32>,
+    weight:          Option<u32>,
     #[serde(default)]
-    model_mapping: Option<String>,
+    model_mapping:   Option<String>,
     #[serde(default)]
-    models: Option<String>,
+    models:          Option<String>,
     #[serde(default)]
-    groups: Option<String>,
+    groups:          Option<String>,
     #[serde(default)]
-    param_override: Option<String>,
+    param_override:  Option<String>,
     #[serde(default)]
     header_override: Option<String>,
 }
@@ -253,10 +221,7 @@ impl ControlApi {
         )
         .context("bootstrap runtime secrets")?;
 
-        let internal_secret = secrets
-            .internal_secret
-            .as_deref()
-            .map(Arc::<str>::from);
+        let internal_secret = secrets.internal_secret.as_deref().map(Arc::<str>::from);
         let gateway_base_url = config
             .internal
             .gateway_base_url
@@ -271,9 +236,9 @@ impl ControlApi {
             });
         if internal_secret.is_none() {
             warn!(
-                "internal.secret is not configured; /internal/gateway/* endpoints will \
-                 reject every request (default-deny). Set internal.secret to enable the \
-                 gateway snapshot/usage/channel-feedback APIs."
+                "internal.secret is not configured; /internal/gateway/* endpoints will reject \
+                 every request (default-deny). Set internal.secret to enable the gateway \
+                 snapshot/usage/channel-feedback APIs."
             );
         }
         let system_name = Arc::from(config.system.name.as_str());
@@ -289,7 +254,12 @@ impl ControlApi {
         // Root is created via setup UI or auto-bootstrap when DB has no root.
         let mut management_data = ManagementData::from_snapshot(snapshot.clone());
         let auto_bootstrap = std::env::var("HALOLAKE_AUTO_BOOTSTRAP")
-            .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+            .map(|v| {
+                !matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "no" | "off"
+                )
+            })
             .unwrap_or(true);
         if auto_bootstrap {
             management_data.users.clear();
@@ -593,12 +563,24 @@ impl ControlApi {
             )
             .route("/api/channel/import/auth", post(import_auth_json))
             .route("/api/channel/import/auth/", post(import_auth_json))
-            .route("/api/channel/import/auth/upload", post(import_auth_multipart))
-            .route("/api/channel/import/auth/upload/", post(import_auth_multipart))
+            .route(
+                "/api/channel/import/auth/upload",
+                post(import_auth_multipart),
+            )
+            .route(
+                "/api/channel/import/auth/upload/",
+                post(import_auth_multipart),
+            )
             .route("/api/channel/import/codex-auth", post(import_codex_auth))
             .route("/api/channel/import/codex-auth/", post(import_codex_auth))
-            .route("/api/channel/import/sub2api-data", post(import_sub2api_data))
-            .route("/api/channel/import/sub2api-data/", post(import_sub2api_data))
+            .route(
+                "/api/channel/import/sub2api-data",
+                post(import_sub2api_data),
+            )
+            .route(
+                "/api/channel/import/sub2api-data/",
+                post(import_sub2api_data),
+            )
             .route("/api/channel/search", get(search_channels))
             .route("/api/channel/models", get(channel_models))
             .route("/api/channel/models_enabled", get(channel_models))
@@ -781,8 +763,8 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use crate::config::{
-        infer_log_storage_backend, infer_main_storage_backend, normalize_mysql_url, StorageBackend,
-        StorageConfig, LogStorageBackend, ensure_supported_storage_backend,
+        LogStorageBackend, StorageBackend, StorageConfig, ensure_supported_storage_backend,
+        infer_log_storage_backend, infer_main_storage_backend, normalize_mysql_url,
     };
 
     #[test]

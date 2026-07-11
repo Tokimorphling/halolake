@@ -1,7 +1,9 @@
 //! Static web asset hosting for control-api.
 
-use std::path::{Component, Path as FsPath, PathBuf};
-
+use crate::{
+    AppState, CLASSIC_WEB_ASSETS, DEFAULT_WEB_ASSETS, EmbeddedAsset,
+    http_response::{api_error_status, api_success, json_error},
+};
 use axum::{
     body::Body,
     extract::State,
@@ -11,17 +13,18 @@ use axum::{
     },
     response::Response,
 };
+use std::path::{Component, Path as FsPath, PathBuf};
 use tracing::warn;
-
-use crate::http_response::{api_error_status, api_success, json_error};
-use crate::{AppState, EmbeddedAsset, CLASSIC_WEB_ASSETS, DEFAULT_WEB_ASSETS};
 
 pub(crate) async fn api_empty_string() -> Response {
     api_success("")
 }
 
-
-pub(crate) async fn web_fallback(State(state): State<AppState>, method: Method, uri: Uri) -> Response {
+pub(crate) async fn web_fallback(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+) -> Response {
     if !state.web.enabled {
         return json_error(StatusCode::NOT_FOUND, "not found");
     }
@@ -67,7 +70,6 @@ pub(crate) async fn web_fallback(State(state): State<AppState>, method: Method, 
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WebTheme {
     Default,
@@ -76,7 +78,7 @@ pub(crate) enum WebTheme {
 
 pub(crate) struct SelectedWebDist {
     pub(crate) theme: WebTheme,
-    pub(crate) root: PathBuf,
+    pub(crate) root:  PathBuf,
 }
 
 impl SelectedWebDist {
@@ -92,7 +94,6 @@ impl SelectedWebDist {
     }
 }
 
-
 pub(crate) fn selected_web_dist(state: &AppState) -> SelectedWebDist {
     let options = state.options.values().unwrap_or_default();
     let theme = options
@@ -102,16 +103,15 @@ pub(crate) fn selected_web_dist(state: &AppState) -> SelectedWebDist {
     if theme == "classic" {
         SelectedWebDist {
             theme: WebTheme::Classic,
-            root: state.web.classic_dist.clone(),
+            root:  state.web.classic_dist.clone(),
         }
     } else {
         SelectedWebDist {
             theme: WebTheme::Default,
-            root: state.web.default_dist.clone(),
+            root:  state.web.default_dist.clone(),
         }
     }
 }
-
 
 pub(crate) fn is_control_or_relay_path(path: &str) -> bool {
     path.starts_with("/api")
@@ -120,16 +120,13 @@ pub(crate) fn is_control_or_relay_path(path: &str) -> bool {
         || path.starts_with("/pg")
 }
 
-
 pub(crate) fn is_static_asset_request(path: &str) -> bool {
     path == "/assets" || path.starts_with("/assets/") || FsPath::new(path).extension().is_some()
 }
 
-
 pub(crate) fn is_index_file(path: &str) -> bool {
     path == "/" || path.ends_with("/index.html")
 }
-
 
 pub(crate) fn static_asset_path(request_path: &str) -> Option<String> {
     let relative = request_path.trim_start_matches('/');
@@ -147,7 +144,6 @@ pub(crate) fn static_asset_path(request_path: &str) -> Option<String> {
     Some(normalized.to_string())
 }
 
-
 pub(crate) fn safe_static_file_path(root: &FsPath, request_path: &str) -> Option<PathBuf> {
     let mut path = root.to_path_buf();
     let relative = request_path.trim_start_matches('/');
@@ -164,7 +160,6 @@ pub(crate) fn safe_static_file_path(root: &FsPath, request_path: &str) -> Option
     }
     Some(path)
 }
-
 
 pub(crate) async fn static_file_response(path: PathBuf, head: bool, no_cache: bool) -> Response {
     match tokio::fs::read(&path).await {
@@ -200,8 +195,11 @@ pub(crate) async fn static_file_response(path: PathBuf, head: bool, no_cache: bo
     }
 }
 
-
-pub(crate) fn embedded_file_response(asset: &EmbeddedAsset, head: bool, no_cache: bool) -> Response {
+pub(crate) fn embedded_file_response(
+    asset: &EmbeddedAsset,
+    head: bool,
+    no_cache: bool,
+) -> Response {
     let content_length = asset.bytes.len().to_string();
     let body = if head {
         Body::empty()
@@ -226,7 +224,6 @@ pub(crate) fn embedded_file_response(asset: &EmbeddedAsset, head: bool, no_cache
     }
     response
 }
-
 
 pub(crate) fn static_content_type(path: &FsPath) -> &'static str {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
@@ -258,5 +255,3 @@ pub(crate) fn static_content_type(path: &FsPath) -> &'static str {
         "application/octet-stream"
     }
 }
-
-

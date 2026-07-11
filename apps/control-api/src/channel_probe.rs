@@ -1,9 +1,8 @@
+use crate::storage::ManagementStore;
 use halolake_control_plane::ManagementError;
 use halolake_domain::{CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI};
 use serde::Deserialize;
 use service_async::Service;
-
-use crate::storage::ManagementStore;
 
 const CHANNEL_TYPE_OLLAMA: i32 = 4;
 const CHANNEL_TYPE_ALI: i32 = 17;
@@ -13,19 +12,19 @@ const CHANNEL_TYPE_ZHIPU_V4: i32 = 26;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct FetchModelsRequest {
     #[serde(default)]
-    pub(crate) channel_id: Option<u64>,
+    pub(crate) channel_id:   Option<u64>,
     #[serde(default)]
-    pub(crate) base_url: String,
+    pub(crate) base_url:     String,
     #[serde(rename = "type", default = "default_channel_type")]
     pub(crate) channel_type: i32,
     #[serde(default)]
-    pub(crate) key: String,
+    pub(crate) key:          String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelProbeService {
     management: ManagementStore,
-    client: reqwest::Client,
+    client:     reqwest::Client,
 }
 
 impl ChannelProbeService {
@@ -51,10 +50,10 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
                 .find(|channel| channel.id == channel_id)
                 .ok_or(ManagementError::NotFound)?;
             FetchModelsRequest {
-                channel_id: Some(channel_id),
-                base_url: channel.base_url.clone().unwrap_or_default(),
+                channel_id:   Some(channel_id),
+                base_url:     channel.base_url.clone().unwrap_or_default(),
                 channel_type: channel.channel_type,
-                key: channel.key.clone(),
+                key:          channel.key.clone(),
             }
         } else {
             req

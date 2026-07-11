@@ -1,17 +1,15 @@
-use std::{
-    collections::BTreeMap,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
+use crate::storage::ManagementStore;
 use axum::body::Body;
 use halolake_control_plane::{ManagementError, UpdateChannelRequest};
 use halolake_domain::ChannelRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use service_async::Service;
+use std::{
+    collections::BTreeMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
-
-use crate::storage::ManagementStore;
 
 const CHANNEL_TYPE_OLLAMA: i32 = 4;
 const CHANNEL_TYPE_CODEX: i32 = 57;
@@ -21,7 +19,7 @@ const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelSpecialService {
     management: ManagementStore,
-    client: reqwest::Client,
+    client:     reqwest::Client,
 }
 
 impl ChannelSpecialService {
@@ -262,7 +260,7 @@ impl Service<OllamaPullModelRequest> for ChannelSpecialService {
             .await?;
         Ok(OllamaPullModelResponse {
             message: format!("Model {} pulled successfully", req.model_name.trim()),
-            event: value,
+            event:   value,
         })
     }
 }
@@ -411,7 +409,7 @@ impl Service<MultiKeyManageRequest> for ChannelSpecialService {
                 return Ok(MultiKeyManageResponse::WithData {
                     success: true,
                     message: format!("已删除 {deleted} 个自动禁用的密钥"),
-                    data: json!(deleted),
+                    data:    json!(deleted),
                 });
             }
             _ => return Ok(MultiKeyManageResponse::message(false, "不支持的操作")),
@@ -433,11 +431,11 @@ impl Service<CodexRefreshCredentialRequest> for ChannelSpecialService {
         let channel = self.codex_channel(req.id)?;
         let key = self.refresh_codex_oauth_key(channel.clone()).await?;
         Ok(CodexRefreshCredentialResponse {
-            expires_at: key.expired.unwrap_or_default(),
+            expires_at:   key.expired.unwrap_or_default(),
             last_refresh: key.last_refresh.unwrap_or_default(),
-            account_id: key.account_id.unwrap_or_default(),
-            email: key.email.unwrap_or_default(),
-            channel_id: channel.id,
+            account_id:   key.account_id.unwrap_or_default(),
+            email:        key.email.unwrap_or_default(),
+            channel_id:   channel.id,
             channel_type: channel.channel_type,
             channel_name: channel.name,
         })
@@ -464,7 +462,7 @@ pub(crate) struct OllamaModelRequestBody {
 pub(crate) struct OllamaPullModelRequest {
     pub(crate) channel_id: u64,
     pub(crate) model_name: String,
-    pub(crate) stream: bool,
+    pub(crate) stream:     bool,
 }
 
 #[derive(Debug, Clone)]
@@ -481,7 +479,7 @@ pub(crate) struct OllamaVersionRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct OllamaPullModelResponse {
     pub(crate) message: String,
-    pub(crate) event: JsonValue,
+    pub(crate) event:   JsonValue,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -492,15 +490,15 @@ pub(crate) struct OllamaVersionResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct MultiKeyManageRequest {
     pub(crate) channel_id: u64,
-    pub(crate) action: String,
+    pub(crate) action:     String,
     #[serde(default)]
-    pub(crate) key_index: Option<usize>,
+    pub(crate) key_index:  Option<usize>,
     #[serde(default)]
-    pub(crate) page: usize,
+    pub(crate) page:       usize,
     #[serde(default)]
-    pub(crate) page_size: usize,
+    pub(crate) page_size:  usize,
     #[serde(default)]
-    pub(crate) status: Option<i32>,
+    pub(crate) status:     Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -513,12 +511,12 @@ pub(crate) enum MultiKeyManageResponse {
     Status {
         success: bool,
         message: String,
-        data: MultiKeyStatusResponse,
+        data:    MultiKeyStatusResponse,
     },
     WithData {
         success: bool,
         message: String,
-        data: JsonValue,
+        data:    JsonValue,
     },
 }
 
@@ -541,25 +539,25 @@ impl MultiKeyManageResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct MultiKeyStatusResponse {
-    pub(crate) keys: Vec<KeyStatus>,
-    pub(crate) total: usize,
-    pub(crate) page: usize,
-    pub(crate) page_size: usize,
-    pub(crate) total_pages: usize,
-    pub(crate) enabled_count: usize,
+    pub(crate) keys:                  Vec<KeyStatus>,
+    pub(crate) total:                 usize,
+    pub(crate) page:                  usize,
+    pub(crate) page_size:             usize,
+    pub(crate) total_pages:           usize,
+    pub(crate) enabled_count:         usize,
     pub(crate) manual_disabled_count: usize,
-    pub(crate) auto_disabled_count: usize,
+    pub(crate) auto_disabled_count:   usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct KeyStatus {
-    pub(crate) index: usize,
-    pub(crate) status: i32,
+    pub(crate) index:         usize,
+    pub(crate) status:        i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) disabled_time: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<String>,
-    pub(crate) key_preview: String,
+    pub(crate) reason:        Option<String>,
+    pub(crate) key_preview:   String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -569,7 +567,7 @@ pub(crate) struct CodexRefreshCredentialRequest {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CodexWhamRequest {
-    pub(crate) id: u64,
+    pub(crate) id:   u64,
     pub(crate) kind: CodexWhamKind,
 }
 
@@ -582,20 +580,20 @@ pub(crate) enum CodexWhamKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CodexRefreshCredentialResponse {
-    pub(crate) expires_at: String,
+    pub(crate) expires_at:   String,
     pub(crate) last_refresh: String,
-    pub(crate) account_id: String,
-    pub(crate) email: String,
-    pub(crate) channel_id: u64,
+    pub(crate) account_id:   String,
+    pub(crate) email:        String,
+    pub(crate) channel_id:   u64,
     pub(crate) channel_type: i32,
     pub(crate) channel_name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CodexWhamResponse {
-    pub(crate) success: bool,
+    pub(crate) success:         bool,
     pub(crate) upstream_status: u16,
-    pub(crate) data: JsonValue,
+    pub(crate) data:            JsonValue,
 }
 
 impl OllamaPullModelResponse {
@@ -609,29 +607,29 @@ impl OllamaPullModelResponse {
 
 #[derive(Debug, Clone, Default)]
 struct MultiKeyState {
-    status: BTreeMap<usize, i32>,
-    disabled_time: BTreeMap<usize, i64>,
+    status:          BTreeMap<usize, i32>,
+    disabled_time:   BTreeMap<usize, i64>,
     disabled_reason: BTreeMap<usize, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CodexOAuthKey {
     #[serde(default)]
-    id_token: Option<String>,
+    id_token:      Option<String>,
     #[serde(default)]
-    access_token: Option<String>,
+    access_token:  Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
     #[serde(default)]
-    account_id: Option<String>,
+    account_id:    Option<String>,
     #[serde(default)]
-    last_refresh: Option<String>,
+    last_refresh:  Option<String>,
     #[serde(default)]
-    email: Option<String>,
+    email:         Option<String>,
     #[serde(rename = "type", default)]
-    key_type: Option<String>,
+    key_type:      Option<String>,
     #[serde(default)]
-    expired: Option<String>,
+    expired:       Option<String>,
 }
 
 fn multi_key_status_response(
@@ -693,8 +691,8 @@ fn multi_key_state(channel: &ChannelRecord) -> MultiKeyState {
         .and_then(|setting| serde_json::from_str::<JsonValue>(setting).ok())
         .unwrap_or_else(|| json!({}));
     MultiKeyState {
-        status: json_usize_i32_map(value.get("multi_key_status_list")),
-        disabled_time: json_usize_i64_map(value.get("multi_key_disabled_time")),
+        status:          json_usize_i32_map(value.get("multi_key_status_list")),
+        disabled_time:   json_usize_i64_map(value.get("multi_key_disabled_time")),
         disabled_reason: json_usize_string_map(value.get("multi_key_disabled_reason")),
     }
 }
@@ -837,14 +835,14 @@ fn key_preview(key: &str) -> String {
 fn parse_codex_key(raw: &str) -> Result<CodexOAuthKey, ManagementError> {
     let flexible = crate::codex_auth_import::parse_flexible_codex_key(raw)?;
     Ok(CodexOAuthKey {
-        id_token: flexible.id_token,
-        access_token: flexible.access_token,
+        id_token:      flexible.id_token,
+        access_token:  flexible.access_token,
         refresh_token: flexible.refresh_token,
-        account_id: flexible.account_id,
-        last_refresh: flexible.last_refresh,
-        email: flexible.email,
-        key_type: flexible.key_type,
-        expired: flexible.expired,
+        account_id:    flexible.account_id,
+        last_refresh:  flexible.last_refresh,
+        email:         flexible.email,
+        key_type:      flexible.key_type,
+        expired:       flexible.expired,
     })
 }
 

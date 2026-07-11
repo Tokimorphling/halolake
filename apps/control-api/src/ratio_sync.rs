@@ -1,15 +1,13 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::Duration,
-};
-
+use crate::storage::{ManagementStore, OptionStore};
 use futures_util::{StreamExt, stream};
 use halolake_control_plane::{ManagementData, ManagementError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
 use service_async::Service;
-
-use crate::storage::{ManagementStore, OptionStore};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 10;
 const DEFAULT_ENDPOINT: &str = "/api/pricing";
@@ -58,16 +56,16 @@ pub(crate) struct FetchUpstreamRatiosRequest {
     #[serde(default)]
     pub(crate) channel_ids: Vec<i64>,
     #[serde(default)]
-    pub(crate) upstreams: Vec<UpstreamConfig>,
+    pub(crate) upstreams:   Vec<UpstreamConfig>,
     #[serde(default)]
-    pub(crate) timeout: u64,
+    pub(crate) timeout:     u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct UpstreamConfig {
     #[serde(default)]
-    pub(crate) id: i64,
-    pub(crate) name: String,
+    pub(crate) id:       i64,
+    pub(crate) name:     String,
     pub(crate) base_url: String,
     #[serde(default)]
     pub(crate) endpoint: String,
@@ -75,55 +73,55 @@ pub(crate) struct UpstreamConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SyncableChannel {
-    id: i64,
-    name: String,
-    base_url: String,
-    status: i32,
+    id:           i64,
+    name:         String,
+    base_url:     String,
+    status:       i32,
     #[serde(rename = "type")]
     channel_type: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct FetchUpstreamRatiosResponse {
-    differences: BTreeMap<String, BTreeMap<String, DifferenceItem>>,
+    differences:  BTreeMap<String, BTreeMap<String, DifferenceItem>>,
     test_results: Vec<TestResult>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct TestResult {
-    name: String,
+    name:   String,
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    error:  Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct DifferenceItem {
-    current: JsonValue,
-    upstreams: BTreeMap<String, JsonValue>,
+    current:    JsonValue,
+    upstreams:  BTreeMap<String, JsonValue>,
     confidence: BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone)]
 struct UpstreamResult {
-    name: String,
-    data: Option<BTreeMap<String, JsonValue>>,
+    name:  String,
+    data:  Option<BTreeMap<String, JsonValue>>,
     error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct ModelsDevCandidate {
-    provider: String,
-    input: f64,
-    output: Option<f64>,
+    provider:   String,
+    input:      f64,
+    output:     Option<f64>,
     cache_read: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RatioSyncService {
     management: ManagementStore,
-    options: OptionStore,
-    client: reqwest::Client,
+    options:    OptionStore,
+    client:     reqwest::Client,
 }
 
 impl RatioSyncService {
@@ -180,15 +178,15 @@ impl Service<FetchUpstreamRatiosRequest> for RatioSyncService {
                 Ok(result) => {
                     if let Some(error) = result.error {
                         test_results.push(TestResult {
-                            name: result.name,
+                            name:   result.name,
                             status: "error",
-                            error: Some(error),
+                            error:  Some(error),
                         });
                     } else {
                         test_results.push(TestResult {
-                            name: result.name.clone(),
+                            name:   result.name.clone(),
                             status: "success",
-                            error: None,
+                            error:  None,
                         });
                         if let Some(data) = result.data {
                             successful.push((result.name, data));
@@ -196,9 +194,9 @@ impl Service<FetchUpstreamRatiosRequest> for RatioSyncService {
                     }
                 }
                 Err(err) => test_results.push(TestResult {
-                    name: "unknown".to_string(),
+                    name:   "unknown".to_string(),
                     status: "error",
-                    error: Some(err.to_string()),
+                    error:  Some(err.to_string()),
                 }),
             }
         }
@@ -240,8 +238,8 @@ impl RatioSyncService {
                     let data = parse_upstream_ratio_data(&body, upstream.openrouter, is_models_dev)
                         .map_err(ManagementError::Storage)?;
                     return Ok(UpstreamResult {
-                        name: upstream.unique_name,
-                        data: Some(data),
+                        name:  upstream.unique_name,
+                        data:  Some(data),
                         error: None,
                     });
                 }
@@ -274,11 +272,11 @@ impl RatioSyncService {
 
 #[derive(Debug, Clone)]
 struct PreparedUpstream {
-    id: i64,
-    unique_name: String,
-    base_url: String,
-    endpoint: String,
-    openrouter: bool,
+    id:              i64,
+    unique_name:     String,
+    base_url:        String,
+    endpoint:        String,
+    openrouter:      bool,
     timeout_seconds: u64,
 }
 
@@ -323,8 +321,8 @@ impl PreparedUpstream {
 
     fn error(&self, error: impl Into<String>) -> UpstreamResult {
         UpstreamResult {
-            name: self.unique_name.clone(),
-            data: None,
+            name:  self.unique_name.clone(),
+            data:  None,
             error: Some(error.into()),
         }
     }
@@ -340,27 +338,27 @@ fn syncable_channels(management: &ManagementData) -> Vec<SyncableChannel> {
                 return None;
             }
             Some(SyncableChannel {
-                id: channel.id as i64,
-                name: channel.name.clone(),
-                base_url: base_url.to_string(),
-                status: channel.status,
+                id:           channel.id as i64,
+                name:         channel.name.clone(),
+                base_url:     base_url.to_string(),
+                status:       channel.status,
                 channel_type: channel.channel_type,
             })
         })
         .collect::<Vec<_>>();
 
     channels.push(SyncableChannel {
-        id: OFFICIAL_RATIO_PRESET_ID,
-        name: OFFICIAL_RATIO_PRESET_NAME.to_string(),
-        base_url: OFFICIAL_RATIO_PRESET_BASE_URL.to_string(),
-        status: 1,
+        id:           OFFICIAL_RATIO_PRESET_ID,
+        name:         OFFICIAL_RATIO_PRESET_NAME.to_string(),
+        base_url:     OFFICIAL_RATIO_PRESET_BASE_URL.to_string(),
+        status:       1,
         channel_type: 0,
     });
     channels.push(SyncableChannel {
-        id: MODELS_DEV_PRESET_ID,
-        name: MODELS_DEV_PRESET_NAME.to_string(),
-        base_url: MODELS_DEV_PRESET_BASE_URL.to_string(),
-        status: 1,
+        id:           MODELS_DEV_PRESET_ID,
+        name:         MODELS_DEV_PRESET_NAME.to_string(),
+        base_url:     MODELS_DEV_PRESET_BASE_URL.to_string(),
+        status:       1,
         channel_type: 0,
     });
     channels
@@ -445,7 +443,7 @@ fn parse_upstream_ratio_data(
         #[serde(default)]
         success: bool,
         #[serde(default)]
-        data: JsonValue,
+        data:    JsonValue,
         #[serde(default)]
         message: String,
     }
@@ -570,13 +568,13 @@ fn convert_openrouter_to_ratio_data(body: &[u8]) -> Result<BTreeMap<String, Json
     }
     #[derive(Deserialize)]
     struct OpenRouterModel {
-        id: String,
+        id:      String,
         pricing: OpenRouterPricing,
     }
     #[derive(Deserialize)]
     struct OpenRouterPricing {
-        prompt: String,
-        completion: String,
+        prompt:           String,
+        completion:       String,
         #[serde(default)]
         input_cache_read: String,
     }
@@ -636,8 +634,8 @@ fn convert_models_dev_to_ratio_data(body: &[u8]) -> Result<BTreeMap<String, Json
     }
     #[derive(Clone, Deserialize)]
     struct Cost {
-        input: Option<f64>,
-        output: Option<f64>,
+        input:      Option<f64>,
+        output:     Option<f64>,
         cache_read: Option<f64>,
     }
     let providers = serde_json::from_slice::<BTreeMap<String, Provider>>(body)
@@ -834,8 +832,8 @@ fn build_differences(
                 differences.entry(model_name.clone()).or_default().insert(
                     field.to_string(),
                     DifferenceItem {
-                        current: local_value,
-                        upstreams: upstream_values,
+                        current:    local_value,
+                        upstreams:  upstream_values,
                         confidence: confidence_values,
                     },
                 );
@@ -1082,31 +1080,31 @@ mod tests {
 
     fn test_channel_defaults() -> ChannelRecord {
         ChannelRecord {
-            id: 0,
-            snapshot_id: None,
-            channel_type: 1,
-            key: String::new(),
-            status: STATUS_ENABLED,
-            name: String::new(),
-            weight: None,
-            created_time: 0,
-            test_time: 0,
-            response_time: 0,
-            base_url: None,
-            balance: 0.0,
+            id:                   0,
+            snapshot_id:          None,
+            channel_type:         1,
+            key:                  String::new(),
+            status:               STATUS_ENABLED,
+            name:                 String::new(),
+            weight:               None,
+            created_time:         0,
+            test_time:            0,
+            response_time:        0,
+            base_url:             None,
+            balance:              0.0,
             balance_updated_time: 0,
-            models: String::new(),
-            group: "default".to_string(),
-            used_quota: 0,
-            model_mapping: None,
-            priority: None,
-            auto_ban: None,
-            tag: None,
-            setting: None,
-            param_override: None,
-            header_override: None,
-            remark: None,
-            proxy_id: None,
+            models:               String::new(),
+            group:                "default".to_string(),
+            used_quota:           0,
+            model_mapping:        None,
+            priority:             None,
+            auto_ban:             None,
+            tag:                  None,
+            setting:              None,
+            param_override:       None,
+            header_override:      None,
+            remark:               None,
+            proxy_id:             None,
         }
     }
 }

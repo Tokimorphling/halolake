@@ -4,9 +4,8 @@
 //! - Opening stores from `StorageConfig` goes through a single generic path.
 //! - Service fan-out across Memory/Sqlite/MySql/Postgres is one macro.
 
-use anyhow::{Context, Result};
-
 use crate::config::{StorageBackend, StorageConfig, normalize_mysql_url};
+use anyhow::{Context, Result};
 
 /// Construct a store backend from resolved URLs (no-arg constructors).
 pub(crate) trait OpenStore: Sized {
@@ -18,9 +17,8 @@ pub(crate) trait OpenStore: Sized {
         url: &str,
     ) -> impl std::future::Future<Output = Result<Self, Self::Error>> + Send;
 
-    fn open_mysql(
-        url: &str,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Error>> + Send;
+    fn open_mysql(url: &str)
+    -> impl std::future::Future<Output = Result<Self, Self::Error>> + Send;
 
     fn open_postgres(
         url: &str,
@@ -139,7 +137,6 @@ macro_rules! impl_backend_service {
     };
 }
 
-
 // --- Backend open adapters (static dispatch) ---
 
 use crate::{
@@ -257,24 +254,15 @@ impl OpenStoreSeeded<BTreeMap<String, String>> for OptionStore {
         Self::memory(seed)
     }
 
-    async fn open_sqlite(
-        url: &str,
-        seed: BTreeMap<String, String>,
-    ) -> Result<Self, Self::Error> {
+    async fn open_sqlite(url: &str, seed: BTreeMap<String, String>) -> Result<Self, Self::Error> {
         Self::sqlite(url, seed).await
     }
 
-    async fn open_mysql(
-        url: &str,
-        seed: BTreeMap<String, String>,
-    ) -> Result<Self, Self::Error> {
+    async fn open_mysql(url: &str, seed: BTreeMap<String, String>) -> Result<Self, Self::Error> {
         Self::mysql(url, seed).await
     }
 
-    async fn open_postgres(
-        url: &str,
-        seed: BTreeMap<String, String>,
-    ) -> Result<Self, Self::Error> {
+    async fn open_postgres(url: &str, seed: BTreeMap<String, String>) -> Result<Self, Self::Error> {
         Self::postgres(url, seed).await
     }
 }

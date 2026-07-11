@@ -1,10 +1,8 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use crate::ProtocolError;
 use halolake_api_contract::{JsonValue, gemini, openai};
 use serde_json::json;
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-
-use crate::ProtocolError;
 
 const GEMINI_SAFETY_CATEGORIES: &[&str] = &[
     "HARM_CATEGORY_HARASSMENT",
@@ -22,20 +20,20 @@ pub fn openai_chat_to_gemini_request(
 
     let mut out = gemini::GeminiChatRequest {
         generation_config: gemini::GeminiGenerationConfig {
-            temperature: req.temperature,
-            top_p: req.top_p,
-            top_k: req.top_k,
-            max_output_tokens: req.max_tokens_value(),
-            candidate_count: req.n,
-            stop_sequences: gemini_stop_sequences(req.stop.as_ref()),
+            temperature:        req.temperature,
+            top_p:              req.top_p,
+            top_k:              req.top_k,
+            max_output_tokens:  req.max_tokens_value(),
+            candidate_count:    req.n,
+            stop_sequences:     gemini_stop_sequences(req.stop.as_ref()),
             response_mime_type: gemini_response_mime_type(req.response_format.as_ref()),
-            response_schema: gemini_response_schema(req.response_format.as_ref()),
-            seed: req.seed,
+            response_schema:    gemini_response_schema(req.response_format.as_ref()),
+            seed:               req.seed,
         },
         safety_settings: GEMINI_SAFETY_CATEGORIES
             .iter()
             .map(|category| gemini::GeminiChatSafetySetting {
-                category: (*category).to_string(),
+                category:  (*category).to_string(),
                 threshold: "OFF".to_string(),
             })
             .collect(),
@@ -103,7 +101,7 @@ pub fn openai_chat_to_gemini_request(
 
     if !system.is_empty() {
         out.system_instruction = Some(gemini::GeminiChatContent {
-            role: None,
+            role:  None,
             parts: vec![gemini::GeminiPart::text(system.join("\n"))],
         });
     }
@@ -125,11 +123,11 @@ pub fn gemini_request_to_openai_chat(
         let text = gemini_parts_text(&system.parts);
         if !text.is_empty() {
             messages.push(openai::ChatMessage {
-                role: "system".to_string(),
-                content: Some(openai::MessageContent::Text(text)),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
+                role:              "system".to_string(),
+                content:           Some(openai::MessageContent::Text(text)),
+                name:              None,
+                tool_calls:        None,
+                tool_call_id:      None,
                 reasoning_content: None,
             });
         }
@@ -151,14 +149,14 @@ pub fn gemini_request_to_openai_chat(
                 if !text.is_empty() {
                     parts.push(openai::ContentPart::Text {
                         part_type: "text".to_string(),
-                        text: text.clone(),
+                        text:      text.clone(),
                     });
                 }
             } else if let Some(inline) = &part.inline_data {
                 parts.push(openai::ContentPart::ImageUrl {
                     part_type: "image_url".to_string(),
                     image_url: openai::ImageUrl {
-                        url: format!("data:{};base64,{}", inline.mime_type, inline.data),
+                        url:    format!("data:{};base64,{}", inline.mime_type, inline.data),
                         detail: Some("auto".to_string()),
                     },
                 });
@@ -166,30 +164,30 @@ pub fn gemini_request_to_openai_chat(
                 parts.push(openai::ContentPart::ImageUrl {
                     part_type: "image_url".to_string(),
                     image_url: openai::ImageUrl {
-                        url: file.file_uri.clone(),
+                        url:    file.file_uri.clone(),
                         detail: Some("auto".to_string()),
                     },
                 });
             } else if let Some(call) = &part.function_call {
                 tool_calls.push(openai::ToolCall {
-                    id: format!("call_{next_tool_id}"),
+                    id:        format!("call_{next_tool_id}"),
                     tool_type: "function".to_string(),
-                    function: openai::ToolCallFunction {
-                        name: call.name.clone(),
+                    function:  openai::ToolCallFunction {
+                        name:      call.name.clone(),
                         arguments: call.args.to_string(),
                     },
-                    index: None,
+                    index:     None,
                 });
                 next_tool_id += 1;
             } else if let Some(function_response) = &part.function_response {
                 messages.push(openai::ChatMessage {
-                    role: "tool".to_string(),
-                    content: Some(openai::MessageContent::Text(
+                    role:              "tool".to_string(),
+                    content:           Some(openai::MessageContent::Text(
                         function_response.response.to_string(),
                     )),
-                    name: Some(function_response.name.clone()),
-                    tool_calls: None,
-                    tool_call_id: Some(format!("call_{}", next_tool_id.saturating_sub(1))),
+                    name:              Some(function_response.name.clone()),
+                    tool_calls:        None,
+                    tool_call_id:      Some(format!("call_{}", next_tool_id.saturating_sub(1))),
                     reasoning_content: None,
                 });
             }
@@ -251,7 +249,7 @@ pub fn openai_image_to_gemini_imagen_request(
     }
 
     Ok(gemini::GeminiImageRequest {
-        instances: vec![gemini::GeminiImageInstance {
+        instances:  vec![gemini::GeminiImageInstance {
             prompt: req.prompt.clone(),
         }],
         parameters: gemini::GeminiImageParameters {
@@ -291,16 +289,16 @@ pub fn gemini_response_to_openai_chat(
     requested_model: impl Into<String>,
 ) -> openai::ChatCompletionResponse {
     openai::ChatCompletionResponse {
-        id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
-        object: "chat.completion".to_string(),
+        id:      format!("chatcmpl-{}", Uuid::new_v4().simple()),
+        object:  "chat.completion".to_string(),
         created: now_unix(),
-        model: requested_model.into(),
+        model:   requested_model.into(),
         choices: resp
             .candidates
             .into_iter()
             .map(gemini_candidate_to_openai_choice)
             .collect(),
-        usage: Some(gemini_usage_to_openai(resp.usage_metadata)),
+        usage:   Some(gemini_usage_to_openai(resp.usage_metadata)),
     }
 }
 
@@ -309,31 +307,31 @@ pub fn openai_chat_to_gemini_response(
 ) -> gemini::GeminiChatResponse {
     let usage = resp.usage.unwrap_or_default();
     gemini::GeminiChatResponse {
-        candidates: resp
+        candidates:      resp
             .choices
             .into_iter()
             .map(openai_choice_to_gemini_candidate)
             .collect(),
         prompt_feedback: None,
-        usage_metadata: openai_usage_to_gemini(usage),
+        usage_metadata:  openai_usage_to_gemini(usage),
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct GeminiSseToOpenAiTranslator {
-    completion_id: String,
-    created: u64,
+    completion_id:   String,
+    created:         u64,
     requested_model: String,
-    done: bool,
+    done:            bool,
 }
 
 impl GeminiSseToOpenAiTranslator {
     pub fn new(requested_model: impl Into<String>) -> Self {
         Self {
-            completion_id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
-            created: now_unix(),
+            completion_id:   format!("chatcmpl-{}", Uuid::new_v4().simple()),
+            created:         now_unix(),
             requested_model: requested_model.into(),
-            done: false,
+            done:            false,
         }
     }
 
@@ -428,7 +426,7 @@ fn append_openai_tool_result_as_gemini(
         .is_none_or(|content| content.role.as_deref() == Some("model"))
     {
         contents.push(gemini::GeminiChatContent {
-            role: Some("user".to_string()),
+            role:  Some("user".to_string()),
             parts: Vec::new(),
         });
     }
@@ -503,7 +501,7 @@ fn openai_image_url_to_gemini_part(url: &str) -> gemini::GeminiPart {
         gemini::GeminiPart {
             file_data: Some(gemini::GeminiFileData {
                 mime_type: None,
-                file_uri: url.to_string(),
+                file_uri:  url.to_string(),
             }),
             ..gemini::GeminiPart::default()
         }
@@ -552,9 +550,9 @@ fn openai_tools_to_gemini(tools: &[openai::Tool]) -> Vec<gemini::GeminiTool> {
             }),
             _ if tool.tool_type == "function" => {
                 declarations.push(gemini::GeminiFunctionDeclaration {
-                    name: tool.function.name.clone(),
+                    name:        tool.function.name.clone(),
                     description: tool.function.description.clone(),
-                    parameters: tool.function.parameters.clone(),
+                    parameters:  tool.function.parameters.clone(),
                 });
             }
             _ => {}
@@ -576,10 +574,10 @@ fn gemini_tools_to_openai(tools: &[gemini::GeminiTool]) -> Vec<openai::Tool> {
         .flat_map(|tool| tool.function_declarations.iter())
         .map(|declaration| openai::Tool {
             tool_type: "function".to_string(),
-            function: openai::FunctionTool {
-                name: declaration.name.clone(),
+            function:  openai::FunctionTool {
+                name:        declaration.name.clone(),
                 description: declaration.description.clone(),
-                parameters: declaration.parameters.clone(),
+                parameters:  declaration.parameters.clone(),
             },
         })
         .collect()
@@ -674,8 +672,8 @@ fn gemini_parts_text(parts: &[gemini::GeminiPart]) -> String {
 fn gemini_candidate_to_openai_choice(candidate: gemini::GeminiCandidate) -> openai::ChatChoice {
     let (content, reasoning_content, tool_calls) = gemini_parts_to_openai(candidate.content.parts);
     openai::ChatChoice {
-        index: candidate.index,
-        message: openai::ChatMessage {
+        index:         candidate.index,
+        message:       openai::ChatMessage {
             role: "assistant".to_string(),
             content: Some(openai::MessageContent::Text(content)),
             name: None,
@@ -705,12 +703,12 @@ fn openai_choice_to_gemini_candidate(choice: openai::ChatChoice) -> gemini::Gemi
         }));
     }
     gemini::GeminiCandidate {
-        content: gemini::GeminiChatContent {
+        content:        gemini::GeminiChatContent {
             role: Some("model".to_string()),
             parts,
         },
-        finish_reason: choice.finish_reason.map(openai_finish_to_gemini),
-        index: choice.index,
+        finish_reason:  choice.finish_reason.map(openai_finish_to_gemini),
+        index:          choice.index,
         safety_ratings: Vec::new(),
     }
 }
@@ -720,8 +718,8 @@ fn gemini_candidate_to_openai_chunk_choice(
 ) -> openai::ChatChunkChoice {
     let (content, reasoning_content, tool_calls) = gemini_parts_to_openai(candidate.content.parts);
     openai::ChatChunkChoice {
-        index: candidate.index,
-        delta: openai::ChatChunkDelta {
+        index:         candidate.index,
+        delta:         openai::ChatChunkDelta {
             role: None,
             content: (!content.is_empty()).then_some(content),
             reasoning_content,
@@ -760,12 +758,12 @@ fn openai_chunk_choice_to_gemini_candidate(
         }));
     }
     gemini::GeminiCandidate {
-        content: gemini::GeminiChatContent {
+        content:        gemini::GeminiChatContent {
             role: Some("model".to_string()),
             parts,
         },
-        finish_reason: choice.finish_reason.map(openai_finish_to_gemini),
-        index: choice.index,
+        finish_reason:  choice.finish_reason.map(openai_finish_to_gemini),
+        index:          choice.index,
         safety_ratings: Vec::new(),
     }
 }
@@ -792,13 +790,13 @@ fn gemini_parts_to_openai(
             ));
         } else if let Some(call) = part.function_call {
             tool_calls.push(openai::ToolCall {
-                id: format!("call_{}", tool_calls.len() + 1),
+                id:        format!("call_{}", tool_calls.len() + 1),
                 tool_type: "function".to_string(),
-                function: openai::ToolCallFunction {
-                    name: call.name,
+                function:  openai::ToolCallFunction {
+                    name:      call.name,
                     arguments: call.args.to_string(),
                 },
-                index: Some(tool_calls.len() as u32),
+                index:     Some(tool_calls.len() as u32),
             });
         } else if let Some(code) = part.executable_code {
             text.push(format!("```{}\n{}\n```", code.language, code.code));
@@ -829,24 +827,24 @@ fn gemini_usage_to_openai(usage: gemini::GeminiUsageMetadata) -> openai::Usage {
         usage.prompt_token_count + completion
     };
     openai::Usage {
-        prompt_tokens: usage.prompt_token_count + usage.cached_content_token_count,
-        completion_tokens: completion,
-        total_tokens: total,
+        prompt_tokens:         usage.prompt_token_count + usage.cached_content_token_count,
+        completion_tokens:     completion,
+        total_tokens:          total,
         prompt_tokens_details: openai::TokenUsageDetails {
             cached_tokens: usage.cached_content_token_count,
             ..openai::TokenUsageDetails::default()
         },
-        input_tokens_details: None,
-        cached_tokens: usage.cached_content_token_count,
+        input_tokens_details:  None,
+        cached_tokens:         usage.cached_content_token_count,
     }
 }
 
 fn openai_usage_to_gemini(usage: openai::Usage) -> gemini::GeminiUsageMetadata {
     gemini::GeminiUsageMetadata {
-        prompt_token_count: usage.prompt_tokens,
-        candidates_token_count: usage.completion_tokens,
-        total_token_count: usage.total_tokens,
-        thoughts_token_count: 0,
+        prompt_token_count:         usage.prompt_tokens,
+        candidates_token_count:     usage.completion_tokens,
+        total_token_count:          usage.total_tokens,
+        thoughts_token_count:       0,
         cached_content_token_count: 0,
     }
 }
@@ -915,37 +913,37 @@ mod tests {
     #[test]
     fn converts_openai_tool_call_to_gemini_function_call_like_new_api() {
         let req = openai::ChatCompletionRequest {
-            model: "gpt-4o-mini".to_string(),
-            messages: vec![openai::ChatMessage {
-                role: "assistant".to_string(),
-                content: Some(openai::MessageContent::Text("".to_string())),
-                name: None,
-                tool_calls: Some(vec![openai::ToolCall {
-                    id: "call_1".to_string(),
+            model:                 "gpt-4o-mini".to_string(),
+            messages:              vec![openai::ChatMessage {
+                role:              "assistant".to_string(),
+                content:           Some(openai::MessageContent::Text("".to_string())),
+                name:              None,
+                tool_calls:        Some(vec![openai::ToolCall {
+                    id:        "call_1".to_string(),
                     tool_type: "function".to_string(),
-                    function: openai::ToolCallFunction {
-                        name: "lookup".to_string(),
+                    function:  openai::ToolCallFunction {
+                        name:      "lookup".to_string(),
                         arguments: "{\"q\":\"rust\"}".to_string(),
                     },
-                    index: None,
+                    index:     None,
                 }]),
-                tool_call_id: None,
+                tool_call_id:      None,
                 reasoning_content: None,
             }],
-            max_tokens: Some(128),
+            max_tokens:            Some(128),
             max_completion_tokens: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            stream: None,
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            stop: None,
-            n: None,
-            seed: None,
-            response_format: None,
-            stream_options: None,
+            temperature:           None,
+            top_p:                 None,
+            top_k:                 None,
+            stream:                None,
+            tools:                 None,
+            tool_choice:           None,
+            parallel_tool_calls:   None,
+            stop:                  None,
+            n:                     None,
+            seed:                  None,
+            response_format:       None,
+            stream_options:        None,
         };
 
         let gemini = openai_chat_to_gemini_request(&req).unwrap();
@@ -958,9 +956,9 @@ mod tests {
     #[test]
     fn converts_gemini_function_call_to_openai_tool_calls_like_new_api() {
         let resp = gemini::GeminiChatResponse {
-            candidates: vec![gemini::GeminiCandidate {
-                content: gemini::GeminiChatContent {
-                    role: Some("model".to_string()),
+            candidates:      vec![gemini::GeminiCandidate {
+                content:        gemini::GeminiChatContent {
+                    role:  Some("model".to_string()),
                     parts: vec![gemini::GeminiPart {
                         function_call: Some(gemini::GeminiFunctionCall {
                             name: "lookup".to_string(),
@@ -969,16 +967,16 @@ mod tests {
                         ..gemini::GeminiPart::default()
                     }],
                 },
-                finish_reason: Some("STOP".to_string()),
-                index: 0,
+                finish_reason:  Some("STOP".to_string()),
+                index:          0,
                 safety_ratings: Vec::new(),
             }],
             prompt_feedback: None,
-            usage_metadata: gemini::GeminiUsageMetadata {
-                prompt_token_count: 3,
-                candidates_token_count: 4,
-                total_token_count: 7,
-                thoughts_token_count: 0,
+            usage_metadata:  gemini::GeminiUsageMetadata {
+                prompt_token_count:         3,
+                candidates_token_count:     4,
+                total_token_count:          7,
+                thoughts_token_count:       0,
                 cached_content_token_count: 0,
             },
         };
@@ -1060,7 +1058,9 @@ mod tests {
         })
         .to_string();
 
-        let events = translator.translate_sse_payload(&payload).expect("translate");
+        let events = translator
+            .translate_sse_payload(&payload)
+            .expect("translate");
         // Gemini never sends a native [DONE]; a MAX_TOKENS finish must still
         // terminate the stream or the downstream client blocks until close.
         assert_eq!(events.last().map(String::as_str), Some("[DONE]"));

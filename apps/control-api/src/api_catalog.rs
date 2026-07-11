@@ -1,60 +1,52 @@
 //! Catalog, redemption, top-up, and group HTTP handlers.
 
-use std::collections::BTreeSet;
-
+use crate::{
+    AppState, ModelUpdateQuery, PageQuery,
+    api_user::TokenSearchQuery,
+    billing::{
+        CompleteTopUpRequest, CreateRedemptionsRequest, DeleteInvalidRedemptionsRequest,
+        DeleteRedemptionRequest, GetRedemptionRequest, ListRedemptionsRequest, ListTopUpsRequest,
+        RedeemRedemptionRequest, RedemptionRecord, RollbackRedeemRedemptionRequest,
+        SearchRedemptionsRequest, UpdateRedemptionRequest,
+    },
+    catalog::{
+        CreateModelRequest, CreateVendorRequest, DeleteModelRequest, DeleteVendorRequest,
+        GetModelRequest, GetVendorRequest, ListModelsRequest, ListVendorsRequest, ModelRecord,
+        SearchModelsRequest, SearchVendorsRequest, UpdateModelRequest, UpdateVendorRequest,
+        VendorModelCountsRequest, VendorRecord, enrich_models, missing_models,
+    },
+    http_auth::{current_user, require_role},
+    http_response::{api_error_status, api_ok, api_success, json_error, management_error},
+    model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest},
+    options_util::{
+        collect_json_object_keys, option_f64, require_payment_compliance, topup_info_payload,
+    },
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use halolake_control_plane::{
-    AdjustUserQuotaRequest, SnapshotRequest, SnapshotResponse,
-};
-use halolake_domain::{
-    PageRequest, ROLE_ADMIN_USER, SearchRequest,
-};
+use halolake_control_plane::{AdjustUserQuotaRequest, SnapshotRequest, SnapshotResponse};
+use halolake_domain::{PageRequest, ROLE_ADMIN_USER, SearchRequest};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
+use std::collections::BTreeSet;
 use tracing::warn;
-
-use crate::api_user::TokenSearchQuery;
-use crate::billing::{
-    CompleteTopUpRequest, CreateRedemptionsRequest, DeleteInvalidRedemptionsRequest,
-    DeleteRedemptionRequest, GetRedemptionRequest, ListRedemptionsRequest, ListTopUpsRequest,
-    RedeemRedemptionRequest, RedemptionRecord, RollbackRedeemRedemptionRequest,
-    SearchRedemptionsRequest, UpdateRedemptionRequest,
-};
-use crate::catalog::{
-    CreateModelRequest, CreateVendorRequest, DeleteModelRequest, DeleteVendorRequest,
-    GetModelRequest, GetVendorRequest, ListModelsRequest, ListVendorsRequest, ModelRecord,
-    SearchModelsRequest, SearchVendorsRequest, UpdateModelRequest, UpdateVendorRequest,
-    VendorModelCountsRequest, VendorRecord, enrich_models, missing_models,
-};
-use crate::http_auth::{current_user, require_role};
-use crate::http_response::{api_error_status, api_ok, api_success, json_error, management_error};
-use crate::model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest};
-use crate::options_util::{
-    collect_json_object_keys, option_f64, require_payment_compliance,
-    topup_info_payload,
-};
-use crate::{
-    AppState, ModelUpdateQuery, PageQuery,
-};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RedemptionSearchQuery {
     #[serde(default = "crate::default_page")]
-    pub(crate) page: usize,
+    pub(crate) page:      usize,
     #[serde(default = "crate::default_page_size")]
     pub(crate) page_size: usize,
     #[serde(default)]
-    pub(crate) keyword: String,
+    pub(crate) keyword:   String,
     #[serde(default)]
-    pub(crate) status: String,
+    pub(crate) status:    String,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RedemptionUpdateQuery {
@@ -62,29 +54,25 @@ pub(crate) struct RedemptionUpdateQuery {
     pub(crate) status_only: Option<String>,
 }
 
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TopUpQuery {
     #[serde(default = "crate::default_page")]
-    pub(crate) page: usize,
+    pub(crate) page:      usize,
     #[serde(default = "crate::default_page_size")]
     pub(crate) page_size: usize,
     #[serde(default)]
-    pub(crate) keyword: String,
+    pub(crate) keyword:   String,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RedeemTopUpPayload {
     pub(crate) key: String,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CompleteTopUpPayload {
     pub(crate) trade_no: String,
 }
-
 
 pub(crate) async fn api_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = current_user(&state, &headers).await {
@@ -92,7 +80,6 @@ pub(crate) async fn api_models(State(state): State<AppState>, headers: HeaderMap
     }
     model_list_response(&state).await
 }
-
 
 pub(crate) async fn get_groups(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
@@ -122,7 +109,6 @@ pub(crate) async fn get_groups(State(state): State<AppState>, headers: HeaderMap
     api_success(groups.into_iter().collect::<Vec<_>>())
 }
 
-
 pub(crate) async fn list_redemptions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -142,7 +128,6 @@ pub(crate) async fn list_redemptions(
     }
 }
 
-
 pub(crate) async fn search_redemptions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -155,12 +140,12 @@ pub(crate) async fn search_redemptions(
     match state
         .billing
         .call(SearchRedemptionsRequest {
-            page: PageRequest {
-                page: query.page,
+            page:    PageRequest {
+                page:      query.page,
                 page_size: query.page_size,
             },
             keyword: query.keyword,
-            status: query.status,
+            status:  query.status,
         })
         .await
     {
@@ -168,7 +153,6 @@ pub(crate) async fn search_redemptions(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_redemption(
     State(state): State<AppState>,
@@ -184,7 +168,6 @@ pub(crate) async fn get_redemption(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn create_redemption(
     State(state): State<AppState>,
@@ -210,7 +193,6 @@ pub(crate) async fn create_redemption(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn update_redemption(
     State(state): State<AppState>,
@@ -238,7 +220,6 @@ pub(crate) async fn update_redemption(
     }
 }
 
-
 pub(crate) async fn delete_redemption(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -254,8 +235,10 @@ pub(crate) async fn delete_redemption(
     }
 }
 
-
-pub(crate) async fn delete_invalid_redemptions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn delete_invalid_redemptions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -266,7 +249,6 @@ pub(crate) async fn delete_invalid_redemptions(State(state): State<AppState>, he
     }
 }
 
-
 pub(crate) async fn topup_info(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = current_user(&state, &headers).await {
         return resp;
@@ -274,7 +256,6 @@ pub(crate) async fn topup_info(State(state): State<AppState>, headers: HeaderMap
     let options = state.options.values().unwrap_or_default();
     api_success(topup_info_payload(&options))
 }
-
 
 pub(crate) async fn list_self_topups(
     State(state): State<AppState>,
@@ -285,21 +266,17 @@ pub(crate) async fn list_self_topups(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    list_topups(
-        &state,
-        ListTopUpsRequest {
-            user_id: Some(user.id),
-            page: PageRequest {
-                page: query.page,
-                page_size: query.page_size,
-            },
-            keyword: query.keyword,
-            recent_only: true,
+    list_topups(&state, ListTopUpsRequest {
+        user_id:     Some(user.id),
+        page:        PageRequest {
+            page:      query.page,
+            page_size: query.page_size,
         },
-    )
+        keyword:     query.keyword,
+        recent_only: true,
+    })
     .await
 }
-
 
 pub(crate) async fn list_all_topups(
     State(state): State<AppState>,
@@ -310,21 +287,17 @@ pub(crate) async fn list_all_topups(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    list_topups(
-        &state,
-        ListTopUpsRequest {
-            user_id: None,
-            page: PageRequest {
-                page: query.page,
-                page_size: query.page_size,
-            },
-            keyword: query.keyword,
-            recent_only: false,
+    list_topups(&state, ListTopUpsRequest {
+        user_id:     None,
+        page:        PageRequest {
+            page:      query.page,
+            page_size: query.page_size,
         },
-    )
+        keyword:     query.keyword,
+        recent_only: false,
+    })
     .await
 }
-
 
 pub(crate) async fn list_topups(state: &AppState, req: ListTopUpsRequest) -> Response {
     match state.billing.call(req).await {
@@ -332,7 +305,6 @@ pub(crate) async fn list_topups(state: &AppState, req: ListTopUpsRequest) -> Res
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn redeem_topup(
     State(state): State<AppState>,
@@ -349,7 +321,7 @@ pub(crate) async fn redeem_topup(
     let redeemed = match state
         .billing
         .call(RedeemRedemptionRequest {
-            key: payload.key,
+            key:     payload.key,
             user_id: user.id,
         })
         .await
@@ -363,7 +335,7 @@ pub(crate) async fn redeem_topup(
     match state
         .management
         .call(AdjustUserQuotaRequest {
-            id: user.id,
+            id:    user.id,
             delta: redeemed.quota,
         })
         .await
@@ -373,7 +345,7 @@ pub(crate) async fn redeem_topup(
             if let Err(rollback_err) = state
                 .billing
                 .call(RollbackRedeemRedemptionRequest {
-                    id: redeemed.id,
+                    id:      redeemed.id,
                     user_id: user.id,
                 })
                 .await
@@ -389,7 +361,6 @@ pub(crate) async fn redeem_topup(
         }
     }
 }
-
 
 pub(crate) async fn complete_topup(
     State(state): State<AppState>,
@@ -420,7 +391,7 @@ pub(crate) async fn complete_topup(
         if let Err(err) = state
             .management
             .call(AdjustUserQuotaRequest {
-                id: completed.topup.user_id,
+                id:    completed.topup.user_id,
                 delta: completed.quota,
             })
             .await
@@ -430,7 +401,6 @@ pub(crate) async fn complete_topup(
     }
     api_success(JsonValue::Null)
 }
-
 
 pub(crate) async fn list_vendors(
     State(state): State<AppState>,
@@ -451,7 +421,6 @@ pub(crate) async fn list_vendors(
     }
 }
 
-
 pub(crate) async fn search_vendors(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -465,8 +434,8 @@ pub(crate) async fn search_vendors(
         .catalog
         .call(SearchVendorsRequest {
             search: SearchRequest {
-                page: PageRequest {
-                    page: query.page,
+                page:    PageRequest {
+                    page:      query.page,
                     page_size: query.page_size,
                 },
                 keyword: query.keyword,
@@ -478,7 +447,6 @@ pub(crate) async fn search_vendors(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_vendor(
     State(state): State<AppState>,
@@ -495,7 +463,6 @@ pub(crate) async fn get_vendor(
     }
 }
 
-
 pub(crate) async fn create_vendor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -510,7 +477,6 @@ pub(crate) async fn create_vendor(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn update_vendor(
     State(state): State<AppState>,
@@ -527,7 +493,6 @@ pub(crate) async fn update_vendor(
     }
 }
 
-
 pub(crate) async fn delete_vendor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -542,7 +507,6 @@ pub(crate) async fn delete_vendor(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn list_model_meta(
     State(state): State<AppState>,
@@ -577,7 +541,6 @@ pub(crate) async fn list_model_meta(
     }))
 }
 
-
 pub(crate) async fn search_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -591,8 +554,8 @@ pub(crate) async fn search_model_meta(
         .catalog
         .call(SearchModelsRequest {
             search: SearchRequest {
-                page: PageRequest {
-                    page: query.page,
+                page:    PageRequest {
+                    page:      query.page,
                     page_size: query.page_size,
                 },
                 keyword: query.keyword,
@@ -609,7 +572,6 @@ pub(crate) async fn search_model_meta(
     }
     api_success(page)
 }
-
 
 pub(crate) async fn get_model_meta(
     State(state): State<AppState>,
@@ -630,7 +592,6 @@ pub(crate) async fn get_model_meta(
     api_success(model)
 }
 
-
 pub(crate) async fn create_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -645,7 +606,6 @@ pub(crate) async fn create_model_meta(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn update_model_meta(
     State(state): State<AppState>,
@@ -670,7 +630,6 @@ pub(crate) async fn update_model_meta(
     }
 }
 
-
 pub(crate) async fn delete_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -686,8 +645,10 @@ pub(crate) async fn delete_model_meta(
     }
 }
 
-
-pub(crate) async fn get_missing_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn get_missing_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -702,7 +663,6 @@ pub(crate) async fn get_missing_models(State(state): State<AppState>, headers: H
     };
     api_success(missing_models(&management, &catalog))
 }
-
 
 pub(crate) async fn sync_upstream_preview(
     State(state): State<AppState>,
@@ -720,7 +680,6 @@ pub(crate) async fn sync_upstream_preview(
     }
 }
 
-
 pub(crate) async fn sync_upstream_models(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -737,13 +696,14 @@ pub(crate) async fn sync_upstream_models(
     }
 }
 
-
-pub(crate) fn enrich_model_page(state: &AppState, models: &mut [ModelRecord]) -> Result<(), Response> {
+pub(crate) fn enrich_model_page(
+    state: &AppState,
+    models: &mut [ModelRecord],
+) -> Result<(), Response> {
     let management = state.management.current_data().map_err(management_error)?;
     enrich_models(models, &management);
     Ok(())
 }
-
 
 pub(crate) async fn model_list_response(state: &AppState) -> Response {
     match state
@@ -769,12 +729,9 @@ pub(crate) async fn model_list_response(state: &AppState) -> Response {
     }
 }
 
-
 pub(crate) fn push_non_empty_group(groups: &mut BTreeSet<String>, group: String) {
     let group = group.trim();
     if !group.is_empty() {
         groups.insert(group.to_string());
     }
 }
-
-

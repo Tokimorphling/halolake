@@ -1,63 +1,56 @@
 //! Options, pricing, rankings, and related helpers.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-
+use crate::{
+    AppState, DEFAULT_CHANNEL_AFFINITY_RULES_JSON, DEFAULT_MODEL_RATIO_JSON,
+    api_user::CheckinSetting,
+    catalog::{CatalogData, ModelRecord},
+    channel_affinity::{
+        ChannelAffinityService, ClearChannelAffinityCacheRequest,
+        GetChannelAffinityCacheStatsRequest,
+    },
+    config::ControlApiConfig,
+    http_auth::require_role,
+    http_response::{
+        api_error_status, api_ok, api_success, api_success_with_extra, management_error,
+        usage_error,
+    },
+    now_unix, publish_management_snapshot,
+    ratio_sync::{FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService},
+    storage::{ListOptionsRequest, UpdateOptionRequest},
+};
 use axum::{
     Json,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use halolake_control_plane::{
-    ManagementData, ManagementError, UsagePricing,
-};
+use halolake_control_plane::{ManagementData, ManagementError, UsagePricing};
 use halolake_domain::{ChannelRecord, ROLE_ROOT_USER, STATUS_ENABLED, UsageEvent, UsageStatus};
-use halolake_router_core::{
-    ChannelAffinityConfig, ChannelAffinityRule, GroupRoutingConfig,
-};
+use halolake_router_core::{ChannelAffinityConfig, ChannelAffinityRule, GroupRoutingConfig};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
-
-use crate::catalog::{CatalogData, ModelRecord};
-use crate::channel_affinity::{
-    ChannelAffinityService, ClearChannelAffinityCacheRequest, GetChannelAffinityCacheStatsRequest,
-};
-use crate::config::ControlApiConfig;
-use crate::http_auth::require_role;
-use crate::http_response::{
-    api_error_status, api_ok, api_success, api_success_with_extra, management_error, usage_error,
-};
-use crate::ratio_sync::{FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService};
-use crate::storage::{ListOptionsRequest, UpdateOptionRequest};
-use crate::{
-    AppState, DEFAULT_CHANNEL_AFFINITY_RULES_JSON, DEFAULT_MODEL_RATIO_JSON, now_unix, publish_management_snapshot,
-};
-
-use crate::api_user::CheckinSetting;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct OptionUpdatePayload {
-    key: String,
+    key:   String,
     #[serde(default)]
     value: JsonValue,
 }
-
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub(crate) struct PaymentCompliancePayload {
     confirmed: bool,
 }
 
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelAffinityCacheQuery {
     #[serde(default)]
-    all: bool,
+    all:       bool,
     #[serde(default)]
     rule_name: String,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct PricingQuery {
@@ -65,13 +58,11 @@ pub(crate) struct PricingQuery {
     group: String,
 }
 
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RankingsQuery {
     #[serde(default = "crate::default_ranking_period")]
     period: String,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct PerfMetricsQuery {
@@ -83,8 +74,10 @@ pub(crate) struct PerfMetricsQuery {
     hours: i64,
 }
 
-
-pub(crate) async fn api_pricing(State(state): State<AppState>, Query(query): Query<PricingQuery>) -> Response {
+pub(crate) async fn api_pricing(
+    State(state): State<AppState>,
+    Query(query): Query<PricingQuery>,
+) -> Response {
     let options = state.options.values().unwrap_or_default();
     let management = match state.management.current_data() {
         Ok(data) => data,
@@ -122,7 +115,6 @@ pub(crate) async fn api_pricing(State(state): State<AppState>, Query(query): Que
     }))
 }
 
-
 pub(crate) async fn api_rankings(
     State(state): State<AppState>,
     Query(query): Query<RankingsQuery>,
@@ -142,7 +134,6 @@ pub(crate) async fn api_rankings(
     api_success(rankings_snapshot(&events, &catalog, config))
 }
 
-
 pub(crate) async fn api_perf_metrics(
     State(state): State<AppState>,
     Query(query): Query<PerfMetricsQuery>,
@@ -157,7 +148,6 @@ pub(crate) async fn api_perf_metrics(
     api_success(perf_metrics_for_model(&events, &query))
 }
 
-
 pub(crate) async fn api_perf_metrics_summary(
     State(state): State<AppState>,
     Query(query): Query<PerfMetricsQuery>,
@@ -168,7 +158,6 @@ pub(crate) async fn api_perf_metrics_summary(
     };
     api_success(perf_metrics_summary(&events, query.hours))
 }
-
 
 pub(crate) async fn get_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ROOT_USER).await {
@@ -187,7 +176,7 @@ pub(crate) async fn get_options(State(state): State<AppState>, headers: HeaderMa
                 visible.push(option);
             }
             visible.push(crate::storage::OptionRecord {
-                key: "CompletionRatioMeta".to_string(),
+                key:   "CompletionRatioMeta".to_string(),
                 value: build_completion_ratio_meta(&option_values),
             });
             api_success(visible)
@@ -195,7 +184,6 @@ pub(crate) async fn get_options(State(state): State<AppState>, headers: HeaderMa
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn update_option(
     State(state): State<AppState>,
@@ -241,8 +229,10 @@ pub(crate) async fn update_option(
     }
 }
 
-
-pub(crate) async fn reset_model_ratio(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn reset_model_ratio(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ROOT_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -250,7 +240,7 @@ pub(crate) async fn reset_model_ratio(State(state): State<AppState>, headers: He
     match state
         .options
         .call(UpdateOptionRequest {
-            key: "ModelRatio".to_string(),
+            key:   "ModelRatio".to_string(),
             value: DEFAULT_MODEL_RATIO_JSON.to_string(),
         })
         .await
@@ -260,8 +250,10 @@ pub(crate) async fn reset_model_ratio(State(state): State<AppState>, headers: He
     }
 }
 
-
-pub(crate) async fn get_syncable_channels(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn get_syncable_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ROOT_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -272,7 +264,6 @@ pub(crate) async fn get_syncable_channels(State(state): State<AppState>, headers
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn fetch_upstream_ratios(
     State(state): State<AppState>,
@@ -291,7 +282,6 @@ pub(crate) async fn fetch_upstream_ratios(
     }
 }
 
-
 pub(crate) async fn get_channel_affinity_cache_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -307,7 +297,6 @@ pub(crate) async fn get_channel_affinity_cache_stats(
     }
 }
 
-
 pub(crate) async fn clear_channel_affinity_cache(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -320,7 +309,7 @@ pub(crate) async fn clear_channel_affinity_cache(
     let service = ChannelAffinityService::new(state.options.clone());
     match service
         .call(ClearChannelAffinityCacheRequest {
-            all: query.all,
+            all:       query.all,
             rule_name: query.rule_name,
         })
         .await
@@ -332,7 +321,6 @@ pub(crate) async fn clear_channel_affinity_cache(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn confirm_payment_compliance(
     State(state): State<AppState>,
@@ -377,7 +365,6 @@ pub(crate) async fn confirm_payment_compliance(
         "confirmed_by": actor.id,
     }))
 }
-
 
 pub(crate) fn pricing_records(
     management: &ManagementData,
@@ -463,8 +450,10 @@ pub(crate) fn pricing_records(
         .collect()
 }
 
-
-pub(crate) fn pricing_usable_groups(options: &BTreeMap<String, String>, requested_group: &str) -> JsonValue {
+pub(crate) fn pricing_usable_groups(
+    options: &BTreeMap<String, String>,
+    requested_group: &str,
+) -> JsonValue {
     let groups = user_usable_groups_for_options(options, requested_group);
     let mut groups = groups
         .into_iter()
@@ -476,15 +465,16 @@ pub(crate) fn pricing_usable_groups(options: &BTreeMap<String, String>, requeste
     JsonValue::Object(groups)
 }
 
-
-pub(crate) fn pricing_auto_groups(options: &BTreeMap<String, String>, requested_group: &str) -> Vec<String> {
+pub(crate) fn pricing_auto_groups(
+    options: &BTreeMap<String, String>,
+    requested_group: &str,
+) -> Vec<String> {
     let usable = user_usable_groups_for_options(options, requested_group);
     parse_string_vec(options.get("AutoGroups"))
         .into_iter()
         .filter(|group| usable.contains_key(group))
         .collect()
 }
-
 
 pub(crate) fn user_usable_groups_for_options(
     options: &BTreeMap<String, String>,
@@ -514,7 +504,6 @@ pub(crate) fn user_usable_groups_for_options(
     groups
 }
 
-
 pub(crate) fn enabled_pricing_models(management: &ManagementData) -> Vec<String> {
     let mut models = management
         .channels
@@ -534,7 +523,6 @@ pub(crate) fn enabled_pricing_models(management: &ManagementData) -> Vec<String>
     models
 }
 
-
 pub(crate) fn catalog_model_for_name<'a>(
     catalog: &'a CatalogData,
     model_name: &str,
@@ -553,8 +541,10 @@ pub(crate) fn catalog_model_for_name<'a>(
         })
 }
 
-
-pub(crate) fn pricing_groups_for_model(management: &ManagementData, model_name: &str) -> Vec<String> {
+pub(crate) fn pricing_groups_for_model(
+    management: &ManagementData,
+    model_name: &str,
+) -> Vec<String> {
     let mut groups = management
         .channels
         .iter()
@@ -568,7 +558,6 @@ pub(crate) fn pricing_groups_for_model(management: &ManagementData, model_name: 
     groups.into_iter().collect()
 }
 
-
 pub(crate) fn insert_optional_ratio(
     record: &mut serde_json::Map<String, JsonValue>,
     key: &str,
@@ -579,36 +568,33 @@ pub(crate) fn insert_optional_ratio(
     }
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RankingPeriodConfig {
-    seconds: i64,
+    seconds:     i64,
     bucket_size: i64,
 }
-
 
 pub(crate) fn ranking_period_config(period: &str) -> Result<RankingPeriodConfig, &'static str> {
     match period {
         "" | "week" => Ok(RankingPeriodConfig {
-            seconds: 7 * 24 * 3600,
+            seconds:     7 * 24 * 3600,
             bucket_size: 24 * 3600,
         }),
         "today" => Ok(RankingPeriodConfig {
-            seconds: 24 * 3600,
+            seconds:     24 * 3600,
             bucket_size: 3600,
         }),
         "month" => Ok(RankingPeriodConfig {
-            seconds: 30 * 24 * 3600,
+            seconds:     30 * 24 * 3600,
             bucket_size: 24 * 3600,
         }),
         "year" => Ok(RankingPeriodConfig {
-            seconds: 365 * 24 * 3600,
+            seconds:     365 * 24 * 3600,
             bucket_size: 7 * 24 * 3600,
         }),
         _ => Err("invalid ranking period"),
     }
 }
-
 
 pub(crate) fn rankings_snapshot(
     events: &[UsageEvent],
@@ -663,7 +649,6 @@ pub(crate) fn rankings_snapshot(
     })
 }
 
-
 pub(crate) fn usage_totals(events: &[UsageEvent], start: i64, end: i64) -> Vec<(String, u64)> {
     let mut totals = BTreeMap::<String, u64>::new();
     for event in events {
@@ -682,7 +667,6 @@ pub(crate) fn usage_totals(events: &[UsageEvent], start: i64, end: i64) -> Vec<(
     totals
 }
 
-
 pub(crate) fn rank_map(totals: &[(String, u64)]) -> BTreeMap<String, usize> {
     totals
         .iter()
@@ -691,11 +675,9 @@ pub(crate) fn rank_map(totals: &[(String, u64)]) -> BTreeMap<String, usize> {
         .collect()
 }
 
-
 pub(crate) fn token_map(totals: &[(String, u64)]) -> BTreeMap<String, u64> {
     totals.iter().cloned().collect()
 }
-
 
 pub(crate) fn ranking_vendors(
     current_totals: &[(String, u64)],
@@ -762,7 +744,6 @@ pub(crate) fn ranking_vendors(
         .collect()
 }
 
-
 pub(crate) fn ranking_model_history(
     events: &[UsageEvent],
     catalog: &CatalogData,
@@ -805,7 +786,6 @@ pub(crate) fn ranking_model_history(
         "buckets": bucket_count(start, end, bucket_size),
     })
 }
-
 
 pub(crate) fn ranking_vendor_history(
     events: &[UsageEvent],
@@ -853,7 +833,6 @@ pub(crate) fn ranking_vendor_history(
     })
 }
 
-
 pub(crate) fn usage_buckets(
     events: &[UsageEvent],
     start: i64,
@@ -873,7 +852,6 @@ pub(crate) fn usage_buckets(
     buckets
 }
 
-
 pub(crate) fn model_vendor(catalog: &CatalogData, model_name: &str) -> (String, String) {
     let Some(model) = catalog_model_for_name(catalog, model_name) else {
         return ("Unknown".to_string(), String::new());
@@ -887,7 +865,6 @@ pub(crate) fn model_vendor(catalog: &CatalogData, model_name: &str) -> (String, 
     };
     (vendor.name.clone(), vendor.icon.clone())
 }
-
 
 pub(crate) fn perf_metrics_for_model(events: &[UsageEvent], query: &PerfMetricsQuery) -> JsonValue {
     let hours = clamp_perf_hours(query.hours);
@@ -915,7 +892,6 @@ pub(crate) fn perf_metrics_for_model(events: &[UsageEvent], query: &PerfMetricsQ
         "groups": groups,
     })
 }
-
 
 pub(crate) fn perf_metrics_summary(events: &[UsageEvent], hours: i64) -> JsonValue {
     let hours = clamp_perf_hours(hours);
@@ -949,8 +925,12 @@ pub(crate) fn perf_metrics_summary(events: &[UsageEvent], hours: i64) -> JsonVal
     json!({ "models": models })
 }
 
-
-pub(crate) fn perf_group_result(group: String, events: Vec<&UsageEvent>, start: i64, end: i64) -> JsonValue {
+pub(crate) fn perf_group_result(
+    group: String,
+    events: Vec<&UsageEvent>,
+    start: i64,
+    end: i64,
+) -> JsonValue {
     let mut buckets = BTreeMap::<i64, Vec<&UsageEvent>>::new();
     for event in &events {
         let ts = event.created_at_unix_ms / 1000;
@@ -980,14 +960,12 @@ pub(crate) fn perf_group_result(group: String, events: Vec<&UsageEvent>, start: 
     })
 }
 
-
 pub(crate) fn avg_latency(events: &[&UsageEvent]) -> u64 {
     if events.is_empty() {
         return 0;
     }
     events.iter().map(|event| event.latency_ms).sum::<u64>() / events.len() as u64
 }
-
 
 pub(crate) fn success_rate(events: &[&UsageEvent]) -> f64 {
     if events.is_empty() {
@@ -999,7 +977,6 @@ pub(crate) fn success_rate(events: &[&UsageEvent]) -> f64 {
         .count();
     successes as f64 / events.len() as f64 * 100.0
 }
-
 
 pub(crate) fn avg_tps(events: &[&UsageEvent]) -> f64 {
     let tokens = events
@@ -1013,11 +990,9 @@ pub(crate) fn avg_tps(events: &[&UsageEvent]) -> f64 {
     tokens as f64 / latency_ms as f64 * 1000.0
 }
 
-
 pub(crate) fn clamp_perf_hours(hours: i64) -> i64 {
     if hours <= 0 { 24 } else { hours.min(24 * 30) }
 }
-
 
 pub(crate) fn percent(value: u64, total: u64) -> f64 {
     if total == 0 {
@@ -1027,7 +1002,6 @@ pub(crate) fn percent(value: u64, total: u64) -> f64 {
     }
 }
 
-
 pub(crate) fn growth_pct(current: u64, previous: u64) -> f64 {
     if previous == 0 {
         if current == 0 { 0.0 } else { 100.0 }
@@ -1036,14 +1010,12 @@ pub(crate) fn growth_pct(current: u64, previous: u64) -> f64 {
     }
 }
 
-
 pub(crate) fn bucket_count(start: i64, end: i64, bucket_size: i64) -> i64 {
     if bucket_size <= 0 || end <= start {
         return 0;
     }
     ((end - start) / bucket_size).saturating_add(1)
 }
-
 
 pub(crate) fn default_options(config: &ControlApiConfig) -> BTreeMap<String, String> {
     let mut options = BTreeMap::new();
@@ -1179,7 +1151,6 @@ pub(crate) fn default_options(config: &ControlApiConfig) -> BTreeMap<String, Str
     options
 }
 
-
 pub(crate) fn toml_value_to_option_string(value: &toml::Value) -> String {
     match value {
         toml::Value::String(value) => value.clone(),
@@ -1193,7 +1164,6 @@ pub(crate) fn toml_value_to_option_string(value: &toml::Value) -> String {
     }
 }
 
-
 pub(crate) fn option_value_to_string(value: JsonValue) -> String {
     match value {
         JsonValue::Null => String::new(),
@@ -1206,8 +1176,11 @@ pub(crate) fn option_value_to_string(value: JsonValue) -> String {
     }
 }
 
-
-pub(crate) fn validate_option_update(state: &AppState, key: &str, value: &str) -> Result<(), Response> {
+pub(crate) fn validate_option_update(
+    state: &AppState,
+    key: &str,
+    value: &str,
+) -> Result<(), Response> {
     if key.starts_with("payment_setting.compliance_") {
         return Err(api_error_status(
             StatusCode::OK,
@@ -1286,7 +1259,6 @@ pub(crate) fn validate_option_update(state: &AppState, key: &str, value: &str) -
     }
 }
 
-
 pub(crate) fn json_object_option_key(key: &str) -> bool {
     matches!(
         key,
@@ -1306,7 +1278,6 @@ pub(crate) fn json_object_option_key(key: &str) -> bool {
             | "AudioCompletionRatio"
     )
 }
-
 
 pub(crate) fn validate_json_object_option(key: &str, value: &str) -> Result<(), Response> {
     let parsed = serde_json::from_str::<JsonValue>(value).map_err(|err| {
@@ -1331,7 +1302,6 @@ pub(crate) fn validate_json_object_option(key: &str, value: &str) -> Result<(), 
     Ok(())
 }
 
-
 pub(crate) fn is_sensitive_option_key(key: &str) -> bool {
     key.ends_with("Token")
         || key.ends_with("Secret")
@@ -1339,7 +1309,6 @@ pub(crate) fn is_sensitive_option_key(key: &str) -> bool {
         || key.ends_with("secret")
         || key.ends_with("api_key")
 }
-
 
 pub(crate) fn build_completion_ratio_meta(options: &BTreeMap<String, String>) -> String {
     let mut model_names = BTreeSet::new();
@@ -1364,7 +1333,6 @@ pub(crate) fn build_completion_ratio_meta(options: &BTreeMap<String, String>) ->
     JsonValue::Object(meta).to_string()
 }
 
-
 pub(crate) fn collect_json_object_keys(value: Option<&String>, out: &mut BTreeSet<String>) {
     let Some(value) = value else {
         return;
@@ -1380,7 +1348,6 @@ pub(crate) fn collect_json_object_keys(value: Option<&String>, out: &mut BTreeSe
     );
 }
 
-
 pub(crate) fn parse_number_map(value: Option<&String>) -> BTreeMap<String, f64> {
     let Some(value) = value else {
         return BTreeMap::new();
@@ -1394,8 +1361,9 @@ pub(crate) fn parse_number_map(value: Option<&String>) -> BTreeMap<String, f64> 
         .collect()
 }
 
-
-pub(crate) fn parse_nested_number_map(value: Option<&String>) -> BTreeMap<String, BTreeMap<String, f64>> {
+pub(crate) fn parse_nested_number_map(
+    value: Option<&String>,
+) -> BTreeMap<String, BTreeMap<String, f64>> {
     let Some(value) = value else {
         return BTreeMap::new();
     };
@@ -1417,14 +1385,12 @@ pub(crate) fn parse_nested_number_map(value: Option<&String>) -> BTreeMap<String
         .collect()
 }
 
-
 pub(crate) fn parse_string_vec(value: Option<&String>) -> Vec<String> {
     let Some(value) = value else {
         return Vec::new();
     };
     serde_json::from_str::<Vec<String>>(value).unwrap_or_default()
 }
-
 
 pub(crate) fn parse_string_map(value: Option<&String>) -> HashMap<String, String> {
     let Some(value) = value else {
@@ -1446,8 +1412,9 @@ pub(crate) fn parse_string_map(value: Option<&String>) -> HashMap<String, String
         .collect()
 }
 
-
-pub(crate) fn parse_nested_string_map(value: Option<&String>) -> HashMap<String, HashMap<String, String>> {
+pub(crate) fn parse_nested_string_map(
+    value: Option<&String>,
+) -> HashMap<String, HashMap<String, String>> {
     let Some(value) = value else {
         return HashMap::new();
     };
@@ -1476,36 +1443,35 @@ pub(crate) fn parse_nested_string_map(value: Option<&String>) -> HashMap<String,
         .collect()
 }
 
-
 pub(crate) fn usage_pricing_from_options(options: &BTreeMap<String, String>) -> UsagePricing {
     UsagePricing {
-        quota_per_unit: option_f64(options, "QuotaPerUnit", 500_000.0),
-        model_ratio: parse_number_map(options.get("ModelRatio")),
-        model_price: parse_number_map(options.get("ModelPrice")),
-        completion_ratio: parse_number_map(options.get("CompletionRatio")),
-        cache_ratio: parse_number_map(options.get("CacheRatio")),
+        quota_per_unit:       option_f64(options, "QuotaPerUnit", 500_000.0),
+        model_ratio:          parse_number_map(options.get("ModelRatio")),
+        model_price:          parse_number_map(options.get("ModelPrice")),
+        completion_ratio:     parse_number_map(options.get("CompletionRatio")),
+        cache_ratio:          parse_number_map(options.get("CacheRatio")),
         cache_creation_ratio: parse_number_map(options.get("CreateCacheRatio")),
-        image_ratio: parse_number_map(options.get("ImageRatio")),
-        audio_ratio: parse_number_map(options.get("AudioRatio")),
-        group_ratio: parse_number_map(options.get("GroupRatio")),
-        group_group_ratio: parse_nested_number_map(options.get("GroupGroupRatio")),
+        image_ratio:          parse_number_map(options.get("ImageRatio")),
+        audio_ratio:          parse_number_map(options.get("AudioRatio")),
+        group_ratio:          parse_number_map(options.get("GroupRatio")),
+        group_group_ratio:    parse_nested_number_map(options.get("GroupGroupRatio")),
     }
 }
 
-
-pub(crate) fn group_routing_config_from_options(options: &BTreeMap<String, String>) -> GroupRoutingConfig {
+pub(crate) fn group_routing_config_from_options(
+    options: &BTreeMap<String, String>,
+) -> GroupRoutingConfig {
     let group_ratio = parse_number_map(options.get("GroupRatio"));
     let group_special_usable_groups = options
         .get("GroupSpecialUsableGroup")
         .or_else(|| options.get("group_ratio_setting.group_special_usable_group"));
     GroupRoutingConfig {
-        auto_groups: parse_string_vec(options.get("AutoGroups")),
-        user_usable_groups: parse_string_map(options.get("UserUsableGroups")),
+        auto_groups:                 parse_string_vec(options.get("AutoGroups")),
+        user_usable_groups:          parse_string_map(options.get("UserUsableGroups")),
         group_special_usable_groups: parse_nested_string_map(group_special_usable_groups),
-        known_groups: group_ratio.into_keys().collect(),
+        known_groups:                group_ratio.into_keys().collect(),
     }
 }
-
 
 pub(crate) fn checkin_setting(options: &BTreeMap<String, String>) -> CheckinSetting {
     let min_quota = option_i64(
@@ -1531,11 +1497,13 @@ pub(crate) fn checkin_setting(options: &BTreeMap<String, String>) -> CheckinSett
     }
 }
 
-
-pub(crate) fn option_str<'a>(options: &'a BTreeMap<String, String>, key: &str, default: &'a str) -> &'a str {
+pub(crate) fn option_str<'a>(
+    options: &'a BTreeMap<String, String>,
+    key: &str,
+    default: &'a str,
+) -> &'a str {
     options.get(key).map(String::as_str).unwrap_or(default)
 }
-
 
 pub(crate) fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
     options
@@ -1543,7 +1511,6 @@ pub(crate) fn option_bool(options: &BTreeMap<String, String>, key: &str, default
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
-
 
 pub(crate) fn passkey_option_alias(key: &str) -> Option<&'static str> {
     match key {
@@ -1553,7 +1520,6 @@ pub(crate) fn passkey_option_alias(key: &str) -> Option<&'static str> {
     }
 }
 
-
 pub(crate) fn generate_default_token_enabled(options: &BTreeMap<String, String>) -> bool {
     let env_default = std::env::var("GENERATE_DEFAULT_TOKEN")
         .ok()
@@ -1562,14 +1528,12 @@ pub(crate) fn generate_default_token_enabled(options: &BTreeMap<String, String>)
     option_bool(options, "GenerateDefaultToken", env_default)
 }
 
-
 pub(crate) fn option_f64(options: &BTreeMap<String, String>, key: &str, default: f64) -> f64 {
     options
         .get(key)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
-
 
 pub(crate) fn option_i64(options: &BTreeMap<String, String>, key: &str, default: i64) -> i64 {
     options
@@ -1578,57 +1542,58 @@ pub(crate) fn option_i64(options: &BTreeMap<String, String>, key: &str, default:
         .unwrap_or(default)
 }
 
-
 pub(crate) fn channel_affinity_config_from_options(
     options: &BTreeMap<String, String>,
 ) -> ChannelAffinityConfig {
     ChannelAffinityConfig {
-        enabled: option_bool(options, "channel_affinity_setting.enabled", true),
-        switch_on_success: option_bool(options, "channel_affinity_setting.switch_on_success", true),
+        enabled:                  option_bool(options, "channel_affinity_setting.enabled", true),
+        switch_on_success:        option_bool(
+            options,
+            "channel_affinity_setting.switch_on_success",
+            true,
+        ),
         keep_on_channel_disabled: option_bool(
             options,
             "channel_affinity_setting.keep_on_channel_disabled",
             false,
         ),
-        max_entries: options
+        max_entries:              options
             .get("channel_affinity_setting.max_entries")
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(100_000),
-        default_ttl_seconds: options
+        default_ttl_seconds:      options
             .get("channel_affinity_setting.default_ttl_seconds")
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(3_600),
-        rules: options
+        rules:                    options
             .get("channel_affinity_setting.rules")
             .and_then(|value| serde_json::from_str::<Vec<ChannelAffinityRule>>(value).ok())
             .unwrap_or_default(),
     }
 }
 
-
-pub(crate) fn option_json(options: &BTreeMap<String, String>, key: &str, default: JsonValue) -> JsonValue {
+pub(crate) fn option_json(
+    options: &BTreeMap<String, String>,
+    key: &str,
+    default: JsonValue,
+) -> JsonValue {
     options
         .get(key)
         .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
         .unwrap_or(default)
 }
 
-
 pub(crate) fn payment_compliance_terms_version() -> &'static str {
     "v1"
 }
-
 
 pub(crate) fn payment_compliance_confirmed(options: &BTreeMap<String, String>) -> bool {
     option_bool(options, "payment_setting.compliance_confirmed", false)
         && option_str(options, "payment_setting.compliance_terms_version", "")
             == payment_compliance_terms_version()
 }
-
-
-
 
 pub(crate) fn require_payment_compliance(state: &AppState) -> Result<(), Response> {
     match state.options.values() {

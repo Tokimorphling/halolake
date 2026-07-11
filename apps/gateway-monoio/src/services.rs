@@ -6,49 +6,49 @@ use crate::gateway::{
 
 #[derive(Clone)]
 pub(crate) struct ChatGatewayService {
-    router: AuthRouteService,
-    relay: RelayService,
-    usage: UsageReporter,
+    router:           AuthRouteService,
+    relay:            RelayService,
+    usage:            UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct ImageGatewayService {
-    router: AuthRouteService,
-    relay: RelayService,
-    usage: UsageReporter,
+    router:           AuthRouteService,
+    relay:            RelayService,
+    usage:            UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct ClaudeMessagesGatewayService {
-    router: AuthRouteService,
-    relay: RelayService,
-    usage: UsageReporter,
+    router:           AuthRouteService,
+    relay:            RelayService,
+    usage:            UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct GeminiGatewayService {
-    router: AuthRouteService,
-    relay: RelayService,
-    usage: UsageReporter,
+    router:           AuthRouteService,
+    relay:            RelayService,
+    usage:            UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct RawOpenAiGatewayService {
-    router: AuthRouteService,
-    relay: RelayService,
-    usage: UsageReporter,
+    router:           AuthRouteService,
+    relay:            RelayService,
+    usage:            UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct AuthRouteService {
     snapshots: SnapshotStore,
-    auth: AuthConfig,
-    next_key: Arc<AtomicU64>,
+    auth:      AuthConfig,
+    next_key:  Arc<AtomicU64>,
 }
 
 impl ChatGatewayService {
@@ -65,13 +65,13 @@ impl ChatGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router: AuthRouteService {
+            router:           AuthRouteService {
                 snapshots: params.param(),
-                auth: Param::<GatewayAuthPolicy>::param(params).0,
-                next_key: Arc::new(AtomicU64::new(0)),
+                auth:      Param::<GatewayAuthPolicy>::param(params).0,
+                next_key:  Arc::new(AtomicU64::new(0)),
             },
-            relay: RelayService::from_params(params),
-            usage: Param::<UsageReporter>::param(params),
+            relay:            RelayService::from_params(params),
+            usage:            Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -163,13 +163,13 @@ impl ImageGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router: AuthRouteService {
+            router:           AuthRouteService {
                 snapshots: params.param(),
-                auth: Param::<GatewayAuthPolicy>::param(params).0,
-                next_key: Arc::new(AtomicU64::new(0)),
+                auth:      Param::<GatewayAuthPolicy>::param(params).0,
+                next_key:  Arc::new(AtomicU64::new(0)),
             },
-            relay: RelayService::from_params(params),
-            usage: Param::<UsageReporter>::param(params),
+            relay:            RelayService::from_params(params),
+            usage:            Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -259,13 +259,13 @@ impl ClaudeMessagesGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router: AuthRouteService {
+            router:           AuthRouteService {
                 snapshots: params.param(),
-                auth: Param::<GatewayAuthPolicy>::param(params).0,
-                next_key: Arc::new(AtomicU64::new(0)),
+                auth:      Param::<GatewayAuthPolicy>::param(params).0,
+                next_key:  Arc::new(AtomicU64::new(0)),
             },
-            relay: RelayService::from_params(params),
-            usage: Param::<UsageReporter>::param(params),
+            relay:            RelayService::from_params(params),
+            usage:            Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -373,13 +373,13 @@ impl GeminiGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router: AuthRouteService {
+            router:           AuthRouteService {
                 snapshots: params.param(),
-                auth: Param::<GatewayAuthPolicy>::param(params).0,
-                next_key: Arc::new(AtomicU64::new(0)),
+                auth:      Param::<GatewayAuthPolicy>::param(params).0,
+                next_key:  Arc::new(AtomicU64::new(0)),
             },
-            relay: RelayService::from_params(params),
-            usage: Param::<UsageReporter>::param(params),
+            relay:            RelayService::from_params(params),
+            usage:            Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -470,13 +470,13 @@ impl RawOpenAiGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router: AuthRouteService {
+            router:           AuthRouteService {
                 snapshots: params.param(),
-                auth: Param::<GatewayAuthPolicy>::param(params).0,
-                next_key: Arc::new(AtomicU64::new(0)),
+                auth:      Param::<GatewayAuthPolicy>::param(params).0,
+                next_key:  Arc::new(AtomicU64::new(0)),
             },
-            relay: RelayService::from_params(params),
-            usage: Param::<UsageReporter>::param(params),
+            relay:            RelayService::from_params(params),
+            usage:            Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -634,11 +634,11 @@ impl Service<RouteLookup> for AuthRouteService {
         }
         let (api_key, api_key_index) = route.channel.select_api_key_with_index(key_seed);
         Ok(RouteParts {
-            auth: RequestAuth {
-                user_id: route.user_id.to_string(),
+            auth:     RequestAuth {
+                user_id:  route.user_id.to_string(),
                 token_id: auth.token.id().to_string(),
             },
-            route: RouteContext {
+            route:    RouteContext {
                 channel_id: route.channel.id.clone(),
                 provider: route.channel.provider,
                 base_url: route.channel.base_url.clone(),
@@ -671,10 +671,10 @@ impl AuthRouteService {
         state.snapshot.record_affinity(
             self.snapshots.affinity_cache(),
             &ChannelAffinityCandidate {
-                cache_key: affinity.cache_key.clone(),
-                ttl_seconds: affinity.ttl_seconds,
+                cache_key:         affinity.cache_key.clone(),
+                ttl_seconds:       affinity.ttl_seconds,
                 cached_channel_id: None,
-                rule_name: affinity.rule_name.clone(),
+                rule_name:         affinity.rule_name.clone(),
             },
             channel_id,
         );
@@ -683,24 +683,24 @@ impl AuthRouteService {
 
 fn route_affinity_context(candidate: ChannelAffinityCandidate) -> RouteAffinityContext {
     RouteAffinityContext {
-        cache_key: candidate.cache_key,
+        cache_key:   candidate.cache_key,
         ttl_seconds: candidate.ttl_seconds,
-        rule_name: candidate.rule_name,
+        rule_name:   candidate.rule_name,
     }
 }
 
 #[derive(Debug, Clone)]
 struct UsageEventParts {
-    request_id: String,
-    user_id: String,
-    token_id: String,
-    channel_id: String,
-    api_key_index: Option<usize>,
-    using_group: String,
-    requested_model: String,
-    upstream_model: String,
-    is_stream: bool,
-    ip: String,
+    request_id:          String,
+    user_id:             String,
+    token_id:            String,
+    channel_id:          String,
+    api_key_index:       Option<usize>,
+    using_group:         String,
+    requested_model:     String,
+    upstream_model:      String,
+    is_stream:           bool,
+    ip:                  String,
     upstream_request_id: String,
 }
 
@@ -769,12 +769,12 @@ fn report_channel_feedback(
         return;
     };
     reporter.report(ChannelFeedbackEvent {
-        request_id: parts.request_id.clone(),
-        channel_id: parts.channel_id.clone(),
-        api_key_index: parts.api_key_index,
-        status_code: meta.status_code,
-        reason: meta.reason,
-        message: truncate_feedback_message(&meta.message),
+        request_id:         parts.request_id.clone(),
+        channel_id:         parts.channel_id.clone(),
+        api_key_index:      parts.api_key_index,
+        status_code:        meta.status_code,
+        reason:             meta.reason,
+        message:            truncate_feedback_message(&meta.message),
         created_at_unix_ms: now_unix_ms_i64(),
     });
 }
@@ -804,6 +804,8 @@ fn report_response_usage(
         usage_status_from_http(resp.status()),
         usage,
         latency_ms,
+        // Non-stream: no separate first-token phase; leave FRT unset (UI shows N/A for stream only).
+        None,
     );
 }
 
@@ -813,6 +815,7 @@ fn report_usage_event(
     status: UsageStatus,
     usage: Option<ResponseUsage>,
     latency_ms: u64,
+    first_response_ms: Option<u64>,
 ) {
     let http_status = match status {
         UsageStatus::Success => StatusCode::OK,
@@ -845,6 +848,7 @@ fn report_usage_event(
         quota: None,
         status,
         latency_ms,
+        first_response_ms,
         is_stream: parts.is_stream,
         ip: parts.ip,
         upstream_request_id: parts.upstream_request_id,
@@ -873,9 +877,14 @@ fn wrap_streaming_usage_body(
         let mut collector = SseUsageCollector::default();
         let mut status = status;
         let mut body = inner;
+        // new-api RelayInfo.SetFirstResponseTime on first body chunk.
+        let mut first_response_ms: Option<u64> = None;
         loop {
             match MonoioBody::next_data(&mut body).await {
                 Some(Ok(bytes)) => {
+                    if first_response_ms.is_none() && !bytes.is_empty() {
+                        first_response_ms = Some(started.elapsed().as_millis() as u64);
+                    }
                     collector.push(&bytes);
                     sender.feed_data(Some(bytes));
                 }
@@ -923,6 +932,7 @@ fn wrap_streaming_usage_body(
             quota: None,
             status,
             latency_ms,
+            first_response_ms,
             is_stream: parts.is_stream,
             ip: parts.ip,
             upstream_request_id: parts.upstream_request_id,
@@ -934,7 +944,7 @@ fn wrap_streaming_usage_body(
 #[derive(Default)]
 struct SseUsageCollector {
     decoder: SseBuffer,
-    usage: Option<ResponseUsage>,
+    usage:   Option<ResponseUsage>,
 }
 
 impl SseUsageCollector {
@@ -1047,13 +1057,13 @@ mod tests {
         assert_eq!(
             collector.usage(),
             Some(ResponseUsage {
-                prompt_tokens: Some(12),
-                completion_tokens: Some(4),
-                total_tokens: Some(16),
-                cache_read_tokens: None,
+                prompt_tokens:         Some(12),
+                completion_tokens:     Some(4),
+                total_tokens:          Some(16),
+                cache_read_tokens:     None,
                 cache_creation_tokens: None,
-                image_tokens: None,
-                audio_tokens: None,
+                image_tokens:          None,
+                audio_tokens:          None,
             })
         );
     }
@@ -1069,13 +1079,13 @@ mod tests {
         assert_eq!(
             collector.usage(),
             Some(ResponseUsage {
-                prompt_tokens: Some(10),
-                completion_tokens: Some(5),
-                total_tokens: Some(15),
-                cache_read_tokens: Some(3),
+                prompt_tokens:         Some(10),
+                completion_tokens:     Some(5),
+                total_tokens:          Some(15),
+                cache_read_tokens:     Some(3),
                 cache_creation_tokens: None,
-                image_tokens: None,
-                audio_tokens: None,
+                image_tokens:          None,
+                audio_tokens:          None,
             })
         );
     }
@@ -1089,13 +1099,13 @@ mod tests {
         assert_eq!(
             collector.usage(),
             Some(ResponseUsage {
-                prompt_tokens: Some(10),
-                completion_tokens: Some(6),
-                total_tokens: Some(16),
-                cache_read_tokens: None,
+                prompt_tokens:         Some(10),
+                completion_tokens:     Some(6),
+                total_tokens:          Some(16),
+                cache_read_tokens:     None,
                 cache_creation_tokens: None,
-                image_tokens: None,
-                audio_tokens: None,
+                image_tokens:          None,
+                audio_tokens:          None,
             })
         );
     }

@@ -5,12 +5,12 @@ use crate::gateway::{
 
 #[derive(Clone)]
 pub(crate) struct RelayService {
-    claude_version: Arc<str>,
+    claude_version:      Arc<str>,
     pass_anthropic_beta: bool,
-    gemini_api_version: Arc<str>,
-    connect_timeout: Option<Duration>,
-    http: HttpUpstream,
-    https: HttpsUpstream,
+    gemini_api_version:  Arc<str>,
+    connect_timeout:     Option<Duration>,
+    http:                HttpUpstream,
+    https:               HttpsUpstream,
 }
 
 impl RelayService {
@@ -65,9 +65,7 @@ impl RelayService {
         );
 
         if let Some(proxy_url) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
-            return self
-                .send_upstream_via_proxy(uri, req, proxy_url)
-                .await;
+            return self.send_upstream_via_proxy(uri, req, proxy_url).await;
         }
 
         if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
@@ -163,13 +161,13 @@ impl RelayService {
     ) -> Result<Response<HttpBody>> {
         let proxy = crate::upstream_proxy::parse_proxy_endpoint(proxy_url)?;
         let target_host = uri.host().context("upstream uri missing host")?.to_string();
-        let target_port = uri
-            .port_u16()
-            .unwrap_or(if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
-                443
-            } else {
-                80
-            });
+        let target_port =
+            uri.port_u16()
+                .unwrap_or(if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
+                    443
+                } else {
+                    80
+                });
 
         debug!(
             proxy = %proxy.canonical,
@@ -188,8 +186,7 @@ impl RelayService {
 
         let path = req.uri().to_string();
         if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
-            let native =
-                native_tls::TlsConnector::new().context("build native-tls connector")?;
+            let native = native_tls::TlsConnector::new().context("build native-tls connector")?;
             let tls_connector = monoio_native_tls::TlsConnector::from(native);
             let tls_stream = tls_connector
                 .connect(&target_host, stream)
@@ -210,9 +207,13 @@ async fn proxy_send_request<IO>(stream: IO, req: Request<HttpBody>) -> Result<Re
 where
     IO: AsyncReadRent + AsyncWriteRent + monoio::io::Split + Unpin + 'static,
 {
-    use monoio_http::common::body::Body as MonoioBodyTrait;
-    use monoio_http::h1::codec::decoder::PayloadDecoder;
-    use monoio_http::h1::payload::{fixed_payload_pair, stream_payload_pair, Payload};
+    use monoio_http::{
+        common::body::Body as MonoioBodyTrait,
+        h1::{
+            codec::decoder::PayloadDecoder,
+            payload::{Payload, fixed_payload_pair, stream_payload_pair},
+        },
+    };
 
     let mut codec = ClientCodec::new(stream);
     if let Err(err) = codec.send_and_flush(req).await {
@@ -257,11 +258,11 @@ where
 }
 
 pub(crate) struct OpenAiChatRelayRequest<CX> {
-    pub(crate) request: openai::ChatCompletionRequest,
+    pub(crate) request:  openai::ChatCompletionRequest,
     /// Original downstream body; used for redacted structured logs and
     /// OpenAI passthrough so unknown fields (e.g. reasoning_effort) survive.
     pub(crate) raw_body: Bytes,
-    pub(crate) cx: CX,
+    pub(crate) cx:       CX,
 }
 
 impl<CX> Service<OpenAiChatRelayRequest<CX>> for RelayService
@@ -273,7 +274,11 @@ where
 
     async fn call(&self, req: OpenAiChatRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
         let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
-        debug_relay(&req.cx, req.request.is_stream(), Some(req.raw_body.as_ref()));
+        debug_relay(
+            &req.cx,
+            req.request.is_stream(),
+            Some(req.raw_body.as_ref()),
+        );
 
         match route.provider {
             Provider::Claude => {
@@ -314,17 +319,17 @@ where
                 }
             }
             Provider::OpenAi => {
-                let body = match rewrite_openai_chat_model_body(&req.raw_body, &route.upstream_model)
-                {
-                    Ok(body) => body,
-                    Err(err) => {
-                        return Ok(json_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_request_error",
-                            &format!("failed to rewrite OpenAI chat request: {err}"),
-                        ));
-                    }
-                };
+                let body =
+                    match rewrite_openai_chat_model_body(&req.raw_body, &route.upstream_model) {
+                        Ok(body) => body,
+                        Err(err) => {
+                            return Ok(json_error(
+                                StatusCode::BAD_REQUEST,
+                                "invalid_request_error",
+                                &format!("failed to rewrite OpenAI chat request: {err}"),
+                            ));
+                        }
+                    };
                 self.openai_passthrough(route, "/v1/chat/completions", body, &HeaderMap::new())
                     .await
             }
@@ -371,9 +376,9 @@ where
 }
 
 pub(crate) struct ClaudeMessagesRelayRequest<CX> {
-    pub(crate) value: JsonValue,
+    pub(crate) value:              JsonValue,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx: CX,
+    pub(crate) cx:                 CX,
 }
 
 impl<CX> Service<ClaudeMessagesRelayRequest<CX>> for RelayService
@@ -548,28 +553,28 @@ where
 }
 
 pub(crate) struct OpenAiImageRelayRequest<CX> {
-    pub(crate) kind: OpenAiImageRouteKind,
-    pub(crate) stream: bool,
-    pub(crate) payload: OpenAiImagePayload,
-    pub(crate) body: Bytes,
+    pub(crate) kind:               OpenAiImageRouteKind,
+    pub(crate) stream:             bool,
+    pub(crate) payload:            OpenAiImagePayload,
+    pub(crate) body:               Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) path: String,
-    pub(crate) cx: CX,
+    pub(crate) path:               String,
+    pub(crate) cx:                 CX,
 }
 
 pub(crate) struct OpenAiPassthroughRelayRequest<CX> {
-    pub(crate) path: String,
-    pub(crate) body: Bytes,
+    pub(crate) path:               String,
+    pub(crate) body:               Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx: CX,
+    pub(crate) cx:                 CX,
 }
 
 pub(crate) struct GeminiNativeRelayRequest<CX> {
-    pub(crate) path: String,
-    pub(crate) stream: bool,
-    pub(crate) body: Bytes,
+    pub(crate) path:               String,
+    pub(crate) stream:             bool,
+    pub(crate) body:               Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx: CX,
+    pub(crate) cx:                 CX,
 }
 
 impl<CX> Service<OpenAiImageRelayRequest<CX>> for RelayService

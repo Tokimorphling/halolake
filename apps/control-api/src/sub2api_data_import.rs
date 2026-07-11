@@ -4,21 +4,19 @@
 //! (same as sub2api default `skip_default_group_bind`). Existing proxies are
 //! reused by fingerprint; accounts always create new channels.
 
-use std::collections::HashMap;
-
+use crate::{
+    codex_auth_import::{
+        CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
+    },
+    proxy::{CreateProxyRequest, ListProxiesRequest, ProxyRecord, ProxyStore, UpdateProxyRequest},
+    storage::ManagementStore,
+};
 use halolake_control_plane::{CreateChannelRequest, ManagementError};
 use halolake_domain::{ChannelRecord, STATUS_ENABLED};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use service_async::Service;
-
-use crate::codex_auth_import::{
-    CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
-};
-use crate::proxy::{
-    CreateProxyRequest, ListProxiesRequest, ProxyRecord, ProxyStore, UpdateProxyRequest,
-};
-use crate::storage::ManagementStore;
+use std::collections::HashMap;
 
 const DATA_TYPE: &str = "sub2api-data";
 const LEGACY_DATA_TYPE: &str = "sub2api-bundle";
@@ -34,30 +32,30 @@ const PROXY_STATUS_DISABLED: i32 = 0;
 pub(crate) struct Sub2apiDataImportRequest {
     /// Full export object or wrapper `{ "data": { ... } }`.
     #[serde(default)]
-    pub(crate) data: Option<DataPayload>,
+    pub(crate) data:    Option<DataPayload>,
     /// Raw JSON file contents (string). Takes precedence when `data` is absent.
     #[serde(default)]
     pub(crate) content: String,
     /// Optional default group for created channels (manual binding still expected).
     #[serde(default)]
-    pub(crate) group: Option<String>,
+    pub(crate) group:   Option<String>,
     /// Optional model list applied when account has no model mapping in credentials.
     #[serde(default)]
-    pub(crate) models: Option<String>,
+    pub(crate) models:  Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct DataPayload {
     #[serde(default, rename = "type")]
-    pub(crate) data_type: String,
+    pub(crate) data_type:       String,
     #[serde(default)]
-    pub(crate) version: i32,
+    pub(crate) version:         i32,
     #[serde(default)]
-    pub(crate) exported_at: String,
+    pub(crate) exported_at:     String,
     #[serde(default)]
-    pub(crate) proxies: Vec<DataProxy>,
+    pub(crate) proxies:         Vec<DataProxy>,
     #[serde(default)]
-    pub(crate) accounts: Vec<DataAccount>,
+    pub(crate) accounts:        Vec<DataAccount>,
     #[serde(default)]
     pub(crate) skipped_shadows: i32,
 }
@@ -67,67 +65,67 @@ pub(crate) struct DataProxy {
     #[serde(default)]
     pub(crate) proxy_key: String,
     #[serde(default)]
-    pub(crate) name: String,
+    pub(crate) name:      String,
     #[serde(default)]
-    pub(crate) protocol: String,
+    pub(crate) protocol:  String,
     #[serde(default)]
-    pub(crate) host: String,
+    pub(crate) host:      String,
     #[serde(default)]
-    pub(crate) port: i32,
+    pub(crate) port:      i32,
     #[serde(default)]
-    pub(crate) username: String,
+    pub(crate) username:  String,
     #[serde(default)]
-    pub(crate) password: String,
+    pub(crate) password:  String,
     #[serde(default)]
-    pub(crate) status: String,
+    pub(crate) status:    String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct DataAccount {
     #[serde(default)]
-    pub(crate) name: String,
+    pub(crate) name:                  String,
     #[serde(default)]
-    pub(crate) notes: Option<String>,
+    pub(crate) notes:                 Option<String>,
     #[serde(default)]
-    pub(crate) platform: String,
+    pub(crate) platform:              String,
     #[serde(rename = "type", default)]
-    pub(crate) account_type: String,
+    pub(crate) account_type:          String,
     #[serde(default)]
-    pub(crate) credentials: JsonMap<String, JsonValue>,
+    pub(crate) credentials:           JsonMap<String, JsonValue>,
     #[serde(default)]
-    pub(crate) extra: JsonMap<String, JsonValue>,
+    pub(crate) extra:                 JsonMap<String, JsonValue>,
     #[serde(default)]
-    pub(crate) proxy_key: Option<String>,
+    pub(crate) proxy_key:             Option<String>,
     #[serde(default)]
-    pub(crate) concurrency: i32,
+    pub(crate) concurrency:           i32,
     #[serde(default)]
-    pub(crate) priority: i32,
+    pub(crate) priority:              i32,
     #[serde(default)]
-    pub(crate) rate_multiplier: Option<f64>,
+    pub(crate) rate_multiplier:       Option<f64>,
     #[serde(default)]
-    pub(crate) expires_at: Option<i64>,
+    pub(crate) expires_at:            Option<i64>,
     #[serde(default)]
     pub(crate) auto_pause_on_expired: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DataImportResult {
-    pub(crate) proxy_created: usize,
-    pub(crate) proxy_reused: usize,
-    pub(crate) proxy_failed: usize,
+    pub(crate) proxy_created:   usize,
+    pub(crate) proxy_reused:    usize,
+    pub(crate) proxy_failed:    usize,
     pub(crate) account_created: usize,
-    pub(crate) account_failed: usize,
-    pub(crate) errors: Vec<DataImportError>,
+    pub(crate) account_failed:  usize,
+    pub(crate) errors:          Vec<DataImportError>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DataImportError {
-    pub(crate) kind: String,
+    pub(crate) kind:      String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub(crate) name: String,
+    pub(crate) name:      String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(crate) proxy_key: String,
-    pub(crate) message: String,
+    pub(crate) message:   String,
 }
 
 pub(crate) async fn import_sub2api_data(
@@ -139,12 +137,12 @@ pub(crate) async fn import_sub2api_data(
     validate_header(&payload)?;
 
     let mut result = DataImportResult {
-        proxy_created: 0,
-        proxy_reused: 0,
-        proxy_failed: 0,
+        proxy_created:   0,
+        proxy_reused:    0,
+        proxy_failed:    0,
         account_created: 0,
-        account_failed: 0,
-        errors: Vec::new(),
+        account_failed:  0,
+        errors:          Vec::new(),
     };
 
     let group = req
@@ -223,9 +221,7 @@ pub(crate) async fn import_sub2api_data(
             if existing.status != status {
                 let mut updated = existing.clone();
                 updated.status = status;
-                let _ = proxies
-                    .call(UpdateProxyRequest { proxy: updated })
-                    .await;
+                let _ = proxies.call(UpdateProxyRequest { proxy: updated }).await;
             }
             continue;
         }
@@ -255,10 +251,10 @@ pub(crate) async fn import_sub2api_data(
             Err(err) => {
                 result.proxy_failed = result.proxy_failed.saturating_add(1);
                 result.errors.push(DataImportError {
-                    kind: "proxy".into(),
-                    name: item.name.clone(),
+                    kind:      "proxy".into(),
+                    name:      item.name.clone(),
                     proxy_key: key,
-                    message: err.to_string(),
+                    message:   err.to_string(),
                 });
             }
         }
@@ -278,16 +274,21 @@ pub(crate) async fn import_sub2api_data(
         }
 
         let mut proxy_id = None;
-        if let Some(pk) = item.proxy_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(pk) = item
+            .proxy_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             match proxy_key_to_id.get(pk) {
                 Some(id) => proxy_id = Some(*id),
                 None => {
                     result.account_failed = result.account_failed.saturating_add(1);
                     result.errors.push(DataImportError {
-                        kind: "account".into(),
-                        name: item.name.clone(),
+                        kind:      "account".into(),
+                        name:      item.name.clone(),
                         proxy_key: pk.to_string(),
-                        message: "proxy_key not found".into(),
+                        message:   "proxy_key not found".into(),
                     });
                     continue;
                 }
@@ -318,10 +319,10 @@ pub(crate) async fn import_sub2api_data(
             Err(err) => {
                 result.account_failed = result.account_failed.saturating_add(1);
                 result.errors.push(DataImportError {
-                    kind: "account".into(),
-                    name: item.name.clone(),
+                    kind:      "account".into(),
+                    name:      item.name.clone(),
                     proxy_key: item.proxy_key.clone().unwrap_or_default(),
-                    message: err.to_string(),
+                    message:   err.to_string(),
                 });
             }
         }
@@ -414,7 +415,13 @@ fn validate_account(item: &DataAccount) -> Result<(), String> {
     Ok(())
 }
 
-fn build_proxy_key(protocol: &str, host: &str, port: i32, username: &str, password: &str) -> String {
+fn build_proxy_key(
+    protocol: &str,
+    host: &str,
+    port: i32,
+    username: &str,
+    password: &str,
+) -> String {
     format!(
         "{}|{}|{}|{}|{}",
         protocol.trim(),
@@ -498,7 +505,8 @@ fn map_account_to_channel(
         "gemini" | "google" => map_gemini_account(&account_type, &item.credentials)?,
         other => {
             return Err(format!(
-                "unsupported platform for channel import: {other} (supported: openai, anthropic, gemini)"
+                "unsupported platform for channel import: {other} (supported: openai, anthropic, \
+                 gemini)"
             ));
         }
     };
@@ -634,18 +642,18 @@ fn credentials_to_codex_key(
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "oauth credentials missing access_token".to_string())?;
             Ok(CodexOAuthKey {
-                id_token: cred_string(credentials, "id_token")
+                id_token:      cred_string(credentials, "id_token")
                     .or_else(|| cred_string(credentials, "idToken")),
-                access_token: Some(access),
+                access_token:  Some(access),
                 refresh_token: cred_string(credentials, "refresh_token")
                     .or_else(|| cred_string(credentials, "refreshToken")),
-                account_id: cred_string(credentials, "chatgpt_account_id")
+                account_id:    cred_string(credentials, "chatgpt_account_id")
                     .or_else(|| cred_string(credentials, "account_id"))
                     .or_else(|| cred_string(credentials, "accountId")),
-                last_refresh: None,
-                email: cred_string(credentials, "email"),
-                key_type: Some("codex".into()),
-                expired: cred_string(credentials, "expires_at")
+                last_refresh:  None,
+                email:         cred_string(credentials, "email"),
+                key_type:      Some("codex".into()),
+                expired:       cred_string(credentials, "expires_at")
                     .or_else(|| cred_string(credentials, "expired")),
             })
         }
@@ -731,10 +739,10 @@ mod tests {
     fn parse_payload_from_wrapper_or_raw() {
         let raw = r#"{"type":"sub2api-data","version":1,"proxies":[],"accounts":[]}"#;
         let req = Sub2apiDataImportRequest {
-            data: None,
+            data:    None,
             content: raw.into(),
-            group: None,
-            models: None,
+            group:   None,
+            models:  None,
         };
         let payload = resolve_payload(&req).unwrap();
         validate_header(&payload).unwrap();

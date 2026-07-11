@@ -1,10 +1,5 @@
 //! Upstream proxy pool (`/api/proxy`) with memory + SQLite + MySQL + Postgres storage.
 
-use std::{
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use halolake_control_plane::ManagementError;
 use serde::{Deserialize, Serialize};
 use service_async::Service;
@@ -14,15 +9,19 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 const PROXY_STATUS_ENABLED: i32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct ProxyRecord {
     #[serde(default)]
-    pub(crate) id: u64,
-    pub(crate) name: String,
-    pub(crate) url: String,
+    pub(crate) id:     u64,
+    pub(crate) name:   String,
+    pub(crate) url:    String,
     #[serde(default = "default_proxy_status")]
     pub(crate) status: i32,
     #[serde(default)]
@@ -238,7 +237,7 @@ impl Service<GetProxyRequest> for MemoryProxyStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteProxyStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryProxyStore,
 }
 
@@ -316,7 +315,7 @@ impl Service<GetProxyRequest> for SqliteProxyStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlProxyStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryProxyStore,
 }
 
@@ -391,7 +390,7 @@ impl Service<GetProxyRequest> for MySqlProxyStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresProxyStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryProxyStore,
 }
 
@@ -469,9 +468,7 @@ fn normalize_proxy(proxy: &mut ProxyRecord) -> Result<(), ManagementError> {
     proxy.url = proxy.url.trim().to_string();
     proxy.remark = proxy.remark.trim().to_string();
     if proxy.name.is_empty() || proxy.url.is_empty() {
-        return Err(ManagementError::InvalidRequest(
-            "name and url are required",
-        ));
+        return Err(ManagementError::InvalidRequest("name and url are required"));
     }
     proxy.url = normalize_proxy_url(&proxy.url)?;
     Ok(())
@@ -480,18 +477,10 @@ fn normalize_proxy(proxy: &mut ProxyRecord) -> Result<(), ManagementError> {
 /// Validate proxy URL and upgrade `socks5://` → `socks5h://` (remote DNS, no leak).
 fn normalize_proxy_url(raw: &str) -> Result<String, ManagementError> {
     let uri: http::Uri = raw.parse().map_err(|_| {
-        ManagementError::InvalidRequest(
-            "invalid proxy URL (allowed: http, https, socks5, socks5h)",
-        )
+        ManagementError::InvalidRequest("invalid proxy URL (allowed: http, https, socks5, socks5h)")
     })?;
-    let mut scheme = uri
-        .scheme_str()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if !matches!(
-        scheme.as_str(),
-        "http" | "https" | "socks5" | "socks5h"
-    ) {
+    let mut scheme = uri.scheme_str().unwrap_or("").to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https" | "socks5" | "socks5h") {
         return Err(ManagementError::InvalidRequest(
             "unsupported proxy scheme (allowed: http, https, socks5, socks5h)",
         ));
@@ -509,11 +498,14 @@ fn normalize_proxy_url(raw: &str) -> Result<String, ManagementError> {
     if scheme == "socks5" {
         scheme = "socks5h".to_string();
     }
-    let userinfo = uri.authority().and_then(|a| {
-        let s = a.as_str();
-        let (userinfo, _) = s.split_once('@')?;
-        Some(format!("{userinfo}@"))
-    }).unwrap_or_default();
+    let userinfo = uri
+        .authority()
+        .and_then(|a| {
+            let s = a.as_str();
+            let (userinfo, _) = s.split_once('@')?;
+            Some(format!("{userinfo}@"))
+        })
+        .unwrap_or_default();
     Ok(format!("{scheme}://{userinfo}{host}:{port}"))
 }
 
@@ -573,9 +565,9 @@ async fn load_sqlite(pool: &SqlitePool) -> Result<Vec<ProxyRecord>, ManagementEr
         .into_iter()
         .map(|row| {
             Ok(ProxyRecord {
-                id: row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
-                name: row.try_get("name").map_err(storage_err)?,
-                url: row.try_get("url").map_err(storage_err)?,
+                id:     row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
+                name:   row.try_get("name").map_err(storage_err)?,
+                url:    row.try_get("url").map_err(storage_err)?,
                 status: row.try_get::<i64, _>("status").map_err(storage_err)? as i32,
                 remark: row.try_get("remark").map_err(storage_err)?,
             })
@@ -591,9 +583,9 @@ async fn load_mysql(pool: &MySqlPool) -> Result<Vec<ProxyRecord>, ManagementErro
         .into_iter()
         .map(|row| {
             Ok(ProxyRecord {
-                id: row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
-                name: row.try_get("name").map_err(storage_err)?,
-                url: row.try_get("url").map_err(storage_err)?,
+                id:     row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
+                name:   row.try_get("name").map_err(storage_err)?,
+                url:    row.try_get("url").map_err(storage_err)?,
                 status: row.try_get::<i64, _>("status").map_err(storage_err)? as i32,
                 remark: row.try_get("remark").map_err(storage_err)?,
             })
@@ -729,9 +721,9 @@ mod tests {
             let created = store
                 .call(CreateProxyRequest {
                     proxy: ProxyRecord {
-                        id: 0,
-                        name: "us-east".into(),
-                        url: "http://127.0.0.1:7890".into(),
+                        id:     0,
+                        name:   "us-east".into(),
+                        url:    "http://127.0.0.1:7890".into(),
                         status: 1,
                         remark: "dev".into(),
                     },
@@ -744,10 +736,7 @@ mod tests {
                 Some("http://127.0.0.1:7890")
             );
 
-            let listed = store
-                .call(ListProxiesRequest)
-                .await
-                .expect("list");
+            let listed = store.call(ListProxiesRequest).await.expect("list");
             assert_eq!(listed.len(), 1);
 
             let got = store
@@ -759,9 +748,9 @@ mod tests {
             let updated = store
                 .call(UpdateProxyRequest {
                     proxy: ProxyRecord {
-                        id: created.id,
-                        name: "us-west".into(),
-                        url: "socks5://127.0.0.1:1080".into(),
+                        id:     created.id,
+                        name:   "us-west".into(),
+                        url:    "socks5://127.0.0.1:1080".into(),
                         status: 0,
                         remark: String::new(),
                     },
@@ -769,17 +758,18 @@ mod tests {
                 .await
                 .expect("update");
             assert_eq!(updated.name, "us-west");
-            assert!(updated.url.starts_with("socks5h://"), "socks5 should upgrade to socks5h: {}", updated.url);
+            assert!(
+                updated.url.starts_with("socks5h://"),
+                "socks5 should upgrade to socks5h: {}",
+                updated.url
+            );
             assert!(store.resolve_url(Some(created.id)).is_none());
 
             store
                 .call(DeleteProxyRequest { id: created.id })
                 .await
                 .expect("delete");
-            let listed = store
-                .call(ListProxiesRequest)
-                .await
-                .expect("list empty");
+            let listed = store.call(ListProxiesRequest).await.expect("list empty");
             assert!(listed.is_empty());
         });
     }
@@ -791,9 +781,9 @@ mod tests {
             let err = store
                 .call(CreateProxyRequest {
                     proxy: ProxyRecord {
-                        id: 0,
-                        name: "bad".into(),
-                        url: "ftp://example.com".into(),
+                        id:     0,
+                        name:   "bad".into(),
+                        url:    "ftp://example.com".into(),
                         status: 1,
                         remark: String::new(),
                     },
@@ -811,9 +801,9 @@ mod tests {
             let created = store
                 .call(CreateProxyRequest {
                     proxy: ProxyRecord {
-                        id: 0,
-                        name: "s".into(),
-                        url: "socks5://127.0.0.1:1080".into(),
+                        id:     0,
+                        name:   "s".into(),
+                        url:    "socks5://127.0.0.1:1080".into(),
                         status: 1,
                         remark: String::new(),
                     },

@@ -4,28 +4,26 @@
 //! (default `/data/halolake-credentials.txt` or `HALOLAKE_CREDENTIALS_FILE`).
 //! Secrets already present in env/config are left unchanged.
 
+use crate::storage::ManagementStore;
+use anyhow::{Context, Result};
+use data_encoding::BASE64URL_NOPAD;
+use halolake_control_plane::{BootstrapRootUserRequest, ManagementError};
+use halolake_domain::ROLE_ROOT_USER;
+use service_async::Service;
 use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use anyhow::{Context, Result};
-use data_encoding::BASE64URL_NOPAD;
-use halolake_control_plane::{BootstrapRootUserRequest, ManagementError};
-use service_async::Service;
 use tracing::info;
 use uuid::Uuid;
-
-use crate::storage::ManagementStore;
-use halolake_domain::ROLE_ROOT_USER;
 
 const DEFAULT_ADMIN_USERNAME: &str = "admin";
 
 #[derive(Debug, Clone)]
 pub(crate) struct BootstrapSecrets {
-    pub(crate) session_secret: Option<String>,
+    pub(crate) session_secret:  Option<String>,
     pub(crate) internal_secret: Option<String>,
 }
 
@@ -55,7 +53,7 @@ pub(crate) fn ensure_runtime_secrets(
     let existing = read_kv_file(&path).unwrap_or_default();
 
     let mut out = BootstrapSecrets {
-        session_secret: None,
+        session_secret:  None,
         internal_secret: None,
     };
     let mut dirty = false;
@@ -144,31 +142,22 @@ pub(crate) async fn ensure_root_admin(management: &ManagementStore) -> Result<bo
     set_kv(&mut lines, "username", &username);
     set_kv(&mut lines, "password", &password);
     set_kv(&mut lines, "role", "root");
-    set_kv(
-        &mut lines,
-        "generated_at",
-        &now_rfc3339_approx(),
-    );
+    set_kv(&mut lines, "generated_at", &now_rfc3339_approx());
     write_kv_file(
         &path,
         &lines,
         Some(&format!(
-            "# Halolake bootstrap credentials (generated once)\n\
-             # Login at the web UI with username/password below.\n\
-             # Change the password after first login and restrict this file (chmod 600).\n\
-             # Do not commit this file.\n"
+            "# Halolake bootstrap credentials (generated once)\n# Login at the web UI with \
+             username/password below.\n# Change the password after first login and restrict this \
+             file (chmod 600).\n# Do not commit this file.\n"
         )),
     )?;
 
     // Loud but never print the password itself.
     eprintln!(
-        "\n\
-         ============================================================\n\
-         Halolake first-boot admin credentials written to:\n\
-           {}\n\
-         username: {}\n\
-         password: (see file — not printed to logs)\n\
-         ============================================================\n",
+        "\n============================================================\nHalolake first-boot \
+         admin credentials written to:\n{}\nusername: {}\npassword: (see file — not printed to \
+         logs)\n============================================================\n",
         path.display(),
         username
     );
@@ -229,10 +218,7 @@ fn kv_get<'a>(lines: &'a [(String, String)], key: &str) -> Option<&'a str> {
 }
 
 fn set_kv(lines: &mut Vec<(String, String)>, key: &str, value: &str) {
-    if let Some(slot) = lines
-        .iter_mut()
-        .find(|(k, _)| k.eq_ignore_ascii_case(key))
-    {
+    if let Some(slot) = lines.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
         slot.1 = value.to_string();
     } else {
         lines.push((key.to_string(), value.to_string()));

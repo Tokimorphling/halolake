@@ -1,8 +1,3 @@
-use std::{
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
 use halolake_control_plane::ManagementError;
 use serde::Serialize;
 use service_async::Service;
@@ -12,44 +7,48 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CheckinRecord {
-    pub(crate) id: u64,
-    pub(crate) user_id: u64,
-    pub(crate) checkin_date: String,
+    pub(crate) id:            u64,
+    pub(crate) user_id:       u64,
+    pub(crate) checkin_date:  String,
     pub(crate) quota_awarded: i64,
-    pub(crate) created_at: i64,
+    pub(crate) created_at:    i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CheckinPublicRecord {
-    pub(crate) checkin_date: String,
+    pub(crate) checkin_date:  String,
     pub(crate) quota_awarded: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CheckinStats {
-    pub(crate) total_quota: i64,
-    pub(crate) total_checkins: usize,
-    pub(crate) checkin_count: usize,
+    pub(crate) total_quota:      i64,
+    pub(crate) total_checkins:   usize,
+    pub(crate) checkin_count:    usize,
     pub(crate) checked_in_today: bool,
-    pub(crate) records: Vec<CheckinPublicRecord>,
+    pub(crate) records:          Vec<CheckinPublicRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct GetCheckinStatsRequest {
     pub(crate) user_id: u64,
-    pub(crate) month: String,
-    pub(crate) today: String,
+    pub(crate) month:   String,
+    pub(crate) today:   String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct CreateCheckinRequest {
-    pub(crate) user_id: u64,
-    pub(crate) checkin_date: String,
+    pub(crate) user_id:       u64,
+    pub(crate) checkin_date:  String,
     pub(crate) quota_awarded: i64,
-    pub(crate) created_at: i64,
+    pub(crate) created_at:    i64,
 }
 
 #[derive(Debug, Clone)]
@@ -146,7 +145,7 @@ impl Service<GetCheckinStatsRequest> for MemoryCheckinStore {
         let records = records
             .into_iter()
             .map(|record| CheckinPublicRecord {
-                checkin_date: record.checkin_date,
+                checkin_date:  record.checkin_date,
                 quota_awarded: record.quota_awarded,
             })
             .collect::<Vec<_>>();
@@ -166,18 +165,18 @@ impl Service<CreateCheckinRequest> for MemoryCheckinStore {
 
     async fn call(&self, req: CreateCheckinRequest) -> Result<Self::Response, Self::Error> {
         self.insert(CheckinRecord {
-            id: 0,
-            user_id: req.user_id,
-            checkin_date: req.checkin_date,
+            id:            0,
+            user_id:       req.user_id,
+            checkin_date:  req.checkin_date,
             quota_awarded: req.quota_awarded,
-            created_at: req.created_at,
+            created_at:    req.created_at,
         })
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteCheckinStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemoryCheckinStore,
 }
 
@@ -268,21 +267,21 @@ async fn load_checkins(pool: &SqlitePool) -> Result<Vec<CheckinRecord>, Manageme
     .into_iter()
     .map(|row| {
         Ok(CheckinRecord {
-            id: row
+            id:            row
                 .try_get::<i64, _>("id")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?
                 .max(0) as u64,
-            user_id: row
+            user_id:       row
                 .try_get::<i64, _>("user_id")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?
                 .max(0) as u64,
-            checkin_date: row
+            checkin_date:  row
                 .try_get("checkin_date")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
             quota_awarded: row
                 .try_get("quota_awarded")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
-            created_at: row
+            created_at:    row
                 .try_get("created_at")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
         })
@@ -292,7 +291,7 @@ async fn load_checkins(pool: &SqlitePool) -> Result<Vec<CheckinRecord>, Manageme
 
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlCheckinStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemoryCheckinStore,
 }
 
@@ -381,21 +380,21 @@ async fn load_checkins_mysql(pool: &MySqlPool) -> Result<Vec<CheckinRecord>, Man
     .into_iter()
     .map(|row| {
         Ok(CheckinRecord {
-            id: row
+            id:            row
                 .try_get::<i64, _>("id")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?
                 .max(0) as u64,
-            user_id: row
+            user_id:       row
                 .try_get::<i64, _>("user_id")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?
                 .max(0) as u64,
-            checkin_date: row
+            checkin_date:  row
                 .try_get("checkin_date")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
             quota_awarded: row
                 .try_get("quota_awarded")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
-            created_at: row
+            created_at:    row
                 .try_get("created_at")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
         })
@@ -405,7 +404,7 @@ async fn load_checkins_mysql(pool: &MySqlPool) -> Result<Vec<CheckinRecord>, Man
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresCheckinStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemoryCheckinStore,
 }
 
@@ -499,21 +498,21 @@ async fn load_checkins_pg(pool: &PgPool) -> Result<Vec<CheckinRecord>, Managemen
     .into_iter()
     .map(|row| {
         Ok(CheckinRecord {
-            id: row
+            id:            row
                 .try_get::<i64, _>("id")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?
                 .max(0) as u64,
-            user_id: row
+            user_id:       row
                 .try_get::<i64, _>("user_id")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?
                 .max(0) as u64,
-            checkin_date: row
+            checkin_date:  row
                 .try_get("checkin_date")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
             quota_awarded: row
                 .try_get("quota_awarded")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
-            created_at: row
+            created_at:    row
                 .try_get("created_at")
                 .map_err(|err| ManagementError::Storage(err.to_string()))?,
         })
@@ -523,12 +522,11 @@ async fn load_checkins_pg(pool: &PgPool) -> Result<Vec<CheckinRecord>, Managemen
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         future::Future,
         task::{Context, Poll, Waker},
     };
-
-    use super::*;
 
     fn block_on<F: Future>(future: F) -> F::Output {
         let waker = Waker::noop();
@@ -548,10 +546,10 @@ mod tests {
             let store = MemoryCheckinStore::default();
             let record = store
                 .call(CreateCheckinRequest {
-                    user_id: 7,
-                    checkin_date: "2026-07-09".to_string(),
+                    user_id:       7,
+                    checkin_date:  "2026-07-09".to_string(),
                     quota_awarded: 1234,
-                    created_at: 1_783_548_000,
+                    created_at:    1_783_548_000,
                 })
                 .await
                 .expect("first checkin should be accepted");
@@ -559,10 +557,10 @@ mod tests {
 
             let duplicate = store
                 .call(CreateCheckinRequest {
-                    user_id: 7,
-                    checkin_date: "2026-07-09".to_string(),
+                    user_id:       7,
+                    checkin_date:  "2026-07-09".to_string(),
                     quota_awarded: 999,
-                    created_at: 1_783_548_001,
+                    created_at:    1_783_548_001,
                 })
                 .await;
             assert!(matches!(duplicate, Err(ManagementError::Duplicate)));
@@ -570,8 +568,8 @@ mod tests {
             let stats = store
                 .call(GetCheckinStatsRequest {
                     user_id: 7,
-                    month: "2026-07".to_string(),
-                    today: "2026-07-09".to_string(),
+                    month:   "2026-07".to_string(),
+                    today:   "2026-07-09".to_string(),
                 })
                 .await
                 .expect("stats should be returned");

@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    str::FromStr,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
-
+use crate::storage::OptionStore;
 use bcrypt::{DEFAULT_COST, hash, verify};
 use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD};
 use halolake_control_plane::ManagementError;
@@ -18,14 +12,18 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    collections::BTreeMap,
+    str::FromStr,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 use uuid::Uuid;
 use webauthn_rs::prelude::{
     DiscoverableAuthentication, DiscoverableKey, Passkey, PasskeyAuthentication,
     PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, Url, Webauthn,
     WebauthnBuilder,
 };
-
-use crate::storage::OptionStore;
 
 const PASSKEY_DISABLED_MESSAGE: &str = "管理员未启用 Passkey 登录";
 const PASSKEY_NOT_BOUND_MESSAGE: &str = "该用户尚未绑定 Passkey";
@@ -48,7 +46,7 @@ type HmacSha1 = Hmac<Sha1>;
 #[derive(Debug, Clone)]
 pub(crate) struct SecurityService {
     options: OptionStore,
-    store: SecurityStore,
+    store:   SecurityStore,
 }
 
 impl SecurityService {
@@ -285,34 +283,34 @@ pub(crate) struct GetTwoFaStatusRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StartTwoFaSetupRequest {
-    pub(crate) user_id: u64,
+    pub(crate) user_id:  u64,
     pub(crate) username: String,
-    pub(crate) issuer: String,
+    pub(crate) issuer:   String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct EnableTwoFaRequest {
     pub(crate) user_id: u64,
-    pub(crate) code: String,
+    pub(crate) code:    String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct DisableTwoFaRequest {
     pub(crate) user_id: u64,
-    pub(crate) code: String,
+    pub(crate) code:    String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RegenerateTwoFaBackupCodesRequest {
     pub(crate) user_id: u64,
-    pub(crate) code: String,
+    pub(crate) code:    String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct UniversalVerifyRequest {
-    pub(crate) user_id: u64,
-    pub(crate) method: VerificationMethod,
-    pub(crate) code: Option<String>,
+    pub(crate) user_id:    u64,
+    pub(crate) method:     VerificationMethod,
+    pub(crate) code:       Option<String>,
     pub(crate) session_id: Option<String>,
 }
 
@@ -323,11 +321,11 @@ pub(crate) struct GetPasskeyStatusRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PasskeyFlowRequest {
-    pub(crate) user: Option<PasskeyUser>,
-    pub(crate) flow: PasskeyFlow,
+    pub(crate) user:       Option<PasskeyUser>,
+    pub(crate) flow:       PasskeyFlow,
     pub(crate) session_id: String,
-    pub(crate) request: PasskeyRequestContext,
-    pub(crate) payload: Option<serde_json::Value>,
+    pub(crate) request:    PasskeyRequestContext,
+    pub(crate) payload:    Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,15 +335,15 @@ pub(crate) struct DeletePasskeyRequest {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AdminResetPasskeyRequest {
-    pub(crate) actor_role: i32,
-    pub(crate) target_role: i32,
+    pub(crate) actor_role:     i32,
+    pub(crate) target_role:    i32,
     pub(crate) target_user_id: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AdminDisableTwoFaRequest {
-    pub(crate) actor_role: i32,
-    pub(crate) target_role: i32,
+    pub(crate) actor_role:     i32,
+    pub(crate) target_role:    i32,
     pub(crate) target_user_id: u64,
 }
 
@@ -356,43 +354,43 @@ pub(crate) struct AdminTwoFaStatsRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PasskeyUser {
-    pub(crate) id: u64,
-    pub(crate) username: String,
+    pub(crate) id:           u64,
+    pub(crate) username:     String,
     pub(crate) display_name: String,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PasskeyRequestContext {
-    pub(crate) host: Option<String>,
+    pub(crate) host:            Option<String>,
     pub(crate) forwarded_proto: Option<String>,
-    pub(crate) uri_scheme: Option<String>,
+    pub(crate) uri_scheme:      Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct TwoFaStatus {
-    pub(crate) enabled: bool,
-    pub(crate) locked: bool,
+    pub(crate) enabled:                bool,
+    pub(crate) locked:                 bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) backup_codes_remaining: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct TwoFaSetup {
-    pub(crate) secret: String,
+    pub(crate) secret:       String,
     pub(crate) qr_code_data: String,
     pub(crate) backup_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct VerificationStatus {
-    pub(crate) verified: bool,
+    pub(crate) verified:   bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct PasskeyStatus {
-    pub(crate) enabled: bool,
+    pub(crate) enabled:      bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) last_used_at: Option<String>,
 }
@@ -410,10 +408,10 @@ pub(crate) enum PasskeyFlowResponse {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct TwoFaStats {
-    pub(crate) total_users: usize,
+    pub(crate) total_users:   usize,
     pub(crate) enabled_users: usize,
-    pub(crate) enabled_rate: String,
-    pub(crate) locked_users: usize,
+    pub(crate) enabled_rate:  String,
+    pub(crate) locked_users:  usize,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -436,45 +434,45 @@ pub(crate) enum PasskeyFlow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TwoFaRecord {
-    id: u64,
-    user_id: u64,
-    secret: String,
-    is_enabled: bool,
+    id:              u64,
+    user_id:         u64,
+    secret:          String,
+    is_enabled:      bool,
     failed_attempts: i32,
-    locked_until: Option<i64>,
-    last_used_at: Option<i64>,
-    created_at: i64,
-    updated_at: i64,
+    locked_until:    Option<i64>,
+    last_used_at:    Option<i64>,
+    created_at:      i64,
+    updated_at:      i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BackupCodeRecord {
-    id: u64,
-    user_id: u64,
-    code_hash: String,
-    is_used: bool,
-    used_at: Option<i64>,
+    id:         u64,
+    user_id:    u64,
+    code_hash:  String,
+    is_used:    bool,
+    used_at:    Option<i64>,
     created_at: i64,
 }
 
 #[derive(Debug, Clone)]
 struct PasskeyRecord {
-    id: u64,
-    user_id: u64,
-    user_uuid: Uuid,
+    id:            u64,
+    user_id:       u64,
+    user_uuid:     Uuid,
     credential_id: String,
-    passkey: Passkey,
-    last_used_at: Option<i64>,
-    created_at: i64,
-    updated_at: i64,
+    passkey:       Passkey,
+    last_used_at:  Option<i64>,
+    created_at:    i64,
+    updated_at:    i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PasskeySessionRecord {
     session_id: String,
-    kind: &'static str,
-    payload: String,
-    user_id: Option<u64>,
+    kind:       &'static str,
+    payload:    String,
+    user_id:    Option<u64>,
     expires_at: i64,
     created_at: i64,
 }
@@ -486,14 +484,14 @@ pub(crate) struct MemorySecurityStore {
 
 #[derive(Debug, Clone, Default)]
 struct MemorySecurityData {
-    next_two_fa_id: u64,
-    next_backup_code_id: u64,
-    next_passkey_id: u64,
-    two_fa: BTreeMap<u64, TwoFaRecord>,
-    backup_codes: Vec<BackupCodeRecord>,
-    passkeys: BTreeMap<u64, PasskeyRecord>,
+    next_two_fa_id:            u64,
+    next_backup_code_id:       u64,
+    next_passkey_id:           u64,
+    two_fa:                    BTreeMap<u64, TwoFaRecord>,
+    backup_codes:              Vec<BackupCodeRecord>,
+    passkeys:                  BTreeMap<u64, PasskeyRecord>,
     passkeys_by_credential_id: BTreeMap<String, u64>,
-    passkey_sessions: BTreeMap<(String, &'static str), PasskeySessionRecord>,
+    passkey_sessions:          BTreeMap<(String, &'static str), PasskeySessionRecord>,
 }
 
 impl MemorySecurityStore {
@@ -738,7 +736,8 @@ impl SqliteSecurityStore {
                 used_at INTEGER,
                 created_at INTEGER NOT NULL DEFAULT 0
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON two_fa_backup_codes(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON \
+             two_fa_backup_codes(user_id)",
             r#"CREATE TABLE IF NOT EXISTS passkey_credentials (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL UNIQUE,
@@ -749,8 +748,10 @@ impl SqliteSecurityStore {
                 created_at INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL DEFAULT 0
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON \
+             passkey_credentials(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON \
+             passkey_credentials(credential_id)",
             r#"CREATE TABLE IF NOT EXISTS passkey_sessions (
                 session_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -760,7 +761,8 @@ impl SqliteSecurityStore {
                 created_at INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(session_id, kind)
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON passkey_sessions(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON \
+             passkey_sessions(expires_at)",
         ] {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -782,15 +784,15 @@ impl SqliteSecurityStore {
         .map_err(sqlx_security_error)?;
         row.map(|row| {
             Ok(TwoFaRecord {
-                id: u64_col(&row, "id")?,
-                user_id: u64_col(&row, "user_id")?,
-                secret: string_col(&row, "secret")?,
-                is_enabled: bool_col(&row, "is_enabled")?,
+                id:              u64_col(&row, "id")?,
+                user_id:         u64_col(&row, "user_id")?,
+                secret:          string_col(&row, "secret")?,
+                is_enabled:      bool_col(&row, "is_enabled")?,
                 failed_attempts: i32_col(&row, "failed_attempts")?,
-                locked_until: optional_i64_col(&row, "locked_until"),
-                last_used_at: optional_i64_col(&row, "last_used_at"),
-                created_at: i64_col(&row, "created_at")?,
-                updated_at: i64_col(&row, "updated_at")?,
+                locked_until:    optional_i64_col(&row, "locked_until"),
+                last_used_at:    optional_i64_col(&row, "last_used_at"),
+                created_at:      i64_col(&row, "created_at")?,
+                updated_at:      i64_col(&row, "updated_at")?,
             })
         })
         .transpose()
@@ -855,7 +857,8 @@ impl SqliteSecurityStore {
             .map_err(sqlx_security_error)?;
         for code in codes {
             sqlx::query(
-                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, created_at)
+                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, \
+                 created_at)
                 VALUES (?, ?, 0, NULL, ?)",
             )
             .bind(user_id as i64)
@@ -914,15 +917,15 @@ impl SqliteSecurityStore {
             .await
             .map_err(sqlx_security_error)?;
         let records = rows.into_iter().map(|row| TwoFaRecord {
-            id: 0,
-            user_id: 0,
-            secret: String::new(),
-            is_enabled: bool_col(&row, "is_enabled").unwrap_or(false),
+            id:              0,
+            user_id:         0,
+            secret:          String::new(),
+            is_enabled:      bool_col(&row, "is_enabled").unwrap_or(false),
             failed_attempts: 0,
-            locked_until: optional_i64_col(&row, "locked_until"),
-            last_used_at: None,
-            created_at: 0,
-            updated_at: 0,
+            locked_until:    optional_i64_col(&row, "locked_until"),
+            last_used_at:    None,
+            created_at:      0,
+            updated_at:      0,
         });
         Ok(two_fa_stats_from_records(total_users, records))
     }
@@ -932,7 +935,8 @@ impl SqliteSecurityStore {
         user_id: u64,
     ) -> Result<Option<PasskeyRecord>, SecurityError> {
         let row = sqlx::query(
-            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, \
+             created_at, updated_at
             FROM passkey_credentials WHERE user_id = ?",
         )
         .bind(user_id as i64)
@@ -947,7 +951,8 @@ impl SqliteSecurityStore {
         credential_id: &str,
     ) -> Result<Option<PasskeyRecord>, SecurityError> {
         let row = sqlx::query(
-            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, \
+             created_at, updated_at
             FROM passkey_credentials WHERE credential_id = ?",
         )
         .bind(credential_id)
@@ -1101,7 +1106,8 @@ impl MySqlSecurityStore {
                 used_at BIGINT,
                 created_at BIGINT NOT NULL DEFAULT 0
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON two_fa_backup_codes(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON \
+             two_fa_backup_codes(user_id)",
             r#"CREATE TABLE IF NOT EXISTS passkey_credentials (
                 id BIGINT PRIMARY KEY AUTO_INCREMENT,
                 user_id BIGINT NOT NULL UNIQUE,
@@ -1112,8 +1118,10 @@ impl MySqlSecurityStore {
                 created_at BIGINT NOT NULL DEFAULT 0,
                 updated_at BIGINT NOT NULL DEFAULT 0
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON \
+             passkey_credentials(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON \
+             passkey_credentials(credential_id)",
             r#"CREATE TABLE IF NOT EXISTS passkey_sessions (
                 session_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -1123,7 +1131,8 @@ impl MySqlSecurityStore {
                 created_at BIGINT NOT NULL DEFAULT 0,
                 PRIMARY KEY(session_id, kind)
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON passkey_sessions(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON \
+             passkey_sessions(expires_at)",
         ] {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -1145,15 +1154,15 @@ impl MySqlSecurityStore {
         .map_err(sqlx_security_error)?;
         row.map(|row| {
             Ok(TwoFaRecord {
-                id: mysql_u64_col(&row, "id")?,
-                user_id: mysql_u64_col(&row, "user_id")?,
-                secret: mysql_string_col(&row, "secret")?,
-                is_enabled: mysql_bool_col(&row, "is_enabled")?,
+                id:              mysql_u64_col(&row, "id")?,
+                user_id:         mysql_u64_col(&row, "user_id")?,
+                secret:          mysql_string_col(&row, "secret")?,
+                is_enabled:      mysql_bool_col(&row, "is_enabled")?,
                 failed_attempts: mysql_i32_col(&row, "failed_attempts")?,
-                locked_until: optional_mysql_i64_col(&row, "locked_until"),
-                last_used_at: optional_mysql_i64_col(&row, "last_used_at"),
-                created_at: mysql_i64_col(&row, "created_at")?,
-                updated_at: mysql_i64_col(&row, "updated_at")?,
+                locked_until:    optional_mysql_i64_col(&row, "locked_until"),
+                last_used_at:    optional_mysql_i64_col(&row, "last_used_at"),
+                created_at:      mysql_i64_col(&row, "created_at")?,
+                updated_at:      mysql_i64_col(&row, "updated_at")?,
             })
         })
         .transpose()
@@ -1218,7 +1227,8 @@ impl MySqlSecurityStore {
             .map_err(sqlx_security_error)?;
         for code in codes {
             sqlx::query(
-                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, created_at)
+                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, \
+                 created_at)
                 VALUES (?, ?, 0, NULL, ?)",
             )
             .bind(user_id as i64)
@@ -1277,15 +1287,15 @@ impl MySqlSecurityStore {
             .await
             .map_err(sqlx_security_error)?;
         let records = rows.into_iter().map(|row| TwoFaRecord {
-            id: 0,
-            user_id: 0,
-            secret: String::new(),
-            is_enabled: mysql_bool_col(&row, "is_enabled").unwrap_or(false),
+            id:              0,
+            user_id:         0,
+            secret:          String::new(),
+            is_enabled:      mysql_bool_col(&row, "is_enabled").unwrap_or(false),
             failed_attempts: 0,
-            locked_until: optional_mysql_i64_col(&row, "locked_until"),
-            last_used_at: None,
-            created_at: 0,
-            updated_at: 0,
+            locked_until:    optional_mysql_i64_col(&row, "locked_until"),
+            last_used_at:    None,
+            created_at:      0,
+            updated_at:      0,
         });
         Ok(two_fa_stats_from_records(total_users, records))
     }
@@ -1295,14 +1305,16 @@ impl MySqlSecurityStore {
         user_id: u64,
     ) -> Result<Option<PasskeyRecord>, SecurityError> {
         let row = sqlx::query(
-            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, \
+             created_at, updated_at
             FROM passkey_credentials WHERE user_id = ?",
         )
         .bind(user_id as i64)
         .fetch_optional(&self.pool)
         .await
         .map_err(sqlx_security_error)?;
-        row.map(|row| passkey_record_from_mysql_row(&row)).transpose()
+        row.map(|row| passkey_record_from_mysql_row(&row))
+            .transpose()
     }
 
     async fn get_passkey_by_credential_id(
@@ -1310,14 +1322,16 @@ impl MySqlSecurityStore {
         credential_id: &str,
     ) -> Result<Option<PasskeyRecord>, SecurityError> {
         let row = sqlx::query(
-            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, \
+             created_at, updated_at
             FROM passkey_credentials WHERE credential_id = ?",
         )
         .bind(credential_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(sqlx_security_error)?;
-        row.map(|row| passkey_record_from_mysql_row(&row)).transpose()
+        row.map(|row| passkey_record_from_mysql_row(&row))
+            .transpose()
     }
 
     async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
@@ -1423,7 +1437,6 @@ impl MySqlSecurityStore {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresSecurityStore {
     pool: PgPool,
@@ -1465,7 +1478,8 @@ impl PostgresSecurityStore {
                 used_at BIGINT,
                 created_at BIGINT NOT NULL DEFAULT 0
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON two_fa_backup_codes(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON \
+             two_fa_backup_codes(user_id)",
             r#"CREATE TABLE IF NOT EXISTS passkey_credentials (
                 id BIGSERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL UNIQUE,
@@ -1476,8 +1490,10 @@ impl PostgresSecurityStore {
                 created_at BIGINT NOT NULL DEFAULT 0,
                 updated_at BIGINT NOT NULL DEFAULT 0
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON \
+             passkey_credentials(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON \
+             passkey_credentials(credential_id)",
             r#"CREATE TABLE IF NOT EXISTS passkey_sessions (
                 session_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -1487,7 +1503,8 @@ impl PostgresSecurityStore {
                 created_at BIGINT NOT NULL DEFAULT 0,
                 PRIMARY KEY(session_id, kind)
             )"#,
-            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON passkey_sessions(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON \
+             passkey_sessions(expires_at)",
         ] {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -1509,15 +1526,15 @@ impl PostgresSecurityStore {
         .map_err(sqlx_security_error)?;
         row.map(|row| {
             Ok(TwoFaRecord {
-                id: pg_u64_col(&row, "id")?,
-                user_id: pg_u64_col(&row, "user_id")?,
-                secret: pg_string_col(&row, "secret")?,
-                is_enabled: pg_bool_col(&row, "is_enabled")?,
+                id:              pg_u64_col(&row, "id")?,
+                user_id:         pg_u64_col(&row, "user_id")?,
+                secret:          pg_string_col(&row, "secret")?,
+                is_enabled:      pg_bool_col(&row, "is_enabled")?,
                 failed_attempts: pg_i32_col(&row, "failed_attempts")?,
-                locked_until: pg_optional_i64_col(&row, "locked_until"),
-                last_used_at: pg_optional_i64_col(&row, "last_used_at"),
-                created_at: pg_i64_col(&row, "created_at")?,
-                updated_at: pg_i64_col(&row, "updated_at")?,
+                locked_until:    pg_optional_i64_col(&row, "locked_until"),
+                last_used_at:    pg_optional_i64_col(&row, "last_used_at"),
+                created_at:      pg_i64_col(&row, "created_at")?,
+                updated_at:      pg_i64_col(&row, "updated_at")?,
             })
         })
         .transpose()
@@ -1582,7 +1599,8 @@ impl PostgresSecurityStore {
             .map_err(sqlx_security_error)?;
         for code in codes {
             sqlx::query(
-                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, created_at)
+                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, \
+                 created_at)
                 VALUES ($1, $2, 0, NULL, $3)",
             )
             .bind(user_id as i64)
@@ -1643,15 +1661,15 @@ impl PostgresSecurityStore {
             .await
             .map_err(sqlx_security_error)?;
         let records = rows.into_iter().map(|row| TwoFaRecord {
-            id: 0,
-            user_id: 0,
-            secret: String::new(),
-            is_enabled: pg_bool_col(&row, "is_enabled").unwrap_or(false),
+            id:              0,
+            user_id:         0,
+            secret:          String::new(),
+            is_enabled:      pg_bool_col(&row, "is_enabled").unwrap_or(false),
             failed_attempts: 0,
-            locked_until: pg_optional_i64_col(&row, "locked_until"),
-            last_used_at: None,
-            created_at: 0,
-            updated_at: 0,
+            locked_until:    pg_optional_i64_col(&row, "locked_until"),
+            last_used_at:    None,
+            created_at:      0,
+            updated_at:      0,
         });
         Ok(two_fa_stats_from_records(total_users, records))
     }
@@ -1661,7 +1679,8 @@ impl PostgresSecurityStore {
         user_id: u64,
     ) -> Result<Option<PasskeyRecord>, SecurityError> {
         let row = sqlx::query(
-            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, \
+             created_at, updated_at
             FROM passkey_credentials WHERE user_id = $1",
         )
         .bind(user_id as i64)
@@ -1676,7 +1695,8 @@ impl PostgresSecurityStore {
         credential_id: &str,
     ) -> Result<Option<PasskeyRecord>, SecurityError> {
         let row = sqlx::query(
-            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, \
+             created_at, updated_at
             FROM passkey_credentials WHERE credential_id = $1",
         )
         .bind(credential_id)
@@ -1796,8 +1816,8 @@ impl Service<GetTwoFaStatusRequest> for SecurityService {
     async fn call(&self, req: GetTwoFaStatusRequest) -> Result<Self::Response, Self::Error> {
         let Some(two_fa) = self.store.get_two_fa(req.user_id).await? else {
             return Ok(TwoFaStatus {
-                enabled: false,
-                locked: false,
+                enabled:                false,
+                locked:                 false,
                 backup_codes_remaining: None,
             });
         };
@@ -1831,15 +1851,15 @@ impl Service<StartTwoFaSetupRequest> for SecurityService {
         let backup_codes = generate_backup_codes();
         self.store
             .upsert_two_fa(TwoFaRecord {
-                id: 0,
-                user_id: req.user_id,
-                secret: secret.clone(),
-                is_enabled: false,
+                id:              0,
+                user_id:         req.user_id,
+                secret:          secret.clone(),
+                is_enabled:      false,
                 failed_attempts: 0,
-                locked_until: None,
-                last_used_at: None,
-                created_at: now,
-                updated_at: now,
+                locked_until:    None,
+                last_used_at:    None,
+                created_at:      now,
+                updated_at:      now,
             })
             .await?;
         self.store
@@ -1956,7 +1976,7 @@ impl Service<UniversalVerifyRequest> for SecurityService {
                     return Err(SecurityError::business("验证失败，请检查验证码"));
                 }
                 Ok(VerificationStatus {
-                    verified: true,
+                    verified:   true,
                     expires_at: Some(now_unix().saturating_add(300)),
                 })
             }
@@ -1972,7 +1992,7 @@ impl Service<UniversalVerifyRequest> for SecurityService {
                     return Err(SecurityError::business("Passkey 验证会话不存在或已过期"));
                 }
                 Ok(VerificationStatus {
-                    verified: true,
+                    verified:   true,
                     expires_at: Some(now_unix().saturating_add(PASSKEY_READY_TTL_SECONDS)),
                 })
             }
@@ -1987,12 +2007,12 @@ impl Service<GetPasskeyStatusRequest> for SecurityService {
     async fn call(&self, req: GetPasskeyStatusRequest) -> Result<Self::Response, Self::Error> {
         let Some(passkey) = self.store.get_passkey_by_user(req.user_id).await? else {
             return Ok(PasskeyStatus {
-                enabled: false,
+                enabled:      false,
                 last_used_at: None,
             });
         };
         Ok(PasskeyStatus {
-            enabled: true,
+            enabled:      true,
             last_used_at: passkey.last_used_at.map(|value| value.to_string()),
         })
     }
@@ -2367,20 +2387,20 @@ pub(crate) fn passkey_login_enabled(options: &BTreeMap<String, String>) -> bool 
 
 #[derive(Debug, Clone)]
 struct PasskeySettings {
-    enabled: bool,
-    rp_display_name: String,
-    rp_id: String,
-    origins: String,
+    enabled:               bool,
+    rp_display_name:       String,
+    rp_id:                 String,
+    origins:               String,
     allow_insecure_origin: bool,
 }
 
 impl PasskeySettings {
     fn from_options(options: &BTreeMap<String, String>) -> Self {
         Self {
-            enabled: passkey_login_enabled(options),
-            rp_display_name: option_string(options, "passkey.rp_display_name", "Halolake"),
-            rp_id: option_string(options, "passkey.rp_id", ""),
-            origins: option_string(options, "passkey.origins", ""),
+            enabled:               passkey_login_enabled(options),
+            rp_display_name:       option_string(options, "passkey.rp_display_name", "Halolake"),
+            rp_id:                 option_string(options, "passkey.rp_id", ""),
+            origins:               option_string(options, "passkey.origins", ""),
             allow_insecure_origin: option_bool(options, "passkey.allow_insecure_origin", false),
         }
     }
@@ -2791,7 +2811,6 @@ fn optional_i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Option<i64> {
     row.try_get::<Option<i64>, _>(name).ok().flatten()
 }
 
-
 fn mysql_i64_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i64, SecurityError> {
     row.try_get::<i64, _>(name).map_err(sqlx_security_error)
 }
@@ -2926,9 +2945,7 @@ fn passkey_record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyRecor
     })
 }
 
-fn passkey_record_from_pg_row(
-    row: &sqlx::postgres::PgRow,
-) -> Result<PasskeyRecord, SecurityError> {
+fn passkey_record_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<PasskeyRecord, SecurityError> {
     let user_uuid = pg_string_col(row, "user_uuid")?
         .parse::<Uuid>()
         .map_err(|err| SecurityError::Management(ManagementError::Storage(err.to_string())))?;
@@ -3011,9 +3028,9 @@ mod tests {
             flow,
             session_id: "test-session".to_string(),
             request: PasskeyRequestContext {
-                host: Some("localhost:3000".to_string()),
+                host:            Some("localhost:3000".to_string()),
                 forwarded_proto: Some("http".to_string()),
-                uri_scheme: None,
+                uri_scheme:      None,
             },
             payload: None,
         }
@@ -3027,26 +3044,20 @@ mod tests {
             .call(GetTwoFaStatusRequest { user_id: 1 })
             .await
             .expect("two fa status");
-        assert_eq!(
-            two_fa,
-            TwoFaStatus {
-                enabled: false,
-                locked: false,
-                backup_codes_remaining: None,
-            }
-        );
+        assert_eq!(two_fa, TwoFaStatus {
+            enabled:                false,
+            locked:                 false,
+            backup_codes_remaining: None,
+        });
 
         let passkey = service
             .call(GetPasskeyStatusRequest { user_id: 1 })
             .await
             .expect("passkey status");
-        assert_eq!(
-            passkey,
-            PasskeyStatus {
-                enabled: false,
-                last_used_at: None,
-            }
-        );
+        assert_eq!(passkey, PasskeyStatus {
+            enabled:      false,
+            last_used_at: None,
+        });
     }
 
     #[tokio::test]
@@ -3054,9 +3065,9 @@ mod tests {
         let service = service();
         let setup = service
             .call(StartTwoFaSetupRequest {
-                user_id: 1,
+                user_id:  1,
                 username: "alice".to_string(),
-                issuer: "Halolake".to_string(),
+                issuer:   "Halolake".to_string(),
             })
             .await
             .expect("setup");
@@ -3091,9 +3102,9 @@ mod tests {
         let service = service();
         let setup = service
             .call(StartTwoFaSetupRequest {
-                user_id: 1,
+                user_id:  1,
                 username: "alice".to_string(),
-                issuer: "Halolake".to_string(),
+                issuer:   "Halolake".to_string(),
             })
             .await
             .expect("setup");
@@ -3114,7 +3125,7 @@ mod tests {
         service
             .call(DisableTwoFaRequest {
                 user_id: 1,
-                code: setup.backup_codes[0].clone(),
+                code:    setup.backup_codes[0].clone(),
             })
             .await
             .expect("disable");

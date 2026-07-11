@@ -1,43 +1,36 @@
 //! Usage logs, data charts, and system-task read handlers.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-
+use crate::{
+    AppState, MAX_RECENT_TOKEN_LOGS,
+    channel_affinity::{ChannelAffinityService, GetChannelAffinityUsageCacheStatsRequest},
+    http_auth::{current_user, require_role, token_from_read_only_auth},
+    http_response::{api_error_status, api_success, management_error, page_items, usage_error},
+    now_unix,
+    storage::DeleteUsageBeforeRequest,
+    system_instance::{
+        DeleteStaleSystemInstanceRequest, DeleteStaleSystemInstancesRequest,
+        ListSystemInstancesRequest,
+    },
+    system_task::{
+        GetCurrentSystemTaskRequest, GetSystemTaskRequest, ListSystemTasksRequest,
+        StartLogCleanupTaskRequest, spawn_log_cleanup_task,
+    },
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
 };
-use halolake_control_plane::{
-    ManagementData, ManagementError, UsageError,
-};
+use halolake_api_contract::ApiResponse;
+use halolake_control_plane::{ManagementData, ManagementError, UsageError};
 use halolake_domain::{
     PageRequest, ROLE_ADMIN_USER, ROLE_ROOT_USER, TokenRecord, UsageEvent, UsageStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
-use axum::response::IntoResponse;
-use halolake_api_contract::ApiResponse;
-
-use crate::channel_affinity::{
-    ChannelAffinityService, GetChannelAffinityUsageCacheStatsRequest,
-};
-use crate::http_auth::{current_user, require_role, token_from_read_only_auth};
-use crate::storage::DeleteUsageBeforeRequest;
-use crate::http_response::{
-    api_error_status, api_success, management_error, page_items, usage_error,
-};
-use crate::system_instance::{
-    DeleteStaleSystemInstanceRequest, DeleteStaleSystemInstancesRequest, ListSystemInstancesRequest,
-};
-use crate::system_task::{
-    GetCurrentSystemTaskRequest, GetSystemTaskRequest,
-    ListSystemTasksRequest, StartLogCleanupTaskRequest, spawn_log_cleanup_task,
-};
-use crate::{
-    AppState, MAX_RECENT_TOKEN_LOGS, now_unix,
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum QuotaGrouping {
@@ -49,31 +42,30 @@ pub(crate) enum QuotaGrouping {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct LogQuery {
     #[serde(default = "crate::default_page")]
-    page: usize,
+    page:                usize,
     #[serde(default = "crate::default_page_size")]
-    page_size: usize,
+    page_size:           usize,
     #[serde(rename = "type", default)]
-    log_type: i32,
+    log_type:            i32,
     #[serde(default)]
-    start_timestamp: i64,
+    start_timestamp:     i64,
     #[serde(default)]
-    end_timestamp: i64,
+    end_timestamp:       i64,
     #[serde(default)]
-    model_name: String,
+    model_name:          String,
     #[serde(default)]
-    username: String,
+    username:            String,
     #[serde(default)]
-    token_name: String,
+    token_name:          String,
     #[serde(default)]
-    channel: String,
+    channel:             String,
     #[serde(default)]
-    group: String,
+    group:               String,
     #[serde(default)]
-    request_id: String,
+    request_id:          String,
     #[serde(default)]
     upstream_request_id: String,
 }
-
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub(crate) struct DeleteLogQuery {
@@ -81,13 +73,11 @@ pub(crate) struct DeleteLogQuery {
     target_timestamp: i64,
 }
 
-
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub(crate) struct LogCleanupTaskQuery {
     #[serde(default)]
     target_timestamp: i64,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct CurrentSystemTaskQuery {
@@ -95,79 +85,73 @@ pub(crate) struct CurrentSystemTaskQuery {
     task_type: String,
 }
 
-
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub(crate) struct ListSystemTaskQuery {
     #[serde(default)]
     limit: usize,
 }
 
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelAffinityUsageCacheQuery {
     #[serde(default)]
-    rule_name: String,
+    rule_name:   String,
     #[serde(default)]
     using_group: String,
     #[serde(default)]
-    key_fp: String,
+    key_fp:      String,
 }
-
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct LogRecord {
-    id: usize,
-    user_id: String,
-    created_at: i64,
+    id:                  usize,
+    user_id:             String,
+    created_at:          i64,
     #[serde(rename = "type")]
-    log_type: i32,
-    content: String,
-    username: String,
-    token_name: String,
-    model_name: String,
-    quota: i64,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    use_time: u64,
-    is_stream: bool,
-    channel: String,
-    channel_name: String,
-    token_id: String,
-    group: String,
-    ip: String,
-    request_id: String,
+    log_type:            i32,
+    content:             String,
+    username:            String,
+    token_name:          String,
+    model_name:          String,
+    quota:               i64,
+    prompt_tokens:       u64,
+    completion_tokens:   u64,
+    use_time:            u64,
+    is_stream:           bool,
+    channel:             String,
+    channel_name:        String,
+    token_id:            String,
+    group:               String,
+    ip:                  String,
+    request_id:          String,
     upstream_request_id: String,
-    other: String,
+    other:               String,
 }
-
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct DataQuery {
     #[serde(default)]
     start_timestamp: i64,
     #[serde(default)]
-    end_timestamp: i64,
+    end_timestamp:   i64,
     #[serde(default)]
-    username: String,
+    username:        String,
 }
-
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct QuotaDataRecord {
-    id: usize,
-    user_id: String,
-    username: String,
+    id:         usize,
+    user_id:    String,
+    username:   String,
     model_name: String,
     created_at: i64,
-    use_group: String,
-    token_id: String,
+    use_group:  String,
+    token_id:   String,
     channel_id: String,
-    node_name: String,
+    node_name:  String,
     token_used: u64,
-    count: usize,
-    quota: i64,
+    count:      usize,
+    quota:      i64,
 }
-
 
 pub(crate) async fn list_logs(
     State(state): State<AppState>,
@@ -181,7 +165,6 @@ pub(crate) async fn list_logs(
     usage_log_page(&state, &query, None)
 }
 
-
 pub(crate) async fn list_self_logs(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -194,7 +177,6 @@ pub(crate) async fn list_self_logs(
     let user_id = user.id.to_string();
     usage_log_page(&state, &query, Some(&user_id))
 }
-
 
 pub(crate) async fn list_token_logs(
     State(state): State<AppState>,
@@ -210,7 +192,6 @@ pub(crate) async fn list_token_logs(
         Err(err) => usage_error(err),
     }
 }
-
 
 pub(crate) async fn delete_history_logs(
     State(state): State<AppState>,
@@ -236,11 +217,9 @@ pub(crate) async fn delete_history_logs(
     }
 }
 
-
 pub(crate) async fn search_logs_deprecated() -> Response {
     Json(ApiResponse::<()>::error("该接口已废弃")).into_response()
 }
-
 
 pub(crate) async fn get_channel_affinity_usage_cache_stats(
     State(state): State<AppState>,
@@ -254,9 +233,9 @@ pub(crate) async fn get_channel_affinity_usage_cache_stats(
     let service = ChannelAffinityService::new(state.options.clone());
     match service
         .call(GetChannelAffinityUsageCacheStatsRequest {
-            rule_name: query.rule_name,
+            rule_name:   query.rule_name,
             using_group: query.using_group,
-            key_fp: query.key_fp,
+            key_fp:      query.key_fp,
         })
         .await
     {
@@ -267,7 +246,6 @@ pub(crate) async fn get_channel_affinity_usage_cache_stats(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn create_log_cleanup_system_task(
     State(state): State<AppState>,
@@ -301,7 +279,6 @@ pub(crate) async fn create_log_cleanup_system_task(
     }
 }
 
-
 pub(crate) async fn get_current_system_task(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -327,7 +304,6 @@ pub(crate) async fn get_current_system_task(
     }
 }
 
-
 pub(crate) async fn list_system_tasks(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -346,7 +322,6 @@ pub(crate) async fn list_system_tasks(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn get_system_task(
     State(state): State<AppState>,
@@ -371,8 +346,10 @@ pub(crate) async fn get_system_task(
     }
 }
 
-
-pub(crate) async fn list_system_instances(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn list_system_instances(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ROOT_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
@@ -386,7 +363,6 @@ pub(crate) async fn list_system_instances(State(state): State<AppState>, headers
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn delete_stale_system_instances(
     State(state): State<AppState>,
@@ -405,7 +381,6 @@ pub(crate) async fn delete_stale_system_instances(
         Err(err) => management_error(err),
     }
 }
-
 
 pub(crate) async fn delete_stale_system_instance(
     State(state): State<AppState>,
@@ -433,7 +408,6 @@ pub(crate) async fn delete_stale_system_instance(
     }
 }
 
-
 pub(crate) async fn log_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -445,7 +419,6 @@ pub(crate) async fn log_stats(
     };
     usage_log_stats(&state, &query, None)
 }
-
 
 pub(crate) async fn self_log_stats(
     State(state): State<AppState>,
@@ -460,7 +433,6 @@ pub(crate) async fn self_log_stats(
     usage_log_stats(&state, &query, Some(&user_id))
 }
 
-
 pub(crate) async fn data_all_quota(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -472,7 +444,6 @@ pub(crate) async fn data_all_quota(
     };
     quota_data_response(&state, &query, None, QuotaGrouping::Model)
 }
-
 
 pub(crate) async fn data_quota_by_user(
     State(state): State<AppState>,
@@ -486,7 +457,6 @@ pub(crate) async fn data_quota_by_user(
     quota_data_response(&state, &query, None, QuotaGrouping::User)
 }
 
-
 pub(crate) async fn data_self_quota(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -499,7 +469,6 @@ pub(crate) async fn data_self_quota(
     let user_id = user.id.to_string();
     quota_data_response(&state, &query, Some(&user_id), QuotaGrouping::UserModel)
 }
-
 
 pub(crate) async fn data_all_flow(
     State(state): State<AppState>,
@@ -515,7 +484,6 @@ pub(crate) async fn data_all_flow(
     }
     quota_data_response(&state, &query, None, QuotaGrouping::UserModel)
 }
-
 
 pub(crate) async fn data_self_flow(
     State(state): State<AppState>,
@@ -533,22 +501,25 @@ pub(crate) async fn data_self_flow(
     quota_data_response(&state, &query, Some(&user_id), QuotaGrouping::UserModel)
 }
 
-
-pub(crate) fn usage_log_page(state: &AppState, query: &LogQuery, user_id: Option<&str>) -> Response {
+pub(crate) fn usage_log_page(
+    state: &AppState,
+    query: &LogQuery,
+    user_id: Option<&str>,
+) -> Response {
     match usage_log_records(state, query, user_id) {
-        Ok(records) => api_success(page_items(
-            records,
-            PageRequest {
-                page: query.page,
-                page_size: query.page_size,
-            },
-        )),
+        Ok(records) => api_success(page_items(records, PageRequest {
+            page:      query.page,
+            page_size: query.page_size,
+        })),
         Err(err) => usage_error(err),
     }
 }
 
-
-pub(crate) fn usage_log_stats(state: &AppState, query: &LogQuery, user_id: Option<&str>) -> Response {
+pub(crate) fn usage_log_stats(
+    state: &AppState,
+    query: &LogQuery,
+    user_id: Option<&str>,
+) -> Response {
     match filtered_usage_events(state, query, user_id) {
         Ok(events) => {
             let quota = events.iter().map(usage_event_quota_value).sum::<i64>();
@@ -562,7 +533,6 @@ pub(crate) fn usage_log_stats(state: &AppState, query: &LogQuery, user_id: Optio
     }
 }
 
-
 pub(crate) fn usage_log_records(
     state: &AppState,
     query: &LogQuery,
@@ -571,7 +541,6 @@ pub(crate) fn usage_log_records(
     let events = filtered_usage_events(state, query, user_id)?;
     usage_log_records_from_events(state, events)
 }
-
 
 pub(crate) fn token_usage_log_records(
     state: &AppState,
@@ -586,7 +555,6 @@ pub(crate) fn token_usage_log_records(
         .collect();
     usage_log_records_from_events(state, events)
 }
-
 
 pub(crate) fn usage_log_records_from_events(
     state: &AppState,
@@ -686,7 +654,6 @@ pub(crate) fn usage_log_records_from_events(
         .collect())
 }
 
-
 pub(crate) fn token_usage_ids(token: &TokenRecord) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     ids.insert(token.id.to_string());
@@ -695,7 +662,6 @@ pub(crate) fn token_usage_ids(token: &TokenRecord) -> BTreeSet<String> {
     }
     ids
 }
-
 
 pub(crate) fn filtered_usage_events(
     state: &AppState,
@@ -766,7 +732,6 @@ pub(crate) fn filtered_usage_events(
         .collect())
 }
 
-
 pub(crate) fn usage_log_record(
     id: usize,
     event: UsageEvent,
@@ -824,7 +789,6 @@ pub(crate) fn usage_log_record(
     }
 }
 
-
 pub(crate) fn usage_log_other(event: &UsageEvent) -> String {
     let mut other = serde_json::Map::new();
     insert_optional_u64(&mut other, "total_tokens", event.total_tokens);
@@ -836,13 +800,16 @@ pub(crate) fn usage_log_other(event: &UsageEvent) -> String {
     );
     insert_optional_u64(&mut other, "image_tokens", event.image_tokens);
     insert_optional_u64(&mut other, "audio_tokens", event.audio_tokens);
+    // new-api: other["frt"] = FirstResponseTime - StartTime (milliseconds)
+    if let Some(frt) = event.first_response_ms.filter(|v| *v > 0) {
+        other.insert("frt".to_string(), json!(frt));
+    }
     if other.is_empty() {
         String::new()
     } else {
         JsonValue::Object(other).to_string()
     }
 }
-
 
 pub(crate) fn insert_optional_u64(
     object: &mut serde_json::Map<String, JsonValue>,
@@ -854,27 +821,23 @@ pub(crate) fn insert_optional_u64(
     }
 }
 
-
 pub(crate) fn usage_event_quota_value(event: &UsageEvent) -> i64 {
     event
         .quota
         .unwrap_or_else(|| event.observed_tokens().min(i64::MAX as u64) as i64)
 }
 
-
 pub(crate) struct UsageGroupLookup {
-    user_groups: HashMap<String, String>,
-    token_groups: HashMap<String, String>,
+    user_groups:    HashMap<String, String>,
+    token_groups:   HashMap<String, String>,
     channel_groups: HashMap<String, String>,
 }
 
-
 pub(crate) struct UsageFilterLookup {
-    user_names: HashMap<String, String>,
-    token_names: HashMap<String, String>,
+    user_names:    HashMap<String, String>,
+    token_names:   HashMap<String, String>,
     channel_names: HashMap<String, String>,
 }
-
 
 pub(crate) fn usage_event_group(
     event: &UsageEvent,
@@ -902,14 +865,12 @@ pub(crate) fn usage_event_group(
         .unwrap_or_else(|| "default".to_string())
 }
 
-
 pub(crate) fn usage_log_type(status: UsageStatus) -> i32 {
     match status {
         UsageStatus::Success => 2,
         UsageStatus::ClientError | UsageStatus::UpstreamError | UsageStatus::GatewayError => 5,
     }
 }
-
 
 pub(crate) fn quota_data_response(
     state: &AppState,
@@ -922,7 +883,6 @@ pub(crate) fn quota_data_response(
         Err(err) => usage_error(err),
     }
 }
-
 
 pub(crate) fn quota_data_records(
     state: &AppState,
@@ -975,12 +935,12 @@ pub(crate) fn quota_data_records(
             ),
         };
         let record = groups.entry(key).or_insert_with(|| QuotaDataRecord {
-            id: 0,
-            user_id: match grouping {
+            id:         0,
+            user_id:    match grouping {
                 QuotaGrouping::Model => String::new(),
                 QuotaGrouping::User | QuotaGrouping::UserModel => event.user_id.clone(),
             },
-            username: match grouping {
+            username:   match grouping {
                 QuotaGrouping::Model => String::new(),
                 QuotaGrouping::User | QuotaGrouping::UserModel => username.clone(),
             },
@@ -989,13 +949,13 @@ pub(crate) fn quota_data_records(
                 QuotaGrouping::Model | QuotaGrouping::UserModel => event.model.clone(),
             },
             created_at: hour,
-            use_group: use_group.clone(),
-            token_id: event.token_id.clone(),
+            use_group:  use_group.clone(),
+            token_id:   event.token_id.clone(),
             channel_id: event.channel_id.clone(),
-            node_name: String::new(),
+            node_name:  String::new(),
             token_used: 0,
-            count: 0,
-            quota: 0,
+            count:      0,
+            quota:      0,
         });
         record.count = record.count.saturating_add(1);
         let tokens = event.observed_tokens();
@@ -1011,7 +971,6 @@ pub(crate) fn quota_data_records(
     Ok(records)
 }
 
-
 pub(crate) fn validate_flow_time_range(query: &DataQuery) -> Result<(), Response> {
     if query.start_timestamp <= 0 {
         return Err(api_error_status(StatusCode::OK, "invalid start_timestamp"));
@@ -1024,7 +983,6 @@ pub(crate) fn validate_flow_time_range(query: &DataQuery) -> Result<(), Response
     }
     Ok(())
 }
-
 
 impl UsageGroupLookup {
     fn from_data(data: &ManagementData) -> Self {
@@ -1082,8 +1040,6 @@ impl UsageGroupLookup {
         )
     }
 }
-
-
 
 impl UsageFilterLookup {
     fn from_data(data: &ManagementData) -> Self {
@@ -1155,6 +1111,3 @@ impl UsageFilterLookup {
                 .is_some_and(|name| name == query || name.contains(query))
     }
 }
-
-
-

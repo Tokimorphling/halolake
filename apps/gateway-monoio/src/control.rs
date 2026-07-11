@@ -8,11 +8,11 @@ const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
 
 #[derive(Clone)]
 pub(crate) struct MonoioHttpSnapshotSource {
-    snapshot_url: Arc<str>,
-    internal_key: Option<Arc<str>>,
+    snapshot_url:    Arc<str>,
+    internal_key:    Option<Arc<str>>,
     connect_timeout: Option<Duration>,
-    http: HttpUpstream,
-    https: HttpsUpstream,
+    http:            HttpUpstream,
+    https:           HttpsUpstream,
 }
 
 impl MonoioHttpSnapshotSource {
@@ -152,11 +152,11 @@ fn snapshot_transport(err: anyhow::Error) -> SnapshotError {
 
 #[derive(Clone)]
 pub(crate) struct MonoioHttpUsageSink {
-    usage_url: Arc<str>,
-    internal_key: Option<Arc<str>>,
+    usage_url:       Arc<str>,
+    internal_key:    Option<Arc<str>>,
     connect_timeout: Option<Duration>,
-    http: HttpUpstream,
-    https: HttpsUpstream,
+    http:            HttpUpstream,
+    https:           HttpsUpstream,
 }
 
 impl MonoioHttpUsageSink {
@@ -280,10 +280,10 @@ fn usage_transport(err: anyhow::Error) -> UsageError {
 #[derive(Clone)]
 pub(crate) struct MonoioHttpChannelFeedbackSink {
     channel_feedback_url: Arc<str>,
-    internal_key: Option<Arc<str>>,
-    connect_timeout: Option<Duration>,
-    http: HttpUpstream,
-    https: HttpsUpstream,
+    internal_key:         Option<Arc<str>>,
+    connect_timeout:      Option<Duration>,
+    http:                 HttpUpstream,
+    https:                HttpsUpstream,
 }
 
 impl MonoioHttpChannelFeedbackSink {

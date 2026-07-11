@@ -1,8 +1,4 @@
-use std::{
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
-
+use crate::storage::{DeleteUsageBeforeRequest, UsageStore};
 use halolake_control_plane::ManagementError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -13,10 +9,12 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::{
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 use tracing::warn;
 use uuid::Uuid;
-
-use crate::storage::{DeleteUsageBeforeRequest, UsageStore};
 
 pub(crate) const SYSTEM_TASK_TYPE_LOG_CLEANUP: &str = "log_cleanup";
 pub(crate) const SYSTEM_TASK_TYPE_CHANNEL_TEST: &str = "channel_test";
@@ -66,18 +64,18 @@ impl FromStr for SystemTaskStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SystemTaskRecord {
-    pub(crate) id: i64,
-    pub(crate) task_id: String,
+    pub(crate) id:         i64,
+    pub(crate) task_id:    String,
     #[serde(rename = "type")]
-    pub(crate) task_type: String,
-    pub(crate) status: SystemTaskStatus,
+    pub(crate) task_type:  String,
+    pub(crate) status:     SystemTaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) active_key: Option<String>,
-    pub(crate) payload: Option<JsonValue>,
-    pub(crate) state: Option<JsonValue>,
-    pub(crate) result: Option<JsonValue>,
-    pub(crate) error: String,
-    pub(crate) locked_by: String,
+    pub(crate) payload:    Option<JsonValue>,
+    pub(crate) state:      Option<JsonValue>,
+    pub(crate) result:     Option<JsonValue>,
+    pub(crate) error:      String,
+    pub(crate) locked_by:  String,
     pub(crate) created_at: i64,
     pub(crate) updated_at: i64,
 }
@@ -90,20 +88,20 @@ pub(crate) struct StartLogCleanupTaskRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct StartSystemTaskRequest {
     pub(crate) task_type: &'static str,
-    pub(crate) payload: Option<JsonValue>,
-    pub(crate) state: Option<JsonValue>,
+    pub(crate) payload:   Option<JsonValue>,
+    pub(crate) state:     Option<JsonValue>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct EnqueueSystemTaskRequest {
     pub(crate) task_type: &'static str,
-    pub(crate) payload: Option<JsonValue>,
-    pub(crate) state: Option<JsonValue>,
+    pub(crate) payload:   Option<JsonValue>,
+    pub(crate) state:     Option<JsonValue>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct EnqueueSystemTaskResponse {
-    pub(crate) task: SystemTaskRecord,
+    pub(crate) task:    SystemTaskRecord,
     pub(crate) created: bool,
 }
 
@@ -124,25 +122,25 @@ pub(crate) struct ListSystemTasksRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClaimSystemTaskRequest {
-    pub(crate) task_id: String,
+    pub(crate) task_id:   String,
     pub(crate) task_type: &'static str,
     pub(crate) runner_id: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct UpdateSystemTaskStateRequest {
-    pub(crate) task_id: String,
+    pub(crate) task_id:   String,
     pub(crate) runner_id: String,
-    pub(crate) state: JsonValue,
+    pub(crate) state:     JsonValue,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct FinishSystemTaskRequest {
-    pub(crate) task_id: String,
+    pub(crate) task_id:   String,
     pub(crate) runner_id: String,
-    pub(crate) status: SystemTaskStatus,
-    pub(crate) result: Option<JsonValue>,
-    pub(crate) error: String,
+    pub(crate) status:    SystemTaskStatus,
+    pub(crate) result:    Option<JsonValue>,
+    pub(crate) error:     String,
 }
 
 #[derive(Debug, Clone)]
@@ -153,14 +151,14 @@ struct RunLogCleanupTaskRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct LogCleanupPayload {
     target_timestamp: i64,
-    batch_size: usize,
+    batch_size:       usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 struct LogCleanupState {
-    total: i64,
+    total:     i64,
     processed: i64,
-    progress: i64,
+    progress:  i64,
     remaining: i64,
 }
 
@@ -203,7 +201,7 @@ pub(crate) struct MemorySystemTaskStore {
 #[derive(Debug, Default)]
 struct MemorySystemTaskState {
     next_id: i64,
-    tasks: Vec<SystemTaskRecord>,
+    tasks:   Vec<SystemTaskRecord>,
 }
 
 impl MemorySystemTaskStore {
@@ -245,12 +243,12 @@ impl Service<StartLogCleanupTaskRequest> for MemorySystemTaskStore {
 
         let payload = LogCleanupPayload {
             target_timestamp: req.target_timestamp,
-            batch_size: LOG_CLEANUP_BATCH_SIZE,
+            batch_size:       LOG_CLEANUP_BATCH_SIZE,
         };
         self.call(StartSystemTaskRequest {
             task_type: SYSTEM_TASK_TYPE_LOG_CLEANUP,
-            payload: Some(json!(payload)),
-            state: Some(json!(LogCleanupState::default())),
+            payload:   Some(json!(payload)),
+            state:     Some(json!(LogCleanupState::default())),
         })
         .await
     }
@@ -264,8 +262,8 @@ impl Service<StartSystemTaskRequest> for MemorySystemTaskStore {
         Ok(self
             .call(EnqueueSystemTaskRequest {
                 task_type: req.task_type,
-                payload: req.payload,
-                state: req.state,
+                payload:   req.payload,
+                state:     req.state,
             })
             .await?
             .task)
@@ -288,7 +286,7 @@ impl Service<EnqueueSystemTaskRequest> for MemorySystemTaskStore {
             .map_err(|_| ManagementError::Poisoned("system_tasks"))?;
         if let Some(active) = latest_active_task(&state.tasks, req.task_type) {
             return Ok(EnqueueSystemTaskResponse {
-                task: active.clone(),
+                task:    active.clone(),
                 created: false,
             });
         }
@@ -432,7 +430,7 @@ impl Service<FinishSystemTaskRequest> for MemorySystemTaskStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteSystemTaskStore {
-    pool: SqlitePool,
+    pool:   SqlitePool,
     memory: MemorySystemTaskStore,
 }
 
@@ -510,8 +508,8 @@ impl Service<StartSystemTaskRequest> for SqliteSystemTaskStore {
         Ok(self
             .call(EnqueueSystemTaskRequest {
                 task_type: req.task_type,
-                payload: req.payload,
-                state: req.state,
+                payload:   req.payload,
+                state:     req.state,
             })
             .await?
             .task)
@@ -595,14 +593,13 @@ impl Service<FinishSystemTaskRequest> for SqliteSystemTaskStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MySqlSystemTaskStore {
-    pool: MySqlPool,
+    pool:   MySqlPool,
     memory: MemorySystemTaskStore,
 }
 
 impl MySqlSystemTaskStore {
     async fn connect(url: &str) -> Result<Self, ManagementError> {
-        let options = MySqlConnectOptions::from_str(url)
-            .map_err(storage_err)?;
+        let options = MySqlConnectOptions::from_str(url).map_err(storage_err)?;
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -670,8 +667,8 @@ impl Service<StartSystemTaskRequest> for MySqlSystemTaskStore {
         Ok(self
             .call(EnqueueSystemTaskRequest {
                 task_type: req.task_type,
-                payload: req.payload,
-                state: req.state,
+                payload:   req.payload,
+                state:     req.state,
             })
             .await?
             .task)
@@ -755,7 +752,7 @@ impl Service<FinishSystemTaskRequest> for MySqlSystemTaskStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresSystemTaskStore {
-    pool: PgPool,
+    pool:   PgPool,
     memory: MemorySystemTaskStore,
 }
 
@@ -830,8 +827,8 @@ impl Service<StartSystemTaskRequest> for PostgresSystemTaskStore {
         Ok(self
             .call(EnqueueSystemTaskRequest {
                 task_type: req.task_type,
-                payload: req.payload,
-                state: req.state,
+                payload:   req.payload,
+                state:     req.state,
             })
             .await?
             .task)
@@ -929,9 +926,9 @@ pub(crate) fn spawn_log_cleanup_task(
 
 #[derive(Debug, Clone)]
 struct LogCleanupTaskRunner {
-    tasks: SystemTaskStore,
+    tasks:        SystemTaskStore,
     usage_events: UsageStore,
-    runner_id: String,
+    runner_id:    String,
 }
 
 impl LogCleanupTaskRunner {
@@ -952,7 +949,7 @@ impl Service<RunLogCleanupTaskRequest> for LogCleanupTaskRunner {
         let Some(task) = self
             .tasks
             .call(ClaimSystemTaskRequest {
-                task_id: req.task_id,
+                task_id:   req.task_id,
                 task_type: SYSTEM_TASK_TYPE_LOG_CLEANUP,
                 runner_id: self.runner_id.clone(),
             })
@@ -985,15 +982,12 @@ impl LogCleanupTaskRunner {
             .usage_events
             .count_before_unix_seconds(payload.target_timestamp)
             .map_err(usage_to_management)? as i64;
-        self.update_state(
-            &task.task_id,
-            LogCleanupState {
-                total,
-                processed: 0,
-                progress: log_cleanup_progress(0, total),
-                remaining: total,
-            },
-        )
+        self.update_state(&task.task_id, LogCleanupState {
+            total,
+            processed: 0,
+            progress: log_cleanup_progress(0, total),
+            remaining: total,
+        })
         .await?;
 
         let deleted = self
@@ -1011,25 +1005,22 @@ impl LogCleanupTaskRunner {
         }
 
         let remaining = total.saturating_sub(deleted);
-        self.update_state(
-            &task.task_id,
-            LogCleanupState {
-                total: total.max(deleted),
-                processed: deleted,
-                progress: log_cleanup_progress(deleted, total.max(deleted)),
-                remaining,
-            },
-        )
+        self.update_state(&task.task_id, LogCleanupState {
+            total: total.max(deleted),
+            processed: deleted,
+            progress: log_cleanup_progress(deleted, total.max(deleted)),
+            remaining,
+        })
         .await?;
         self.tasks
             .call(FinishSystemTaskRequest {
-                task_id: task.task_id,
+                task_id:   task.task_id,
                 runner_id: self.runner_id.clone(),
-                status: SystemTaskStatus::Succeeded,
-                result: Some(json!(LogCleanupResult {
+                status:    SystemTaskStatus::Succeeded,
+                result:    Some(json!(LogCleanupResult {
                     deleted_count: deleted,
                 })),
-                error: String::new(),
+                error:     String::new(),
             })
             .await?;
         Ok(())
@@ -1042,9 +1033,9 @@ impl LogCleanupTaskRunner {
     ) -> Result<(), ManagementError> {
         self.tasks
             .call(UpdateSystemTaskStateRequest {
-                task_id: task_id.to_string(),
+                task_id:   task_id.to_string(),
                 runner_id: self.runner_id.clone(),
-                state: json!(state),
+                state:     json!(state),
             })
             .await?;
         Ok(())
@@ -1053,11 +1044,11 @@ impl LogCleanupTaskRunner {
     async fn finish_failed(&self, error: &str, task_id: &str) -> Result<(), ManagementError> {
         self.tasks
             .call(FinishSystemTaskRequest {
-                task_id: task_id.to_string(),
+                task_id:   task_id.to_string(),
                 runner_id: self.runner_id.clone(),
-                status: SystemTaskStatus::Failed,
-                result: None,
-                error: error.to_string(),
+                status:    SystemTaskStatus::Failed,
+                result:    None,
+                error:     error.to_string(),
             })
             .await?;
         Ok(())
@@ -1136,7 +1127,8 @@ async fn migrate_system_tasks(pool: &SqlitePool) -> Result<(), ManagementError> 
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         )",
-        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, \
+         status)",
         "CREATE INDEX IF NOT EXISTS idx_system_tasks_updated_at ON system_tasks(updated_at)",
     ] {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
@@ -1160,7 +1152,8 @@ async fn migrate_system_tasks_mysql(pool: &MySqlPool) -> Result<(), ManagementEr
             created_at BIGINT NOT NULL,
             updated_at BIGINT NOT NULL
         )",
-        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, \
+         status)",
         "CREATE INDEX IF NOT EXISTS idx_system_tasks_updated_at ON system_tasks(updated_at)",
     ] {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
@@ -1180,16 +1173,16 @@ async fn load_system_tasks(pool: &SqlitePool) -> Result<Vec<SystemTaskRecord>, M
     .into_iter()
     .map(|row| {
         Ok(SystemTaskRecord {
-            id: i64_col_sqlite(&row, "id")?,
-            task_id: string_col_sqlite(&row, "task_id")?,
-            task_type: string_col_sqlite(&row, "task_type")?,
-            status: SystemTaskStatus::from_str(&string_col_sqlite(&row, "status")?)?,
+            id:         i64_col_sqlite(&row, "id")?,
+            task_id:    string_col_sqlite(&row, "task_id")?,
+            task_type:  string_col_sqlite(&row, "task_type")?,
+            status:     SystemTaskStatus::from_str(&string_col_sqlite(&row, "status")?)?,
             active_key: opt_string_col_sqlite(&row, "active_key")?,
-            payload: json_col_sqlite(&row, "payload")?,
-            state: json_col_sqlite(&row, "state")?,
-            result: json_col_sqlite(&row, "result")?,
-            error: string_col_sqlite(&row, "error")?,
-            locked_by: string_col_sqlite(&row, "locked_by")?,
+            payload:    json_col_sqlite(&row, "payload")?,
+            state:      json_col_sqlite(&row, "state")?,
+            result:     json_col_sqlite(&row, "result")?,
+            error:      string_col_sqlite(&row, "error")?,
+            locked_by:  string_col_sqlite(&row, "locked_by")?,
             created_at: i64_col_sqlite(&row, "created_at")?,
             updated_at: i64_col_sqlite(&row, "updated_at")?,
         })
@@ -1197,7 +1190,9 @@ async fn load_system_tasks(pool: &SqlitePool) -> Result<Vec<SystemTaskRecord>, M
     .collect()
 }
 
-async fn load_system_tasks_mysql(pool: &MySqlPool) -> Result<Vec<SystemTaskRecord>, ManagementError> {
+async fn load_system_tasks_mysql(
+    pool: &MySqlPool,
+) -> Result<Vec<SystemTaskRecord>, ManagementError> {
     sqlx::query(
         "SELECT id, task_id, task_type, status, active_key, payload, state, result,
             error, locked_by, created_at, updated_at
@@ -1209,16 +1204,16 @@ async fn load_system_tasks_mysql(pool: &MySqlPool) -> Result<Vec<SystemTaskRecor
     .into_iter()
     .map(|row| {
         Ok(SystemTaskRecord {
-            id: i64_col_mysql(&row, "id")?,
-            task_id: string_col_mysql(&row, "task_id")?,
-            task_type: string_col_mysql(&row, "task_type")?,
-            status: SystemTaskStatus::from_str(&string_col_mysql(&row, "status")?)?,
+            id:         i64_col_mysql(&row, "id")?,
+            task_id:    string_col_mysql(&row, "task_id")?,
+            task_type:  string_col_mysql(&row, "task_type")?,
+            status:     SystemTaskStatus::from_str(&string_col_mysql(&row, "status")?)?,
             active_key: opt_string_col_mysql(&row, "active_key")?,
-            payload: json_col_mysql(&row, "payload")?,
-            state: json_col_mysql(&row, "state")?,
-            result: json_col_mysql(&row, "result")?,
-            error: string_col_mysql(&row, "error")?,
-            locked_by: string_col_mysql(&row, "locked_by")?,
+            payload:    json_col_mysql(&row, "payload")?,
+            state:      json_col_mysql(&row, "state")?,
+            result:     json_col_mysql(&row, "result")?,
+            error:      string_col_mysql(&row, "error")?,
+            locked_by:  string_col_mysql(&row, "locked_by")?,
             created_at: i64_col_mysql(&row, "created_at")?,
             updated_at: i64_col_mysql(&row, "updated_at")?,
         })
@@ -1242,7 +1237,8 @@ async fn migrate_system_tasks_pg(pool: &PgPool) -> Result<(), ManagementError> {
             created_at BIGINT NOT NULL,
             updated_at BIGINT NOT NULL
         )",
-        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, \
+         status)",
         "CREATE INDEX IF NOT EXISTS idx_system_tasks_updated_at ON system_tasks(updated_at)",
     ] {
         sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
@@ -1262,16 +1258,16 @@ async fn load_system_tasks_pg(pool: &PgPool) -> Result<Vec<SystemTaskRecord>, Ma
     .into_iter()
     .map(|row| {
         Ok(SystemTaskRecord {
-            id: i64_col_pg(&row, "id")?,
-            task_id: string_col_pg(&row, "task_id")?,
-            task_type: string_col_pg(&row, "task_type")?,
-            status: SystemTaskStatus::from_str(&string_col_pg(&row, "status")?)?,
+            id:         i64_col_pg(&row, "id")?,
+            task_id:    string_col_pg(&row, "task_id")?,
+            task_type:  string_col_pg(&row, "task_type")?,
+            status:     SystemTaskStatus::from_str(&string_col_pg(&row, "status")?)?,
             active_key: opt_string_col_pg(&row, "active_key")?,
-            payload: json_col_pg(&row, "payload")?,
-            state: json_col_pg(&row, "state")?,
-            result: json_col_pg(&row, "result")?,
-            error: string_col_pg(&row, "error")?,
-            locked_by: string_col_pg(&row, "locked_by")?,
+            payload:    json_col_pg(&row, "payload")?,
+            state:      json_col_pg(&row, "state")?,
+            result:     json_col_pg(&row, "result")?,
+            error:      string_col_pg(&row, "error")?,
+            locked_by:  string_col_pg(&row, "locked_by")?,
             created_at: i64_col_pg(&row, "created_at")?,
             updated_at: i64_col_pg(&row, "updated_at")?,
         })
@@ -1480,6 +1476,7 @@ mod tests {
             quota: Some(2),
             status: UsageStatus::Success,
             latency_ms: 10,
+            first_response_ms: None,
             is_stream: false,
             ip: String::new(),
             upstream_request_id: String::new(),

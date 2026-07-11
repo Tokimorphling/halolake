@@ -3,8 +3,8 @@
 use super::super::*;
 use monoio_http::common::body::{BodyExt, HttpBody};
 use service_async::{
-    layer::{layer_fn, FactoryLayer},
     MakeService,
+    layer::{FactoryLayer, layer_fn},
 };
 
 /// Top-level request router. Collects the body, then dispatches into the
