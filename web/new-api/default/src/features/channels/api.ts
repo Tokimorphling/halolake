@@ -641,3 +641,66 @@ export async function getPrefillGroups(
   const res = await api.get('/api/prefill_group', { params: { type } })
   return res.data
 }
+
+// ============================================================================
+// Sub2API / Codex bulk import
+// ============================================================================
+
+export interface Sub2apiDataImportResult {
+  proxy_created: number
+  proxy_reused: number
+  proxy_failed: number
+  account_created: number
+  account_failed: number
+  errors?: Array<{
+    kind: string
+    name?: string
+    proxy_key?: string
+    message: string
+  }>
+}
+
+export async function importSub2apiData(payload: {
+  content?: string
+  data?: unknown
+  group?: string
+  models?: string
+}): Promise<{
+  success: boolean
+  message?: string
+  data?: Sub2apiDataImportResult
+}> {
+  const res = await api.post(
+    '/api/channel/import/sub2api-data',
+    payload,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function importCodexAuth(payload: {
+  content?: string
+  contents?: string[]
+  name?: string
+  group?: string
+  models?: string
+  proxy_id?: number
+  update_existing?: boolean
+}): Promise<{
+  success: boolean
+  message?: string
+  data?: {
+    total: number
+    created: number
+    updated: number
+    skipped: number
+    failed: number
+  }
+}> {
+  const res = await api.post(
+    '/api/channel/import/codex-auth',
+    payload,
+    channelActionConfig()
+  )
+  return res.data
+}

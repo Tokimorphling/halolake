@@ -29,6 +29,7 @@ import {
   SortAsc,
   RefreshCw,
   ArrowUpFromLine,
+  FileJson,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -65,6 +66,7 @@ import {
   handleUpdateAllBalances,
 } from '../lib'
 import { useChannels } from './channels-provider'
+import { ImportDataDialog } from './dialogs/import-data-dialog'
 
 export function ChannelsPrimaryButtons() {
   const { t } = useTranslation()
@@ -82,6 +84,7 @@ export function ChannelsPrimaryButtons() {
   const queryClient = useQueryClient()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showConsistencyDialog, setShowConsistencyDialog] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
   const [isRepairingConsistency, setIsRepairingConsistency] = useState(false)
   const currentUser = useAuthStore((s) => s.auth.user)
   const canEditSensitive = hasPermission(
@@ -256,6 +259,20 @@ export function ChannelsPrimaryButtons() {
             <DropdownMenuItem
               onSelect={(e) => {
                 e.preventDefault()
+                if (!canEditSensitive) return
+                setShowImportDialog(true)
+              }}
+              disabled={!canEditSensitive}
+            >
+              {t('Import Data')}
+              <DropdownMenuShortcut>
+                <FileJson className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault()
                 setShowConsistencyDialog(true)
               }}
             >
@@ -324,6 +341,11 @@ export function ChannelsPrimaryButtons() {
             setIsRepairingConsistency(false)
           }
         }}
+      />
+
+      <ImportDataDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
       />
     </>
   )

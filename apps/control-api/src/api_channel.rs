@@ -41,6 +41,7 @@ use crate::codex_auth_import::{
     CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
     CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
 };
+use crate::sub2api_data_import::{self, Sub2apiDataImportRequest};
 use crate::http_response::{
     api_error_status, api_ok, api_success, api_success_with_extra, api_success_with_message,
     management_error, system_task_conflict,
@@ -431,6 +432,32 @@ pub(crate) async fn import_codex_auth(
         }
     }
     api_success(result)
+}
+
+/// Import sub2api export JSON (`type: sub2api-data`) — proxies + accounts as channels.
+///
+/// Body accepts either `{ "data": { ...export... } }` or `{ "content": "<file text>" }`.
+/// Groups are not auto-bound; set `group` to apply a default channel group.
+pub(crate) async fn import_sub2api_data(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<Sub2apiDataImportRequest>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match sub2api_data_import::import_sub2api_data(&state.management, &state.proxies, req).await {
+        Ok(result) => {
+            if result.proxy_created > 0 || result.account_created > 0 || result.proxy_reused > 0 {
+                if let Err(err) = publish_management_snapshot(&state).await {
+                    return management_error(err);
+                }
+            }
+            api_success(result)
+        }
+        Err(err) => management_error(err),
+    }
 }
 
 pub(crate) async fn update_channel(

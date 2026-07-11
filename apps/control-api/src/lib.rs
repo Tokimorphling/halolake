@@ -40,6 +40,7 @@ mod channel_special;
 mod channel_task;
 mod checkin;
 mod codex_auth_import;
+mod sub2api_data_import;
 mod compat;
 mod model_sync;
 mod playground;
@@ -568,6 +569,8 @@ impl ControlApi {
             )
             .route("/api/channel/import/codex-auth", post(import_codex_auth))
             .route("/api/channel/import/codex-auth/", post(import_codex_auth))
+            .route("/api/channel/import/sub2api-data", post(import_sub2api_data))
+            .route("/api/channel/import/sub2api-data/", post(import_sub2api_data))
             .route("/api/channel/search", get(search_channels))
             .route("/api/channel/models", get(channel_models))
             .route("/api/channel/models_enabled", get(channel_models))

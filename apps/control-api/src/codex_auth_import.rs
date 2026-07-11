@@ -310,7 +310,7 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
     let mut plan_type = String::new();
     let mut organization = String::new();
     let mut name_hint = String::new();
-    let mut access_token;
+    let access_token;
     let mut refresh_token = String::new();
     let mut id_token = String::new();
     let mut token_expires_at_unix: Option<i64> = None;
