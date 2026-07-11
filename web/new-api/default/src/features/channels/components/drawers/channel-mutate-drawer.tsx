@@ -123,6 +123,9 @@ import {
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
+import { listProxies } from '@/features/proxies/api'
+import { PROXY_STATUS } from '@/features/proxies/constants'
+import type { Proxy } from '@/features/proxies/types'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -662,6 +665,18 @@ export function ChannelMutateDrawer({
     queryKey: ['prefill_groups', 'model'],
     queryFn: () => getPrefillGroups('model'),
   })
+
+  const { data: proxyPoolData } = useQuery({
+    queryKey: ['proxies'],
+    queryFn: listProxies,
+  })
+  const enabledProxies = useMemo(
+    () =>
+      (proxyPoolData?.data || []).filter(
+        (proxy: Proxy) => proxy.status === PROXY_STATUS.ENABLED
+      ),
+    [proxyPoolData]
+  )
 
   const { copyToClipboard } = useCopyToClipboard()
 
@@ -4143,25 +4158,120 @@ export function ChannelMutateDrawer({
                             <FormField
                               control={form.control}
                               name='proxy'
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>{t('Proxy Address')}</FormLabel>
-                                  <FormControl>
-                                    <Input
-                                      placeholder={t(
-                                        'socks5://user:pass@host:port'
-                                      )}
-                                      {...field}
-                                    />
-                                  </FormControl>
-                                  <FormDescription>
-                                    {t(
-                                      'Network proxy for this channel (supports socks5 protocol)'
+                              render={({ field }) => {
+                                const poolMatch = enabledProxies.find(
+                                  (proxy: Proxy) => proxy.url === field.value
+                                )
+                                let selectValue = '__none__'
+                                if (poolMatch) {
+                                  selectValue = String(poolMatch.id)
+                                } else if (field.value?.trim()) {
+                                  selectValue = '__custom__'
+                                }
+                                const poolItems = [
+                                  { value: '__none__', label: t('None') },
+                                  ...enabledProxies.map((proxy: Proxy) => ({
+                                    value: String(proxy.id),
+                                    label: `${proxy.name} (${proxy.url})`,
+                                  })),
+                                  {
+                                    value: '__custom__',
+                                    label: t('Custom URL'),
+                                  },
+                                ]
+                                return (
+                                  <FormItem>
+                                    <FormLabel>{t('Proxy')}</FormLabel>
+                                    <Select
+                                      items={poolItems}
+                                      value={selectValue}
+                                      onValueChange={(value) => {
+                                        if (value === null || value === '__none__') {
+                                          field.onChange('')
+                                          return
+                                        }
+                                        if (value === '__custom__') {
+                                          if (poolMatch || !field.value?.trim()) {
+                                            field.onChange('')
+                                          }
+                                          return
+                                        }
+                                        const selected = enabledProxies.find(
+                                          (proxy: Proxy) =>
+                                            String(proxy.id) === value
+                                        )
+                                        if (selected) {
+                                          field.onChange(selected.url)
+                                        }
+                                      }}
+                                    >
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue
+                                            placeholder={t(
+                                              'Select from proxy pool'
+                                            )}
+                                          />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent alignItemWithTrigger={false}>
+                                        <SelectGroup>
+                                          <SelectItem value='__none__'>
+                                            {t('None')}
+                                          </SelectItem>
+                                          {enabledProxies.map(
+                                            (proxy: Proxy) => (
+                                              <SelectItem
+                                                key={proxy.id}
+                                                value={String(proxy.id)}
+                                              >
+                                                {proxy.name}
+                                                <span className='text-muted-foreground ml-2 font-mono text-xs'>
+                                                  {proxy.url}
+                                                </span>
+                                              </SelectItem>
+                                            )
+                                          )}
+                                          <SelectItem value='__custom__'>
+                                            {t('Custom URL')}
+                                          </SelectItem>
+                                        </SelectGroup>
+                                      </SelectContent>
+                                    </Select>
+                                    {(selectValue === '__custom__' ||
+                                      (!poolMatch &&
+                                        Boolean(field.value?.trim()))) && (
+                                      <FormControl>
+                                        <Input
+                                          className='mt-2'
+                                          placeholder={t(
+                                            'socks5://user:pass@host:port'
+                                          )}
+                                          value={field.value}
+                                          onChange={field.onChange}
+                                          onBlur={field.onBlur}
+                                          name={field.name}
+                                          ref={field.ref}
+                                        />
+                                      </FormControl>
                                     )}
-                                  </FormDescription>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
+                                    <FormDescription>
+                                      {t(
+                                        'Pick a proxy from the pool, or enter a custom http/https/socks5 URL.'
+                                      )}{' '}
+                                      <a
+                                        href='/proxies'
+                                        className='text-primary underline-offset-4 hover:underline'
+                                        target='_blank'
+                                        rel='noreferrer'
+                                      >
+                                        {t('Manage proxies')}
+                                      </a>
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )
+                              }}
                             />
 
                             <FormField

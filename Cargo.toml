@@ -7,6 +7,7 @@ members = [
     "crates/domain",
     "crates/protocol",
     "crates/router-core",
+    "crates/telemetry",
 ]
 resolver = "2"
 
@@ -22,6 +23,7 @@ halolake-control-plane = { path = "crates/control-plane" }
 halolake-domain = { path = "crates/domain" }
 halolake-protocol = { path = "crates/protocol" }
 halolake-router-core = { path = "crates/router-core" }
+halolake-telemetry = { path = "crates/telemetry" }
 
 anyhow = "1"
 arc-swap = "1"
@@ -55,6 +57,12 @@ toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.31"
+opentelemetry = { version = "0.30", features = ["logs", "metrics", "trace"] }
+opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "logs", "metrics", "trace"] }
+opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "http-proto", "logs", "metrics", "trace", "reqwest-client"] }
+opentelemetry-appender-tracing = "0.30"
+opentelemetry-semantic-conventions = "0.30"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 webauthn-rs = { version = "0.6.1-dev", default-features = false, features = ["conditional-ui", "danger-allow-state-serialisation"] }
 

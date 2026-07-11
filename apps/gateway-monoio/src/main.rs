@@ -16,11 +16,18 @@ fn main() -> Result<()> {
     // multiple providers may be linked via workspace deps.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let (log_writer, _log_flush_guard) = tracing_appender::non_blocking(std::io::stderr());
-    tracing_subscriber::fmt()
-        .with_writer(log_writer)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // OTLP exporters need a Tokio runtime; spawn a background runtime so
+    // monoio workers stay free of Tokio. Keep the guard alive for process life.
+    let _otel_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .thread_name("halolake-otel")
+        .build()?;
+    let _telemetry = {
+        let _enter = _otel_runtime.enter();
+        halolake_telemetry::init("halolake-gateway")?
+    };
+
     monoio_native_tls::init();
 
     let args = Args::parse();

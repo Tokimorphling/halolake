@@ -17,8 +17,8 @@ use axum::{
     routing::{get, post},
 };
 use halolake_control_plane::{
-    CreateTokenRequest, ManagementData,
-    ManagementError, MemorySnapshotBus, UpdateUserRequest, ensure_user_password_hashed,
+    CreateTokenRequest, ManagementData, MemorySnapshotBus, UpdateUserRequest,
+    ensure_user_password_hashed,
 };
 use halolake_domain::{
     PageRequest, PageResult, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, TokenRecord, UserRecord,
