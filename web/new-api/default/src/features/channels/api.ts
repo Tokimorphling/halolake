@@ -704,3 +704,93 @@ export async function importCodexAuth(payload: {
   )
   return res.data
 }
+
+// ============================================================================
+// Unified auth import (CLIProxyAPI + Codex session + sub2api-data)
+// ============================================================================
+
+export interface AuthImportResult {
+  format: string
+  channels?: {
+    total: number
+    created: number
+    updated: number
+    skipped: number
+    failed: number
+  }
+  data?: Sub2apiDataImportResult
+  file_results?: Array<{
+    name: string
+    format: string
+    ok: boolean
+    message?: string
+    channel_id?: number
+    created?: number
+    updated?: number
+  }>
+}
+
+export async function importAuthJson(payload: {
+  format?: string
+  content?: string
+  contents?: string[]
+  filenames?: string[]
+  name?: string
+  group?: string
+  models?: string
+  proxy_id?: number
+  update_existing?: boolean
+  data?: unknown
+}): Promise<{
+  success: boolean
+  message?: string
+  data?: AuthImportResult
+}> {
+  const res = await api.post(
+    '/api/channel/import/auth',
+    { format: 'auto', update_existing: true, ...payload },
+    channelActionConfig()
+  )
+  return res.data
+}
+
+/** Multipart batch upload (CLIProxyAPI-style multi-file). */
+export async function importAuthUpload(params: {
+  files: File[]
+  format?: string
+  group?: string
+  models?: string
+  name?: string
+  update_existing?: boolean
+}): Promise<{
+  success: boolean
+  message?: string
+  data?: AuthImportResult
+}> {
+  const form = new FormData()
+  for (const file of params.files) {
+    form.append('files', file, file.name)
+  }
+  if (params.format) form.append('format', params.format)
+  if (params.group) form.append('group', params.group)
+  if (params.models) form.append('models', params.models)
+  if (params.name) form.append('name', params.name)
+  form.append(
+    'update_existing',
+    params.update_existing === false ? 'false' : 'true'
+  )
+  const res = await api.post('/api/channel/import/auth/upload', form, {
+    ...channelActionConfig(),
+    // Browser sets multipart boundary when body is FormData
+    headers: { 'Content-Type': 'multipart/form-data' },
+    transformRequest: [
+      (data, headers) => {
+        if (data instanceof FormData && headers) {
+          delete (headers as Record<string, unknown>)['Content-Type']
+        }
+        return data
+      },
+    ],
+  })
+  return res.data
+}

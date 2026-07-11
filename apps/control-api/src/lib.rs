@@ -39,6 +39,7 @@ mod channel_probe;
 mod channel_special;
 mod channel_task;
 mod checkin;
+mod auth_import;
 mod codex_auth_import;
 mod sub2api_data_import;
 mod compat;
@@ -567,6 +568,10 @@ impl ControlApi {
                 "/api/channel/",
                 get(list_channels).post(create_channel).put(update_channel),
             )
+            .route("/api/channel/import/auth", post(import_auth_json))
+            .route("/api/channel/import/auth/", post(import_auth_json))
+            .route("/api/channel/import/auth/upload", post(import_auth_multipart))
+            .route("/api/channel/import/auth/upload/", post(import_auth_multipart))
             .route("/api/channel/import/codex-auth", post(import_codex_auth))
             .route("/api/channel/import/codex-auth/", post(import_codex_auth))
             .route("/api/channel/import/sub2api-data", post(import_sub2api_data))

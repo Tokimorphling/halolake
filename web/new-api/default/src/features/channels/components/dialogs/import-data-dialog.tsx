@@ -34,7 +34,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-import { importCodexAuth, importSub2apiData } from '../../api'
+import { importAuthJson, importAuthUpload } from '../../api'
 import { channelsQueryKeys } from '../../lib'
 
 type ImportDataDialogProps = {
@@ -42,95 +42,136 @@ type ImportDataDialogProps = {
   onOpenChange: (open: boolean) => void
 }
 
-type ImportMode = 'sub2api-data' | 'codex-auth'
+/** auto = detect; or force a family */
+type ImportMode = 'auto' | 'sub2api-data' | 'cliproxy' | 'codex-session'
+
+function fileHelpText(
+  mode: ImportMode,
+  t: (key: string) => string
+): string {
+  if (mode === 'sub2api-data') {
+    return t('JSON (.json) — sub2api export (proxies + accounts)')
+  }
+  if (mode === 'cliproxy') {
+    return t(
+      'One or more CLIProxyAPI *.json auth files (type: codex/claude/gemini)'
+    )
+  }
+  if (mode === 'codex-session') {
+    return t('Codex / sub2api session auth JSON or access token')
+  }
+  return t(
+    'Auto: sub2api-data export, CLIProxyAPI auth files, or Codex session'
+  )
+}
 
 export function ImportDataDialog(props: ImportDataDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
-  const [mode, setMode] = useState<ImportMode>('sub2api-data')
-  const [fileName, setFileName] = useState('')
-  const [content, setContent] = useState('')
+  const [mode, setMode] = useState<ImportMode>('auto')
+  const [files, setFiles] = useState<File[]>([])
   const [group, setGroup] = useState('default')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const reset = () => {
-    setFileName('')
-    setContent('')
+    setFiles([])
     setGroup('default')
     if (fileRef.current) fileRef.current.value = ''
   }
 
-  const handleFile = async (file: File | null) => {
-    if (!file) return
-    if (!file.name.toLowerCase().endsWith('.json') && mode === 'sub2api-data') {
-      toast.error(t('Please select a JSON (.json) data file'))
+  const handleFiles = (list: FileList | null) => {
+    if (!list?.length) return
+    const next = Array.from(list)
+    setFiles(next)
+  }
+
+  const summarize = (data: {
+    format?: string
+    channels?: {
+      created?: number
+      updated?: number
+      skipped?: number
+      failed?: number
+    }
+    data?: {
+      proxy_created?: number
+      proxy_reused?: number
+      account_created?: number
+      account_failed?: number
+      proxy_failed?: number
+    }
+    file_results?: Array<{ ok: boolean; name: string; message?: string }>
+  }) => {
+    if (data.data) {
+      const d = data.data
+      toast.success(
+        t(
+          'Import done: proxies +{{createdP}}/reuse {{reusedP}}, accounts +{{createdA}}, failed P{{failedP}}/A{{failedA}}',
+          {
+            createdP: d.proxy_created ?? 0,
+            reusedP: d.proxy_reused ?? 0,
+            createdA: d.account_created ?? 0,
+            failedP: d.proxy_failed ?? 0,
+            failedA: d.account_failed ?? 0,
+          }
+        )
+      )
       return
     }
-    setFileName(file.name)
-    const text = await file.text()
-    setContent(text)
+    const c = data.channels
+    if (c) {
+      toast.success(
+        t(
+          'Auth import ({{format}}): created {{created}}, updated {{updated}}, skipped {{skipped}}, failed {{failed}}',
+          {
+            format: data.format || 'auto',
+            created: c.created ?? 0,
+            updated: c.updated ?? 0,
+            skipped: c.skipped ?? 0,
+            failed: c.failed ?? 0,
+          }
+        )
+      )
+    }
+    const bad = data.file_results?.filter((f) => !f.ok) ?? []
+    if (bad.length) {
+      toast.message(
+        t('{{count}} file(s) had errors', { count: bad.length })
+      )
+    }
   }
 
   const handleImport = async () => {
-    if (!content.trim()) {
+    if (!files.length) {
       toast.error(t('Please select a data file'))
       return
     }
     setIsSubmitting(true)
     try {
-      if (mode === 'sub2api-data') {
-        const result = await importSub2apiData({
-          content,
-          group: group.trim() || 'default',
-        })
-        if (!result.success || !result.data) {
-          toast.error(result.message || t('Import failed'))
-          return
-        }
-        const d = result.data
-        toast.success(
-          t(
-            'Import done: proxies +{{createdP}}/reuse {{reusedP}}, accounts +{{createdA}}, failed P{{failedP}}/A{{failedA}}',
-            {
-              createdP: d.proxy_created,
-              reusedP: d.proxy_reused,
-              createdA: d.account_created,
-              failedP: d.proxy_failed,
-              failedA: d.account_failed,
-            }
-          )
-        )
-        if (d.errors?.length) {
-          toast.message(
-            t('{{count}} import warnings/errors — check server logs', {
-              count: d.errors.length,
-            })
-          )
-        }
-      } else {
-        const result = await importCodexAuth({
-          content,
-          group: group.trim() || 'default',
-          update_existing: true,
-        })
-        if (!result.success || !result.data) {
-          toast.error(result.message || t('Import failed'))
-          return
-        }
-        const d = result.data
-        toast.success(
-          t(
-            'Codex import: created {{created}}, updated {{updated}}, skipped {{skipped}}, failed {{failed}}',
-            {
-              created: d.created,
-              updated: d.updated,
-              skipped: d.skipped,
-              failed: d.failed,
-            }
-          )
-        )
+      const format = mode === 'auto' ? 'auto' : mode
+      const useMultipart = files.length > 1 || mode === 'cliproxy'
+
+      const result = useMultipart
+        ? await importAuthUpload({
+            files,
+            format,
+            group: group.trim() || 'default',
+            update_existing: true,
+          })
+        : await importAuthJson({
+            format,
+            content: await files[0].text(),
+            filenames: [files[0].name],
+            group: group.trim() || 'default',
+            update_existing: true,
+          })
+
+      if (!result.success || !result.data) {
+        toast.error(result.message || t('Import failed'))
+        return
       }
+      summarize(result.data)
       await queryClient.invalidateQueries({
         queryKey: channelsQueryKeys.lists(),
       })
@@ -153,43 +194,43 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
     >
       <DialogContent className='sm:max-w-lg'>
         <DialogHeader>
-          <DialogTitle>{t('Import Data')}</DialogTitle>
+          <DialogTitle>{t('Import credentials')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Upload an exported JSON file to bulk-import accounts and proxies. New accounts and proxies will be created; bind groups manually. Ensure data will not conflict with existing records.'
+              'Import Sub2API exports, CLIProxyAPI auth JSON files, or Codex session tokens. Multiple files supported. Groups are not auto-bound — set a default group below if needed.'
             )}
           </DialogDescription>
         </DialogHeader>
 
         <div className='space-y-4'>
           <div className='space-y-2'>
-            <Label>{t('Import type')}</Label>
-            <div className='flex gap-2'>
-              <Button
-                type='button'
-                size='sm'
-                variant={mode === 'sub2api-data' ? 'default' : 'outline'}
-                onClick={() => setMode('sub2api-data')}
-              >
-                {t('Sub2API data JSON')}
-              </Button>
-              <Button
-                type='button'
-                size='sm'
-                variant={mode === 'codex-auth' ? 'default' : 'outline'}
-                onClick={() => setMode('codex-auth')}
-              >
-                {t('Codex auth file')}
-              </Button>
+            <Label>{t('Format')}</Label>
+            <div className='flex flex-wrap gap-2'>
+              {(
+                [
+                  ['auto', t('Auto-detect')],
+                  ['sub2api-data', t('Sub2API data JSON')],
+                  ['cliproxy', t('CLIProxyAPI auth')],
+                  ['codex-session', t('Codex session')],
+                ] as const
+              ).map(([value, label]) => (
+                <Button
+                  key={value}
+                  type='button'
+                  size='sm'
+                  variant={mode === value ? 'default' : 'outline'}
+                  onClick={() => setMode(value)}
+                >
+                  {label}
+                </Button>
+              ))}
             </div>
           </div>
 
           <div className='space-y-2'>
             <Label>{t('Data file')}</Label>
             <p className='text-muted-foreground text-xs'>
-              {mode === 'sub2api-data'
-                ? t('JSON (.json) — sub2api export (proxies + accounts)')
-                : t('Codex / sub2api session auth JSON or access token paste')}
+              {fileHelpText(mode, t)}
             </p>
             <div className='flex items-center gap-2'>
               <Button
@@ -202,28 +243,33 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
                 {t('Choose file')}
               </Button>
               <span className='text-muted-foreground truncate text-sm'>
-                {fileName || t('No file selected')}
+                {files.length === 0
+                  ? t('No file selected')
+                  : files.length === 1
+                    ? files[0].name
+                    : t('{{count}} files selected', { count: files.length })}
               </span>
               <input
                 ref={fileRef}
                 type='file'
-                accept={
-                  mode === 'sub2api-data' ? '.json,application/json' : '*/*'
-                }
+                multiple
+                accept='.json,application/json,text/plain,*/*'
                 className='hidden'
                 onChange={(e) => {
-                  void handleFile(e.target.files?.[0] ?? null)
+                  handleFiles(e.target.files)
                 }}
               />
             </div>
-            {content ? (
-              <div className='bg-muted/40 flex items-center gap-2 rounded-md border px-3 py-2 text-xs'>
-                <FileJson className='h-4 w-4 shrink-0' />
-                <span>
-                  {t('{{bytes}} bytes loaded', {
-                    bytes: new Blob([content]).size,
-                  })}
-                </span>
+            {files.length > 0 ? (
+              <div className='bg-muted/40 max-h-28 space-y-1 overflow-auto rounded-md border px-3 py-2 text-xs'>
+                {files.map((f) => (
+                  <div key={f.name + f.size} className='flex items-center gap-2'>
+                    <FileJson className='h-3.5 w-3.5 shrink-0' />
+                    <span className='truncate'>
+                      {f.name} ({f.size} B)
+                    </span>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
@@ -258,7 +304,7 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
             onClick={() => {
               void handleImport()
             }}
-            disabled={isSubmitting || !content.trim()}
+            disabled={isSubmitting || files.length === 0}
           >
             {isSubmitting ? t('Importing...') : t('Import')}
           </Button>

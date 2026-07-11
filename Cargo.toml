@@ -28,7 +28,7 @@ halolake-telemetry = { path = "crates/telemetry" }
 anyhow = "1"
 arc-swap = "1"
 async-stream = "0.3"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 bcrypt = "0.19.2"
 bytes = "1"
 certain-map = "0.3.1"

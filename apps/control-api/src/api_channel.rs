@@ -37,6 +37,7 @@ use crate::channel_task::{
     ChannelTestTaskPayload, ModelUpdateTaskPayload, SystemTaskProgressState,
     spawn_channel_test_task, spawn_model_update_task,
 };
+use crate::auth_import::{self, AuthImportRequest};
 use crate::codex_auth_import::{
     CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
     CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
@@ -432,6 +433,153 @@ pub(crate) async fn import_codex_auth(
         }
     }
     api_success(result)
+}
+
+/// Unified auth import: CLIProxyAPI auth JSON, Codex session, or sub2api-data.
+///
+/// JSON body: `{ "format":"auto", "content"|"contents[]", "filenames[]", "group", ... }`
+pub(crate) async fn import_auth_json(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AuthImportRequest>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match auth_import::import_auth(&state.management, &state.proxies, req).await {
+        Ok(result) => {
+            let mutated = result
+                .channels
+                .as_ref()
+                .is_some_and(|c| c.created > 0 || c.updated > 0)
+                || result.data.as_ref().is_some_and(|d| {
+                    d.proxy_created > 0 || d.account_created > 0 || d.proxy_reused > 0
+                });
+            if mutated {
+                if let Err(err) = publish_management_snapshot(&state).await {
+                    return management_error(err);
+                }
+            }
+            api_success(result)
+        }
+        Err(err) => management_error(err),
+    }
+}
+
+/// Multipart batch upload of auth files (CLIProxyAPI-style).
+///
+/// Form fields:
+/// - `file` / `files` / any file parts: one or more `.json` auth files
+/// - `format` (optional): `auto` | `cliproxy` | `codex-session` | `sub2api-data`
+/// - `group`, `models`, `name`, `update_existing` (optional)
+pub(crate) async fn import_auth_multipart(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+
+    let mut contents = Vec::new();
+    let mut filenames = Vec::new();
+    let mut format = "auto".to_string();
+    let mut group = None;
+    let mut models = None;
+    let mut name = String::new();
+    let mut update_existing = true;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(err) => {
+                return api_error_status(
+                    StatusCode::BAD_REQUEST,
+                    &format!("invalid multipart: {err}"),
+                );
+            }
+        };
+        let field_name = field.name().unwrap_or("").to_string();
+        let file_name = field.file_name().map(|s| s.to_string());
+        let data = match field.bytes().await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                return api_error_status(
+                    StatusCode::BAD_REQUEST,
+                    &format!("failed to read multipart field: {err}"),
+                );
+            }
+        };
+        let text = String::from_utf8_lossy(&data).to_string();
+        if file_name.is_some() || matches!(field_name.as_str(), "file" | "files" | "auth" | "auths")
+        {
+            let fname = file_name.unwrap_or_else(|| field_name.clone());
+            if !text.trim().is_empty() {
+                filenames.push(fname);
+                contents.push(text);
+            }
+            continue;
+        }
+        match field_name.as_str() {
+            "format" => format = text.trim().to_string(),
+            "group" => group = Some(text.trim().to_string()).filter(|s| !s.is_empty()),
+            "models" => models = Some(text.trim().to_string()).filter(|s| !s.is_empty()),
+            "name" => name = text.trim().to_string(),
+            "update_existing" => {
+                update_existing = matches!(
+                    text.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                );
+            }
+            "content" => {
+                if !text.trim().is_empty() {
+                    filenames.push("content".into());
+                    contents.push(text);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if contents.is_empty() {
+        return api_error_status(StatusCode::BAD_REQUEST, "no files uploaded");
+    }
+
+    let req = AuthImportRequest {
+        format,
+        content: String::new(),
+        contents,
+        filenames,
+        name,
+        group,
+        models,
+        base_url: None,
+        proxy_id: None,
+        update_existing,
+        data: None,
+    };
+
+    match auth_import::import_auth(&state.management, &state.proxies, req).await {
+        Ok(result) => {
+            let mutated = result
+                .channels
+                .as_ref()
+                .is_some_and(|c| c.created > 0 || c.updated > 0)
+                || result.data.as_ref().is_some_and(|d| {
+                    d.proxy_created > 0 || d.account_created > 0 || d.proxy_reused > 0
+                });
+            if mutated {
+                if let Err(err) = publish_management_snapshot(&state).await {
+                    return management_error(err);
+                }
+            }
+            api_success(result)
+        }
+        Err(err) => management_error(err),
+    }
 }
 
 /// Import sub2api export JSON (`type: sub2api-data`) — proxies + accounts as channels.

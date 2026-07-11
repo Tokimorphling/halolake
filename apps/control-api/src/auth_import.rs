@@ -1,0 +1,930 @@
+//! Unified auth credential import for Halolake channels.
+//!
+//! Accepts multiple upstream ecosystems and normalizes them into channels:
+//!
+//! | Source | Typical input | Result |
+//! |--------|---------------|--------|
+//! | **CLIProxyAPI** | `{ "type":"codex"\|"claude"\|"gemini", "access_token", ... }.json` | type 57 / 14 / 24 channel |
+//! | **sub2api Codex session** | nested `tokens.*` or raw JWT paste | type 57 Codex |
+//! | **sub2api-data export** | `{ "type":"sub2api-data", "proxies", "accounts" }` | proxies + channels |
+//!
+//! Entry points:
+//! - JSON: [`AuthImportRequest`] via `/api/channel/import/auth`
+//! - Multipart files: same handler with form fields
+
+use std::collections::HashMap;
+
+use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
+use halolake_domain::{ChannelRecord, STATUS_ENABLED};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use service_async::Service;
+
+use crate::codex_auth_import::{
+    self, CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
+    CodexAuthImportResult, CodexOAuthKey, codex_key_to_json, collect_entries,
+    find_existing_channel_id, parse_flexible_codex_key,
+};
+use crate::proxy::ProxyStore;
+use crate::storage::ManagementStore;
+use crate::sub2api_data_import::{self, DataImportResult, Sub2apiDataImportRequest};
+
+const CHANNEL_TYPE_ANTHROPIC: i32 = 14;
+const CHANNEL_TYPE_GEMINI: i32 = 24;
+
+/// Auto-detecting import request (JSON body).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AuthImportRequest {
+    /// Format hint: `auto` (default), `cliproxy`, `codex-session`, `sub2api-data`.
+    #[serde(default = "default_format")]
+    pub(crate) format: String,
+    /// Single file / paste content.
+    #[serde(default)]
+    pub(crate) content: String,
+    /// Multiple file contents (batch API upload).
+    #[serde(default)]
+    pub(crate) contents: Vec<String>,
+    /// Optional original filenames (same order as `contents`); used for labels.
+    #[serde(default)]
+    pub(crate) filenames: Vec<String>,
+    #[serde(default)]
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) group: Option<String>,
+    #[serde(default)]
+    pub(crate) models: Option<String>,
+    #[serde(default)]
+    pub(crate) base_url: Option<String>,
+    #[serde(default)]
+    pub(crate) proxy_id: Option<u64>,
+    #[serde(default = "default_true")]
+    pub(crate) update_existing: bool,
+    /// For sub2api-data: optional structured payload instead of `content`.
+    #[serde(default)]
+    pub(crate) data: Option<sub2api_data_import::DataPayload>,
+}
+
+fn default_format() -> String {
+    "auto".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AuthImportResult {
+    pub(crate) format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) channels: Option<CodexAuthImportResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) data: Option<DataImportResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) file_results: Vec<AuthFileResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AuthFileResult {
+    pub(crate) name: String,
+    pub(crate) format: String,
+    pub(crate) ok: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) channel_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) created: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) updated: Option<usize>,
+}
+
+/// Detect content kind for a single blob.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetectedFormat {
+    Sub2apiData,
+    CliProxy,
+    CodexSession,
+}
+
+pub(crate) async fn import_auth(
+    management: &ManagementStore,
+    proxies: &ProxyStore,
+    req: AuthImportRequest,
+) -> Result<AuthImportResult, ManagementError> {
+    let hint = req.format.trim().to_ascii_lowercase();
+    let has_data = req.data.is_some();
+    let mut blobs: Vec<(String, String)> = Vec::new();
+
+    if !req.content.trim().is_empty() {
+        let name = req
+            .filenames
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "content".into());
+        blobs.push((name, req.content.clone()));
+    }
+    for (i, content) in req.contents.iter().enumerate() {
+        if content.trim().is_empty() {
+            continue;
+        }
+        let name = req
+            .filenames
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| format!("file-{i}"));
+        blobs.push((name, content.clone()));
+    }
+
+    if has_data && blobs.is_empty() {
+        // structured sub2api-data only
+        let data_req = Sub2apiDataImportRequest {
+            data: req.data.clone(),
+            content: String::new(),
+            group: req.group.clone(),
+            models: req.models.clone(),
+        };
+        let data = sub2api_data_import::import_sub2api_data(management, proxies, data_req).await?;
+        return Ok(AuthImportResult {
+            format: "sub2api-data".into(),
+            channels: None,
+            data: Some(data),
+            file_results: Vec::new(),
+        });
+    }
+
+    if blobs.is_empty() {
+        return Err(ManagementError::InvalidRequest(
+            "provide content, contents[], or data for auth import",
+        ));
+    }
+
+    // Single-blob path with explicit or detected format.
+    if blobs.len() == 1 && (hint == "sub2api-data" || hint == "auto" || hint.is_empty()) {
+        let (_, content) = &blobs[0];
+        let detected = if hint == "sub2api-data" {
+            DetectedFormat::Sub2apiData
+        } else {
+            detect_format(content)
+        };
+        if detected == DetectedFormat::Sub2apiData {
+            let data_req = Sub2apiDataImportRequest {
+                data: req.data.clone(),
+                content: content.clone(),
+                group: req.group.clone(),
+                models: req.models.clone(),
+            };
+            let data =
+                sub2api_data_import::import_sub2api_data(management, proxies, data_req).await?;
+            let file_result = AuthFileResult {
+                name: blobs[0].0.clone(),
+                format: "sub2api-data".into(),
+                ok: data.account_failed == 0 && data.proxy_failed == 0,
+                message: format!(
+                    "proxies +{}/reuse {}, accounts +{}/fail {}",
+                    data.proxy_created,
+                    data.proxy_reused,
+                    data.account_created,
+                    data.account_failed
+                ),
+                channel_id: None,
+                created: Some(data.account_created),
+                updated: None,
+            };
+            return Ok(AuthImportResult {
+                format: "sub2api-data".into(),
+                channels: None,
+                data: Some(data),
+                file_results: vec![file_result],
+            });
+        }
+    }
+
+    // Treat remaining as per-file auth credentials (CLIProxyAPI and/or codex session).
+    let mut aggregate = CodexAuthImportResult {
+        total: 0,
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        failed: 0,
+        items: Vec::new(),
+        warnings: Vec::new(),
+        errors: Vec::new(),
+    };
+    let mut file_results = Vec::new();
+    let group = req
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .unwrap_or("default")
+        .to_string();
+    let models = req
+        .models
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or("gpt-5.1,gpt-5,o3,o4-mini")
+        .to_string();
+    let base_url = req
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_string);
+    let name_base = req.name.trim();
+
+    let existing = management.current_data()?.channels;
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut index = 0usize;
+
+    for (file_name, content) in &blobs {
+        let detected = match hint.as_str() {
+            "cliproxy" | "cliproxyapi" | "cli-proxy" => DetectedFormat::CliProxy,
+            "codex-session" | "codex" | "sub2api-session" => DetectedFormat::CodexSession,
+            _ => detect_format(content),
+        };
+
+        if detected == DetectedFormat::Sub2apiData {
+            // Nested export inside multi-file batch
+            match sub2api_data_import::import_sub2api_data(
+                management,
+                proxies,
+                Sub2apiDataImportRequest {
+                    data: None,
+                    content: content.clone(),
+                    group: Some(group.clone()),
+                    models: Some(models.clone()),
+                },
+            )
+            .await
+            {
+                Ok(data) => {
+                    aggregate.created =
+                        aggregate.created.saturating_add(data.account_created);
+                    aggregate.failed = aggregate.failed.saturating_add(data.account_failed);
+                    file_results.push(AuthFileResult {
+                        name: file_name.clone(),
+                        format: "sub2api-data".into(),
+                        ok: data.account_failed == 0 && data.proxy_failed == 0,
+                        message: format!(
+                            "proxies +{}/{}, accounts +{}/{}",
+                            data.proxy_created,
+                            data.proxy_reused,
+                            data.account_created,
+                            data.account_failed
+                        ),
+                        channel_id: None,
+                        created: Some(data.account_created),
+                        updated: None,
+                    });
+                }
+                Err(err) => {
+                    aggregate.failed = aggregate.failed.saturating_add(1);
+                    file_results.push(AuthFileResult {
+                        name: file_name.clone(),
+                        format: "sub2api-data".into(),
+                        ok: false,
+                        message: err.to_string(),
+                        channel_id: None,
+                        created: None,
+                        updated: None,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // CLIProxy typed files may map to non-Codex channels.
+        if detected == DetectedFormat::CliProxy {
+            match import_cliproxy_file(
+                management,
+                content,
+                file_name,
+                &group,
+                &models,
+                base_url.as_deref(),
+                req.proxy_id,
+                req.update_existing,
+                name_base,
+                &existing,
+                &mut seen,
+                &mut index,
+                &mut aggregate,
+            )
+            .await
+            {
+                Ok(fr) => file_results.push(fr),
+                Err(err) => {
+                    aggregate.failed = aggregate.failed.saturating_add(1);
+                    file_results.push(AuthFileResult {
+                        name: file_name.clone(),
+                        format: "cliproxy".into(),
+                        ok: false,
+                        message: err.to_string(),
+                        channel_id: None,
+                        created: None,
+                        updated: None,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // Codex session / raw token — reuse codex_auth_import pipeline for this blob.
+        let codex_req = CodexAuthImportRequest {
+            content: content.clone(),
+            contents: Vec::new(),
+            name: if name_base.is_empty() {
+                String::new()
+            } else {
+                name_base.to_string()
+            },
+            group: Some(group.clone()),
+            models: Some(models.clone()),
+            base_url: base_url.clone(),
+            proxy_id: req.proxy_id,
+            priority: None,
+            weight: None,
+            update_existing: req.update_existing,
+        };
+        match import_codex_blob(
+            management,
+            &codex_req,
+            file_name,
+            &existing,
+            &mut seen,
+            &mut index,
+            &mut aggregate,
+        )
+        .await
+        {
+            Ok(fr) => file_results.push(fr),
+            Err(err) => {
+                aggregate.failed = aggregate.failed.saturating_add(1);
+                file_results.push(AuthFileResult {
+                    name: file_name.clone(),
+                    format: "codex-session".into(),
+                    ok: false,
+                    message: err.to_string(),
+                    channel_id: None,
+                    created: None,
+                    updated: None,
+                });
+            }
+        }
+    }
+
+    aggregate.total = aggregate.created
+        + aggregate.updated
+        + aggregate.skipped
+        + aggregate.failed;
+
+    Ok(AuthImportResult {
+        format: if file_results
+            .iter()
+            .all(|f| f.format == "cliproxy")
+        {
+            "cliproxy".into()
+        } else if file_results
+            .iter()
+            .all(|f| f.format == "codex-session")
+        {
+            "codex-session".into()
+        } else {
+            "mixed".into()
+        },
+        channels: Some(aggregate),
+        data: None,
+        file_results,
+    })
+}
+
+fn detect_format(content: &str) -> DetectedFormat {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return DetectedFormat::CodexSession;
+    }
+    // sub2api-data markers
+    if let Ok(v) = serde_json::from_str::<JsonValue>(trimmed) {
+        if let Some(t) = v.get("type").and_then(|x| x.as_str()) {
+            if t == "sub2api-data" || t == "sub2api-bundle" {
+                return DetectedFormat::Sub2apiData;
+            }
+            // CLIProxyAPI auth file requires "type" provider string
+            if matches!(
+                t.to_ascii_lowercase().as_str(),
+                "codex"
+                    | "claude"
+                    | "gemini"
+                    | "gemini-cli"
+                    | "antigravity"
+                    | "qwen"
+                    | "iflow"
+                    | "kimi"
+                    | "xai"
+                    | "openai"
+            ) {
+                return DetectedFormat::CliProxy;
+            }
+        }
+        if v.get("data").is_some()
+            && (v.get("proxies").is_some()
+                || v
+                    .get("data")
+                    .and_then(|d| d.get("proxies"))
+                    .is_some())
+        {
+            return DetectedFormat::Sub2apiData;
+        }
+        if v.get("proxies").is_some() && v.get("accounts").is_some() {
+            return DetectedFormat::Sub2apiData;
+        }
+        // CLIProxy flat codex without relying only on type
+        if v.get("account_id").is_some()
+            && v.get("access_token").is_some()
+            && v.get("tokens").is_none()
+        {
+            return DetectedFormat::CliProxy;
+        }
+    }
+    DetectedFormat::CodexSession
+}
+
+async fn import_cliproxy_file(
+    management: &ManagementStore,
+    content: &str,
+    file_name: &str,
+    group: &str,
+    models: &str,
+    base_url: Option<&str>,
+    proxy_id: Option<u64>,
+    update_existing: bool,
+    name_base: &str,
+    existing: &[ChannelRecord],
+    seen: &mut HashMap<String, usize>,
+    index: &mut usize,
+    aggregate: &mut CodexAuthImportResult,
+) -> Result<AuthFileResult, ManagementError> {
+    let meta: JsonMap<String, JsonValue> = serde_json::from_str(content.trim())
+        .map_err(|_| ManagementError::InvalidRequest("invalid CLIProxyAPI auth JSON"))?;
+    let provider = meta
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_ascii_lowercase();
+    let email = meta
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let label = if !name_base.is_empty() {
+        name_base.to_string()
+    } else if !email.is_empty() {
+        email.clone()
+    } else {
+        file_name.trim_end_matches(".json").to_string()
+    };
+
+    *index = index.saturating_add(1);
+    let idx = *index;
+
+    match provider.as_str() {
+        "codex" | "openai" => {
+            // Reuse flexible codex key parser (CLIProxy flat shape is a subset).
+            let key = parse_flexible_codex_key(content)?;
+            let key_json = codex_key_to_json(&key)?;
+            let identity = codex_auth_import::identity_keys_for_channel_key(&key_json);
+            // Build a pseudo ParsedCodexAuth via collect path: import as single entry.
+            let parsed_list = codex_auth_import::normalize_codex_auth_blob(content)?;
+            let item = parsed_list.into_iter().next().ok_or(
+                ManagementError::InvalidRequest("empty codex auth after parse"),
+            )?;
+
+            if let Some(prev) = item
+                .identity_keys
+                .iter()
+                .find_map(|k| seen.get(k).copied())
+            {
+                aggregate.skipped = aggregate.skipped.saturating_add(1);
+                return Ok(AuthFileResult {
+                    name: file_name.into(),
+                    format: "cliproxy".into(),
+                    ok: true,
+                    message: format!("duplicate of entry {prev}; skipped"),
+                    channel_id: None,
+                    created: None,
+                    updated: None,
+                });
+            }
+            for k in &item.identity_keys {
+                seen.insert(k.clone(), idx);
+            }
+
+            let channel_name = if label.is_empty() {
+                item.name.clone()
+            } else {
+                label.clone()
+            };
+
+            if let Some(existing_id) = find_existing_channel_id(existing, &item) {
+                if update_existing {
+                    let mut channel = existing
+                        .iter()
+                        .find(|c| c.id == existing_id)
+                        .cloned()
+                        .ok_or(ManagementError::NotFound)?;
+                    channel.key = key_json;
+                    channel.channel_type = CHANNEL_TYPE_CODEX;
+                    channel.name = channel_name.clone();
+                    if let Some(pid) = proxy_id {
+                        channel.proxy_id = Some(pid);
+                    }
+                    let updated = management
+                        .call(UpdateChannelRequest { channel })
+                        .await?;
+                    aggregate.updated = aggregate.updated.saturating_add(1);
+                    aggregate.items.push(CodexAuthImportItem {
+                        index: idx,
+                        name: channel_name,
+                        action: "updated".into(),
+                        channel_id: Some(updated.id),
+                        message: String::new(),
+                    });
+                    return Ok(AuthFileResult {
+                        name: file_name.into(),
+                        format: "cliproxy".into(),
+                        ok: true,
+                        message: "updated".into(),
+                        channel_id: Some(updated.id),
+                        created: None,
+                        updated: Some(1),
+                    });
+                }
+                aggregate.skipped = aggregate.skipped.saturating_add(1);
+                return Ok(AuthFileResult {
+                    name: file_name.into(),
+                    format: "cliproxy".into(),
+                    ok: true,
+                    message: "exists; update_existing=false".into(),
+                    channel_id: Some(existing_id),
+                    created: None,
+                    updated: None,
+                });
+            }
+
+            let channel = ChannelRecord {
+                id: 0,
+                snapshot_id: None,
+                channel_type: CHANNEL_TYPE_CODEX,
+                key: key_json,
+                status: STATUS_ENABLED,
+                name: channel_name.clone(),
+                weight: Some(1),
+                created_time: now_unix(),
+                test_time: 0,
+                response_time: 0,
+                base_url: base_url.map(str::to_string),
+                balance: 0.0,
+                balance_updated_time: 0,
+                models: models.to_string(),
+                group: group.to_string(),
+                used_quota: 0,
+                model_mapping: None,
+                priority: Some(0),
+                auto_ban: Some(1),
+                tag: None,
+                setting: Some(r#"{"import_source":"cliproxyapi"}"#.into()),
+                param_override: None,
+                header_override: None,
+                remark: Some(format!("imported from CLIProxyAPI ({file_name})")),
+                proxy_id,
+            };
+            let created = management
+                .call(CreateChannelRequest { channel })
+                .await?;
+            aggregate.created = aggregate.created.saturating_add(1);
+            aggregate.items.push(CodexAuthImportItem {
+                index: idx,
+                name: channel_name,
+                action: "created".into(),
+                channel_id: Some(created.id),
+                message: String::new(),
+            });
+            let _ = identity;
+            Ok(AuthFileResult {
+                name: file_name.into(),
+                format: "cliproxy".into(),
+                ok: true,
+                message: "created".into(),
+                channel_id: Some(created.id),
+                created: Some(1),
+                updated: None,
+            })
+        }
+        "claude" => {
+            let access = str_field(&meta, "access_token")
+                .or_else(|| str_field(&meta, "api_key"))
+                .ok_or(ManagementError::InvalidRequest(
+                    "claude auth file missing access_token",
+                ))?;
+            // Prefer storing structured JSON for refresh support later; gateway uses plain key lines.
+            // For Claude type 14, new-api uses the access token as key string.
+            let key = access;
+            let channel = ChannelRecord {
+                id: 0,
+                snapshot_id: None,
+                channel_type: CHANNEL_TYPE_ANTHROPIC,
+                key,
+                status: STATUS_ENABLED,
+                name: label.clone(),
+                weight: Some(1),
+                created_time: now_unix(),
+                test_time: 0,
+                response_time: 0,
+                base_url: base_url.map(str::to_string),
+                balance: 0.0,
+                balance_updated_time: 0,
+                models: "claude-sonnet-4-5,claude-opus-4-5".into(),
+                group: group.to_string(),
+                used_quota: 0,
+                model_mapping: None,
+                priority: Some(0),
+                auto_ban: Some(1),
+                tag: None,
+                setting: Some(r#"{"import_source":"cliproxyapi","provider":"claude"}"#.into()),
+                param_override: None,
+                header_override: None,
+                remark: Some(format!("imported from CLIProxyAPI claude ({file_name})")),
+                proxy_id,
+            };
+            let created = management
+                .call(CreateChannelRequest { channel })
+                .await?;
+            aggregate.created = aggregate.created.saturating_add(1);
+            Ok(AuthFileResult {
+                name: file_name.into(),
+                format: "cliproxy".into(),
+                ok: true,
+                message: "created claude channel".into(),
+                channel_id: Some(created.id),
+                created: Some(1),
+                updated: None,
+            })
+        }
+        "gemini" | "gemini-cli" => {
+            let key = str_field(&meta, "api_key")
+                .or_else(|| str_field(&meta, "access_token"))
+                .ok_or(ManagementError::InvalidRequest(
+                    "gemini auth file missing api_key/access_token",
+                ))?;
+            let channel = ChannelRecord {
+                id: 0,
+                snapshot_id: None,
+                channel_type: CHANNEL_TYPE_GEMINI,
+                key,
+                status: STATUS_ENABLED,
+                name: label.clone(),
+                weight: Some(1),
+                created_time: now_unix(),
+                test_time: 0,
+                response_time: 0,
+                base_url: base_url.map(str::to_string),
+                balance: 0.0,
+                balance_updated_time: 0,
+                models: "gemini-2.5-pro,gemini-2.5-flash".into(),
+                group: group.to_string(),
+                used_quota: 0,
+                model_mapping: None,
+                priority: Some(0),
+                auto_ban: Some(1),
+                tag: None,
+                setting: Some(r#"{"import_source":"cliproxyapi","provider":"gemini"}"#.into()),
+                param_override: None,
+                header_override: None,
+                remark: Some(format!("imported from CLIProxyAPI gemini ({file_name})")),
+                proxy_id,
+            };
+            let created = management
+                .call(CreateChannelRequest { channel })
+                .await?;
+            aggregate.created = aggregate.created.saturating_add(1);
+            Ok(AuthFileResult {
+                name: file_name.into(),
+                format: "cliproxy".into(),
+                ok: true,
+                message: "created gemini channel".into(),
+                channel_id: Some(created.id),
+                created: Some(1),
+                updated: None,
+            })
+        }
+        other => Err(ManagementError::InvalidRequest(leak(format!(
+            "unsupported CLIProxyAPI auth type: {other} (supported: codex, claude, gemini)"
+        )))),
+    }
+}
+
+async fn import_codex_blob(
+    management: &ManagementStore,
+    req: &CodexAuthImportRequest,
+    file_name: &str,
+    existing: &[ChannelRecord],
+    seen: &mut HashMap<String, usize>,
+    index: &mut usize,
+    aggregate: &mut CodexAuthImportResult,
+) -> Result<AuthFileResult, ManagementError> {
+    let entries = collect_entries(req)?;
+    let mut created = 0usize;
+    let mut updated = 0usize;
+    let mut last_id = None;
+    let group = req
+        .group
+        .as_deref()
+        .unwrap_or("default")
+        .to_string();
+    let models = req
+        .models
+        .as_deref()
+        .unwrap_or("gpt-5.1,gpt-5,o3,o4-mini")
+        .to_string();
+
+    for item in entries {
+        *index = index.saturating_add(1);
+        let idx = *index;
+        aggregate.total = aggregate.total.saturating_add(1);
+
+        for w in &item.warnings {
+            aggregate.warnings.push(CodexAuthImportMessage {
+                index: idx,
+                name: item.name.clone(),
+                message: w.clone(),
+            });
+        }
+
+        if let Some(prev) = item
+            .identity_keys
+            .iter()
+            .find_map(|k| seen.get(k).copied())
+        {
+            aggregate.skipped = aggregate.skipped.saturating_add(1);
+            aggregate.items.push(CodexAuthImportItem {
+                index: idx,
+                name: item.name.clone(),
+                action: "skipped".into(),
+                channel_id: None,
+                message: format!("duplicate of entry {prev}"),
+            });
+            continue;
+        }
+        for k in &item.identity_keys {
+            seen.insert(k.clone(), idx);
+        }
+
+        let key_json = codex_key_to_json(&item.key)?;
+        let account_name = if req.name.trim().is_empty() {
+            item.name.clone()
+        } else {
+            req.name.trim().to_string()
+        };
+
+        if let Some(existing_id) = find_existing_channel_id(existing, &item) {
+            if req.update_existing {
+                let mut channel = existing
+                    .iter()
+                    .find(|c| c.id == existing_id)
+                    .cloned()
+                    .ok_or(ManagementError::NotFound)?;
+                channel.key = key_json;
+                channel.channel_type = CHANNEL_TYPE_CODEX;
+                channel.name = account_name.clone();
+                if let Some(pid) = req.proxy_id {
+                    channel.proxy_id = Some(pid);
+                }
+                let ch = management
+                    .call(UpdateChannelRequest { channel })
+                    .await?;
+                updated = updated.saturating_add(1);
+                aggregate.updated = aggregate.updated.saturating_add(1);
+                last_id = Some(ch.id);
+                aggregate.items.push(CodexAuthImportItem {
+                    index: idx,
+                    name: account_name,
+                    action: "updated".into(),
+                    channel_id: Some(ch.id),
+                    message: String::new(),
+                });
+            } else {
+                aggregate.skipped = aggregate.skipped.saturating_add(1);
+            }
+            continue;
+        }
+
+        let channel = ChannelRecord {
+            id: 0,
+            snapshot_id: None,
+            channel_type: CHANNEL_TYPE_CODEX,
+            key: key_json,
+            status: STATUS_ENABLED,
+            name: account_name.clone(),
+            weight: Some(1),
+            created_time: now_unix(),
+            test_time: 0,
+            response_time: 0,
+            base_url: req.base_url.clone(),
+            balance: 0.0,
+            balance_updated_time: 0,
+            models: models.clone(),
+            group: group.clone(),
+            used_quota: 0,
+            model_mapping: None,
+            priority: Some(0),
+            auto_ban: Some(1),
+            tag: None,
+            setting: Some(r#"{"import_source":"codex-session"}"#.into()),
+            param_override: None,
+            header_override: None,
+            remark: Some(format!("imported from {file_name}")),
+            proxy_id: req.proxy_id,
+        };
+        let ch = management
+            .call(CreateChannelRequest { channel })
+            .await?;
+        created = created.saturating_add(1);
+        aggregate.created = aggregate.created.saturating_add(1);
+        last_id = Some(ch.id);
+        aggregate.items.push(CodexAuthImportItem {
+            index: idx,
+            name: account_name,
+            action: "created".into(),
+            channel_id: Some(ch.id),
+            message: String::new(),
+        });
+    }
+
+    Ok(AuthFileResult {
+        name: file_name.into(),
+        format: "codex-session".into(),
+        ok: true,
+        message: format!("created {created}, updated {updated}"),
+        channel_id: last_id,
+        created: Some(created),
+        updated: Some(updated),
+    })
+}
+
+fn str_field(map: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
+    map.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+// silence unused CodexOAuthKey if only used via paths
+#[allow(dead_code)]
+fn _codex_key_placeholder() -> CodexOAuthKey {
+    CodexOAuthKey::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_cliproxy_codex_file() {
+        let raw = r#"{"type":"codex","email":"a@b.com","access_token":"at","refresh_token":"rt","account_id":"acc"}"#;
+        assert_eq!(detect_format(raw), DetectedFormat::CliProxy);
+    }
+
+    #[test]
+    fn detects_sub2api_data() {
+        let raw = r#"{"type":"sub2api-data","version":1,"proxies":[],"accounts":[]}"#;
+        assert_eq!(detect_format(raw), DetectedFormat::Sub2apiData);
+    }
+
+    #[test]
+    fn detects_nested_session_as_codex() {
+        let raw = r#"{"tokens":{"access_token":"at","refresh_token":"rt"},"email":"x@y.com"}"#;
+        assert_eq!(detect_format(raw), DetectedFormat::CodexSession);
+    }
+
+    #[test]
+    fn cliproxy_codex_parses_via_flexible_key() {
+        let raw = r#"{"type":"codex","access_token":"at-1","refresh_token":"rt-1","account_id":"acct","email":"e@x.com","expired":"9999999999"}"#;
+        let key = parse_flexible_codex_key(raw).expect("parse");
+        assert_eq!(key.access_token.as_deref(), Some("at-1"));
+        assert_eq!(key.account_id.as_deref(), Some("acct"));
+    }
+}
