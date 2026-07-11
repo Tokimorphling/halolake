@@ -147,22 +147,268 @@ pub(crate) async fn reveal_channel_key(
 pub(crate) async fn create_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(channel): Json<ChannelRecord>,
+    Json(body): Json<JsonValue>,
 ) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    match state
-        .management
-        .call(CreateChannelRequest { channel })
-        .await
-    {
-        Ok(_) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_ok(),
-            Err(err) => management_error(err),
-        },
+
+    let channels = match expand_create_channel_body(body) {
+        Ok(items) => items,
+        Err(msg) => return api_error_status(StatusCode::BAD_REQUEST, &msg),
+    };
+    if channels.is_empty() {
+        return api_error_status(StatusCode::BAD_REQUEST, "no channel to create");
+    }
+
+    let mut created = 0usize;
+    for channel in channels {
+        match state
+            .management
+            .call(CreateChannelRequest { channel })
+            .await
+        {
+            Ok(_) => created += 1,
+            Err(err) => return management_error(err),
+        }
+    }
+
+    match publish_management_snapshot(&state).await {
+        Ok(()) => {
+            if created > 1 {
+                api_success_with_message("created", json!({ "created": created }))
+            } else {
+                api_ok()
+            }
+        }
         Err(err) => management_error(err),
+    }
+}
+
+/// Mirrors `ref/new-api/controller/channel.go` `AddChannel` body:
+/// ```json
+/// { "mode": "single|batch|multi_to_single", "multi_key_mode": "random|polling",
+///   "batch_add_set_key_prefix_2_name": bool, "channel": { ... } }
+/// ```
+/// Also accepts a flat channel object (API convenience).
+fn expand_create_channel_body(body: JsonValue) -> Result<Vec<ChannelRecord>, String> {
+    let mode = body
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("single")
+        .trim()
+        .to_ascii_lowercase();
+    let multi_key_mode = body
+        .get("multi_key_mode")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let batch_prefix = body
+        .get("batch_add_set_key_prefix_2_name")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let channel_json = if let Some(ch) = body.get("channel").cloned() {
+        if ch.is_null() {
+            return Err("channel is required".into());
+        }
+        ch
+    } else {
+        let mut flat = body;
+        if let Some(obj) = flat.as_object_mut() {
+            obj.remove("mode");
+            obj.remove("multi_key_mode");
+            obj.remove("batch_add_set_key_prefix_2_name");
+        }
+        flat
+    };
+    let mut channel = channel_record_from_json(channel_json)?;
+    if channel.created_time == 0 {
+        channel.created_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+    }
+
+    // new-api: switch mode → build keys slice → BatchInsertChannels
+    match mode.as_str() {
+        "single" => {
+            if channel.key.trim().is_empty() {
+                return Err("key is empty".into());
+            }
+            Ok(vec![channel])
+        }
+        "batch" => {
+            // new-api: keys = strings.Split(key, "\n"); skip empty; optional name prefix
+            let keys = split_channel_keys(&channel.key);
+            if keys.is_empty() {
+                return Err("key is empty".into());
+            }
+            let base_name = channel.name.clone();
+            let many = keys.len() > 1;
+            Ok(keys
+                .into_iter()
+                .map(|key| {
+                    let mut item = channel.clone();
+                    item.id = 0;
+                    item.key = key.clone();
+                    // new-api: if BatchAddSetKeyPrefix2Name && len(keys) > 1 {
+                    //   Name = fmt.Sprintf("%s %s", Name, keyPrefix[:8])
+                    // }
+                    if batch_prefix && many {
+                        let prefix: String = key.chars().take(8).collect();
+                        item.name = format!("{base_name} {prefix}");
+                    } else {
+                        item.name = base_name.clone();
+                    }
+                    item
+                })
+                .collect())
+        }
+        "multi_to_single" => {
+            // new-api: IsMultiKey=true, MultiKeyMode=..., Key=join(cleanKeys, "\n")
+            let keys = split_channel_keys(&channel.key);
+            if keys.is_empty() {
+                return Err("key is empty".into());
+            }
+            channel.key = keys.join("\n");
+            let mode_value = multi_key_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .unwrap_or("random");
+            // Persist multi-key metadata in `setting` (Halolake equivalent of channel_info)
+            channel.setting = Some(merge_setting_json(
+                channel.setting.as_deref(),
+                &[
+                    ("is_multi_key", json!(true)),
+                    ("multi_key_mode", json!(mode_value)),
+                    ("multi_key_size", json!(keys.len())),
+                ],
+            ));
+            Ok(vec![channel])
+        }
+        other => Err(format!("不支持的添加模式: {other}")),
+    }
+}
+
+/// new-api UI turns empty strings into JSON null; strip nulls so serde defaults apply.
+fn channel_record_from_json(mut value: JsonValue) -> Result<ChannelRecord, String> {
+    if let Some(obj) = value.as_object_mut() {
+        // Drop unknown new-api-only fields that are not on ChannelRecord
+        // (serde ignores unknown by default; nulls would fail on String fields).
+        obj.retain(|_, v| !v.is_null());
+        for drop_key in [
+            "openai_organization",
+            "test_model",
+            "status_code_mapping",
+            "settings",
+            "other",
+            "other_info",
+            "channel_info",
+            "keys",
+        ] {
+            obj.remove(drop_key);
+        }
+        if let Some(w) = obj.get("weight").cloned() {
+            if let Some(f) = w.as_f64() {
+                obj.insert("weight".into(), json!(f as u64));
+            }
+        }
+        if !obj.contains_key("key") {
+            obj.insert("key".into(), json!(""));
+        }
+    }
+    serde_json::from_value(value).map_err(|err| format!("invalid channel payload: {err}"))
+}
+
+fn split_channel_keys(raw: &str) -> Vec<String> {
+    // new-api: strings.Split + TrimSpace + skip empty
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn merge_setting_json(existing: Option<&str>, pairs: &[(&str, JsonValue)]) -> String {
+    let mut map = existing
+        .and_then(|s| serde_json::from_str::<JsonValue>(s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    for (k, v) in pairs {
+        map.insert((*k).to_string(), v.clone());
+    }
+    JsonValue::Object(map).to_string()
+}
+
+#[cfg(test)]
+mod create_channel_tests {
+    use super::*;
+
+    #[test]
+    fn parses_new_api_wrapped_single() {
+        let body = json!({
+            "mode": "single",
+            "channel": {
+                "name": "demo",
+                "type": 1,
+                "key": "sk-test",
+                "models": "gpt-4o",
+                "group": "default",
+                "base_url": null,
+                "weight": null,
+                "priority": null
+            }
+        });
+        let channels = expand_create_channel_body(body).expect("parse");
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].key, "sk-test");
+        assert_eq!(channels[0].name, "demo");
+        assert_eq!(channels[0].channel_type, 1);
+    }
+
+    #[test]
+    fn batch_splits_keys_and_prefixes_name() {
+        let body = json!({
+            "mode": "batch",
+            "batch_add_set_key_prefix_2_name": true,
+            "channel": {
+                "name": "pool",
+                "type": 1,
+                "key": "sk-aaa\nsk-bbb\n",
+                "models": "gpt-4o",
+                "group": "default"
+            }
+        });
+        let channels = expand_create_channel_body(body).expect("parse");
+        assert_eq!(channels.len(), 2);
+        assert_eq!(channels[0].key, "sk-aaa");
+        assert_eq!(channels[1].key, "sk-bbb");
+        assert_eq!(channels[0].name, "pool sk-aaa");
+        assert_eq!(channels[1].name, "pool sk-bbb");
+    }
+
+    #[test]
+    fn multi_to_single_joins_keys() {
+        let body = json!({
+            "mode": "multi_to_single",
+            "multi_key_mode": "polling",
+            "channel": {
+                "name": "mk",
+                "type": 1,
+                "key": "k1\nk2",
+                "models": "gpt-4o",
+                "group": "default",
+                "setting": null
+            }
+        });
+        let channels = expand_create_channel_body(body).expect("parse");
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].key, "k1\nk2");
+        let setting = channels[0].setting.as_deref().unwrap_or("");
+        assert!(setting.contains("is_multi_key"));
+        assert!(setting.contains("polling"));
     }
 }
 
