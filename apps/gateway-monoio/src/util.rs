@@ -44,7 +44,7 @@ where
     }
 }
 
-pub(crate) fn debug_relay<CX>(cx: &CX, stream: bool)
+pub(crate) fn debug_relay<CX>(cx: &CX, stream: bool, body: Option<&[u8]>)
 where
     CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
 {
@@ -52,7 +52,10 @@ where
     let auth = ParamRef::<RequestAuth>::param_ref(cx);
     let request_id = ParamRef::<RequestId>::param_ref(cx);
     let peer = ParamRef::<PeerAddr>::param_ref(cx);
-    debug!(
+    let summary = body.map(request_body_summary).unwrap_or_default();
+    // Keep hot-path body previews off the default info level: even redacted
+    // previews can leak prompt fragments into production logs.
+    info!(
         request_id = %request_id.0,
         peer_addr = %peer.0,
         user_id = %auth.user_id,
@@ -60,11 +63,339 @@ where
         channel_id = %route.channel_id,
         api_key_index = ?route.api_key_index,
         provider = ?route.provider,
+        using_group = %route.using_group,
         requested_model = %route.requested_model,
         upstream_model = %route.upstream_model,
         stream,
+        body_bytes = body.map(|b| b.len()).unwrap_or(0),
+        message_count = summary.message_count,
+        max_tokens = ?summary.max_tokens,
+        temperature = ?summary.temperature,
+        top_p = ?summary.top_p,
+        reasoning_effort = ?summary.reasoning_effort,
+        thinking_budget = ?summary.thinking_budget,
+        has_tools = summary.has_tools,
+        has_images = summary.has_images,
         "relay request"
     );
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        debug!(
+            request_id = %request_id.0,
+            body_preview = %summary.preview,
+            "relay request body preview"
+        );
+    }
+}
+
+/// Redacted structural summary of a chat-like request body.
+#[derive(Debug, Default)]
+pub(crate) struct RequestBodySummary {
+    pub(crate) message_count: usize,
+    pub(crate) max_tokens: Option<u64>,
+    pub(crate) temperature: Option<f64>,
+    pub(crate) top_p: Option<f64>,
+    pub(crate) reasoning_effort: Option<String>,
+    pub(crate) thinking_budget: Option<u64>,
+    pub(crate) has_tools: bool,
+    pub(crate) has_images: bool,
+    pub(crate) preview: String,
+}
+
+pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
+    let Ok(value) = serde_json::from_slice::<JsonValue>(body) else {
+        return RequestBodySummary {
+            preview: format!("<non-json body {}B>", body.len()),
+            ..Default::default()
+        };
+    };
+    let mut summary = RequestBodySummary::default();
+    if let Some(messages) = value.get("messages").and_then(JsonValue::as_array) {
+        summary.message_count = messages.len();
+        summary.has_images = messages.iter().any(message_has_image);
+    } else if let Some(contents) = value.get("contents").and_then(JsonValue::as_array) {
+        // Gemini native
+        summary.message_count = contents.len();
+        summary.has_images = contents.iter().any(message_has_image);
+    }
+    summary.max_tokens = value
+        .get("max_tokens")
+        .or_else(|| value.get("max_completion_tokens"))
+        .and_then(JsonValue::as_u64);
+    summary.temperature = value.get("temperature").and_then(JsonValue::as_f64);
+    summary.top_p = value.get("top_p").and_then(JsonValue::as_f64);
+    summary.reasoning_effort = extract_reasoning_effort(&value);
+    summary.thinking_budget = extract_thinking_budget(&value);
+    summary.has_tools = value
+        .get("tools")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|tools| !tools.is_empty())
+        || value.get("functions").is_some()
+        || value.get("tools").is_some() && value.get("tool_config").is_some();
+    summary.preview = redact_json_preview(&value, 512);
+    summary
+}
+
+fn extract_reasoning_effort(value: &JsonValue) -> Option<String> {
+    // OpenAI/DeepSeek style: reasoning_effort / reasoning.effort / thinking.type
+    value
+        .get("reasoning_effort")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("reasoning")
+                .and_then(|r| r.get("effort"))
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            value
+                .get("thinking")
+                .and_then(|t| t.get("type").or_else(|| t.get("effort")))
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            // Claude extended thinking
+            value
+                .get("thinking")
+                .and_then(|t| t.get("type"))
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+}
+
+fn extract_thinking_budget(value: &JsonValue) -> Option<u64> {
+    value
+        .get("thinking")
+        .and_then(|t| t.get("budget_tokens").or_else(|| t.get("budget")))
+        .and_then(JsonValue::as_u64)
+        .or_else(|| {
+            value
+                .get("reasoning")
+                .and_then(|r| r.get("max_tokens").or_else(|| r.get("budget_tokens")))
+                .and_then(JsonValue::as_u64)
+        })
+}
+
+fn message_has_image(message: &JsonValue) -> bool {
+    match message.get("content") {
+        Some(JsonValue::Array(parts)) => parts.iter().any(|part| {
+            part.get("type")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|t| t.contains("image") || t == "input_image")
+                || part.get("inline_data").is_some()
+                || part.get("image_url").is_some()
+        }),
+        Some(JsonValue::Object(obj)) => {
+            obj.contains_key("inline_data") || obj.contains_key("image_url")
+        }
+        _ => false,
+    }
+}
+
+/// Produce a compact redacted JSON string for logs.
+/// - Truncates long strings (message content, prompts)
+/// - Redacts obvious secrets / data-URLs / base64 blobs
+/// - Caps total output length
+pub(crate) fn redact_json_preview(value: &JsonValue, max_len: usize) -> String {
+    let redacted = redact_value(value, 0);
+    let rendered = redacted.to_string();
+    if rendered.len() <= max_len {
+        rendered
+    } else {
+        let mut end = max_len.saturating_sub(1);
+        while end > 0 && !rendered.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &rendered[..end])
+    }
+}
+
+fn redact_value(value: &JsonValue, depth: usize) -> JsonValue {
+    if depth > 8 {
+        return JsonValue::String("<max-depth>".into());
+    }
+    match value {
+        JsonValue::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, child) in map {
+                let key_l = key.to_ascii_lowercase();
+                if is_secret_key(&key_l) {
+                    out.insert(key.clone(), JsonValue::String(redact_secret_string(child)));
+                } else if is_content_key(&key_l) {
+                    out.insert(key.clone(), redact_content_value(child, depth + 1));
+                } else {
+                    out.insert(key.clone(), redact_value(child, depth + 1));
+                }
+            }
+            JsonValue::Object(out)
+        }
+        JsonValue::Array(items) => {
+            let mut out = Vec::with_capacity(items.len().min(32));
+            for (idx, item) in items.iter().enumerate() {
+                if idx >= 32 {
+                    out.push(JsonValue::String(format!("<+{} more>", items.len() - 32)));
+                    break;
+                }
+                out.push(redact_value(item, depth + 1));
+            }
+            JsonValue::Array(out)
+        }
+        JsonValue::String(s) => JsonValue::String(truncate_string(s, 120)),
+        other => other.clone(),
+    }
+}
+
+fn is_secret_key(key: &str) -> bool {
+    matches!(
+        key,
+        "authorization"
+            | "api_key"
+            | "apikey"
+            | "x-api-key"
+            | "token"
+            | "access_token"
+            | "refresh_token"
+            | "password"
+            | "secret"
+            | "client_secret"
+    ) || key.contains("api_key")
+        || key.ends_with("_key")
+        || key.ends_with("_token")
+        || key.ends_with("_secret")
+}
+
+fn is_content_key(key: &str) -> bool {
+    matches!(
+        key,
+        "content"
+            | "text"
+            | "prompt"
+            | "input"
+            | "messages"
+            | "system"
+            | "input_text"
+            | "output_text"
+            | "reasoning_content"
+            | "thinking"
+            | "data"
+            | "image_url"
+            | "url"
+            | "b64_json"
+            | "inline_data"
+    )
+}
+
+fn redact_secret_string(value: &JsonValue) -> String {
+    match value {
+        JsonValue::String(s) if s.chars().count() <= 8 => "***".into(),
+        JsonValue::String(s) => {
+            let prefix: String = s.chars().take(4).collect();
+            format!("{prefix}…***")
+        }
+        _ => "***".into(),
+    }
+}
+
+fn redact_content_value(value: &JsonValue, depth: usize) -> JsonValue {
+    match value {
+        JsonValue::String(s) => {
+            if s.starts_with("data:") || looks_like_base64(s) {
+                JsonValue::String(format!("<binary {}B>", s.len()))
+            } else {
+                JsonValue::String(truncate_string(s, 80))
+            }
+        }
+        JsonValue::Array(_) | JsonValue::Object(_) => redact_value(value, depth),
+        other => other.clone(),
+    }
+}
+
+fn looks_like_base64(s: &str) -> bool {
+    s.len() > 200
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' || b == b'\n')
+}
+
+fn truncate_string(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max_chars).collect();
+    format!("{truncated}...(+{n} chars)", n = count - max_chars)
+}
+
+pub(crate) fn log_response_usage(
+    request_id: &str,
+    status: StatusCode,
+    latency_ms: u64,
+    usage: Option<ResponseUsage>,
+    upstream_request_id: &str,
+    is_stream: bool,
+) {
+    info!(
+        %request_id,
+        status = status.as_u16(),
+        latency_ms,
+        is_stream,
+        upstream_request_id = %upstream_request_id,
+        prompt_tokens = ?usage.and_then(|u| u.prompt_tokens),
+        completion_tokens = ?usage.and_then(|u| u.completion_tokens),
+        total_tokens = ?usage.and_then(|u| u.total_tokens),
+        cache_read_tokens = ?usage.and_then(|u| u.cache_read_tokens),
+        cache_creation_tokens = ?usage.and_then(|u| u.cache_creation_tokens),
+        image_tokens = ?usage.and_then(|u| u.image_tokens),
+        audio_tokens = ?usage.and_then(|u| u.audio_tokens),
+        "relay response"
+    );
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn redacts_message_content_and_api_keys() {
+        let value = json!({
+            "model": "gpt-4o",
+            "api_key": "sk-supersecret",
+            "token": "密钥secret-value",
+            "messages": [
+                {"role": "user", "content": "hello world this is a long message that should truncate"}
+            ],
+            "reasoning_effort": "high",
+            "max_tokens": 1024
+        });
+        let summary = request_body_summary(value.to_string().as_bytes());
+        assert_eq!(summary.message_count, 1);
+        assert_eq!(summary.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(summary.max_tokens, Some(1024));
+        assert!(summary.preview.contains("sk-s…***") || summary.preview.contains("***"));
+        assert!(!summary.preview.contains("supersecret"));
+        assert!(!summary.preview.contains("secret-value"));
+        assert!(summary.preview.contains("hello world") || summary.preview.contains("…"));
+    }
+
+    #[test]
+    fn detects_images_and_tools() {
+        let value = json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+                ]
+            }],
+            "tools": [{"type": "function"}]
+        });
+        let summary = request_body_summary(value.to_string().as_bytes());
+        assert!(summary.has_images);
+        assert!(summary.has_tools);
+        assert!(summary.preview.contains("<binary") || summary.preview.contains("image"));
+    }
 }
 
 pub(crate) fn is_stream_like(headers: &HeaderMap) -> bool {

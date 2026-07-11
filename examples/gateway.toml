@@ -36,6 +36,7 @@ enabled = true
 allowed_models = [
   "claude-opus-4-8",
   "deepseek-v4-pro",
+  "north-mini-code-free",
   # "gpt-image-1",
   # "imagen-4"
 ]
@@ -65,7 +66,7 @@ base_url = "https://ioll.pp.ua"
 api_key_env = "OPENAI_API_KEY"
 enabled = true
 weight = 1
-models = ["deepseek-v4-pro"]
+models = ["deepseek-v4-pro", "north-mini-code-free"]
 
 # Gemini upstream example. Uncomment after setting a real API key and mapping.
 # [[channels]]
@@ -107,3 +108,8 @@ upstream_model = "deepseek-v4-pro"
 requested_model = "claude-opus-4-8"
 channel_id = "anthropic-main"
 upstream_model = "deepseek-v4-pro"
+
+[[model_mappings]]
+requested_model = "north-mini-code-free"
+channel_id = "openai-main"
+upstream_model = "north-mini-code-free"

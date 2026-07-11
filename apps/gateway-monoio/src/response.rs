@@ -69,35 +69,31 @@ pub(crate) fn stream_claude_as_openai(
 ) -> Response<GatewayBody> {
     let mut translator = ClaudeSseTranslator::new(requested_model);
     let mut decoder = SseBuffer::default();
-    let stream = HttpBodyStream::from(upstream.into_body())
-        .map_err(|err| std::io::Error::other(err.to_string()))
-        .map(move |chunk| {
-            chunk.map(|bytes| {
-                let mut out = Vec::new();
-                for payload in decoder.push(&bytes) {
-                    match translator.translate_sse_payload(&payload) {
-                        Ok(events) => {
-                            for event in events {
-                                write_sse_data(&mut out, &event);
-                            }
-                        }
-                        Err(err) => {
-                            warn!(?err, "failed to translate Claude SSE event");
+    let body = stream_body_from_async(move |sender| {
+        let stream = HttpBodyStream::from(upstream.into_body());
+        pump_http_body_stream(stream, sender, move |bytes| {
+            let mut out = Vec::new();
+            for payload in decoder.push(&bytes) {
+                match translator.translate_sse_payload(&payload) {
+                    Ok(events) => {
+                        for event in events {
+                            write_sse_data(&mut out, &event);
                         }
                     }
+                    Err(err) => {
+                        warn!(?err, "failed to translate Claude SSE event");
+                    }
                 }
-                Frame::data(Bytes::from(out))
-            })
+            }
+            Bytes::from(out)
         })
-        .map_err(|err| -> BoxError { Box::new(err) });
+    });
 
     response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(http_body_util::BodyExt::boxed_unsync(StreamBody::new(
-            stream,
-        )))
+        .body(body)
         .unwrap_or_else(|err| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -147,35 +143,31 @@ pub(crate) fn stream_openai_as_claude(
 ) -> Response<GatewayBody> {
     let mut translator = OpenAiSseToClaudeTranslator::new(requested_model);
     let mut decoder = SseBuffer::default();
-    let stream = HttpBodyStream::from(upstream.into_body())
-        .map_err(|err| std::io::Error::other(err.to_string()))
-        .map(move |chunk| {
-            chunk.map(|bytes| {
-                let mut out = Vec::new();
-                for payload in decoder.push_with_done(&bytes, true) {
-                    match translator.translate_sse_payload(&payload) {
-                        Ok(events) => {
-                            for event in events {
-                                write_claude_sse_event(&mut out, &event);
-                            }
-                        }
-                        Err(err) => {
-                            warn!(?err, "failed to translate OpenAI SSE event");
+    let body = stream_body_from_async(move |sender| {
+        let stream = HttpBodyStream::from(upstream.into_body());
+        pump_http_body_stream(stream, sender, move |bytes| {
+            let mut out = Vec::new();
+            for payload in decoder.push(&bytes) {
+                match translator.translate_sse_payload(&payload) {
+                    Ok(events) => {
+                        for event in events {
+                            write_sse_data(&mut out, &event);
                         }
                     }
+                    Err(err) => {
+                        warn!(?err, "failed to translate OpenAI->Claude SSE event");
+                    }
                 }
-                Frame::data(Bytes::from(out))
-            })
+            }
+            Bytes::from(out)
         })
-        .map_err(|err| -> BoxError { Box::new(err) });
+    });
 
     response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(http_body_util::BodyExt::boxed_unsync(StreamBody::new(
-            stream,
-        )))
+        .body(body)
         .unwrap_or_else(|err| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -225,35 +217,31 @@ pub(crate) fn stream_gemini_as_openai(
 ) -> Response<GatewayBody> {
     let mut translator = GeminiSseToOpenAiTranslator::new(requested_model);
     let mut decoder = SseBuffer::default();
-    let stream = HttpBodyStream::from(upstream.into_body())
-        .map_err(|err| std::io::Error::other(err.to_string()))
-        .map(move |chunk| {
-            chunk.map(|bytes| {
-                let mut out = Vec::new();
-                for payload in decoder.push_with_done(&bytes, true) {
-                    match translator.translate_sse_payload(&payload) {
-                        Ok(events) => {
-                            for event in events {
-                                write_sse_data(&mut out, &event);
-                            }
-                        }
-                        Err(err) => {
-                            warn!(?err, "failed to translate Gemini SSE event");
+    let body = stream_body_from_async(move |sender| {
+        let stream = HttpBodyStream::from(upstream.into_body());
+        pump_http_body_stream(stream, sender, move |bytes| {
+            let mut out = Vec::new();
+            for payload in decoder.push_with_done(&bytes, true) {
+                match translator.translate_sse_payload(&payload) {
+                    Ok(events) => {
+                        for event in events {
+                            write_sse_data(&mut out, &event);
                         }
                     }
+                    Err(err) => {
+                        warn!(?err, "failed to translate Gemini SSE event");
+                    }
                 }
-                Frame::data(Bytes::from(out))
-            })
+            }
+            Bytes::from(out)
         })
-        .map_err(|err| -> BoxError { Box::new(err) });
+    });
 
     response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(http_body_util::BodyExt::boxed_unsync(StreamBody::new(
-            stream,
-        )))
+        .body(body)
         .unwrap_or_else(|err| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -305,44 +293,40 @@ pub(crate) fn stream_gemini_as_claude(
     let mut gemini_to_openai = GeminiSseToOpenAiTranslator::new(requested_model.clone());
     let mut openai_to_claude = OpenAiSseToClaudeTranslator::new(requested_model);
     let mut decoder = SseBuffer::default();
-    let stream = HttpBodyStream::from(upstream.into_body())
-        .map_err(|err| std::io::Error::other(err.to_string()))
-        .map(move |chunk| {
-            chunk.map(|bytes| {
-                let mut out = Vec::new();
-                for payload in decoder.push_with_done(&bytes, true) {
-                    match gemini_to_openai.translate_sse_payload(&payload) {
-                        Ok(openai_events) => {
-                            for openai_event in openai_events {
-                                match openai_to_claude.translate_sse_payload(&openai_event) {
-                                    Ok(claude_events) => {
-                                        for event in claude_events {
-                                            write_claude_sse_event(&mut out, &event);
-                                        }
+    let body = stream_body_from_async(move |sender| {
+        let stream = HttpBodyStream::from(upstream.into_body());
+        pump_http_body_stream(stream, sender, move |bytes| {
+            let mut out = Vec::new();
+            for payload in decoder.push_with_done(&bytes, true) {
+                match gemini_to_openai.translate_sse_payload(&payload) {
+                    Ok(openai_events) => {
+                        for openai_event in openai_events {
+                            match openai_to_claude.translate_sse_payload(&openai_event) {
+                                Ok(claude_events) => {
+                                    for event in claude_events {
+                                        write_claude_sse_event(&mut out, &event);
                                     }
-                                    Err(err) => {
-                                        warn!(?err, "failed to translate chained OpenAI SSE event");
-                                    }
+                                }
+                                Err(err) => {
+                                    warn!(?err, "failed to translate chained OpenAI SSE event");
                                 }
                             }
                         }
-                        Err(err) => {
-                            warn!(?err, "failed to translate Gemini SSE event");
-                        }
+                    }
+                    Err(err) => {
+                        warn!(?err, "failed to translate Gemini SSE event");
                     }
                 }
-                Frame::data(Bytes::from(out))
-            })
+            }
+            Bytes::from(out)
         })
-        .map_err(|err| -> BoxError { Box::new(err) });
+    });
 
     response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(http_body_util::BodyExt::boxed_unsync(StreamBody::new(
-            stream,
-        )))
+        .body(body)
         .unwrap_or_else(|err| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -385,35 +369,31 @@ pub(crate) async fn buffered_openai_as_gemini(
 pub(crate) fn stream_openai_as_gemini(upstream: Response<HttpBody>) -> Response<GatewayBody> {
     let mut translator = OpenAiSseToGeminiTranslator::new();
     let mut decoder = SseBuffer::default();
-    let stream = HttpBodyStream::from(upstream.into_body())
-        .map_err(|err| std::io::Error::other(err.to_string()))
-        .map(move |chunk| {
-            chunk.map(|bytes| {
-                let mut out = Vec::new();
-                for payload in decoder.push_with_done(&bytes, true) {
-                    match translator.translate_sse_payload(&payload) {
-                        Ok(events) => {
-                            for event in events {
-                                write_sse_data(&mut out, &event);
-                            }
-                        }
-                        Err(err) => {
-                            warn!(?err, "failed to translate OpenAI SSE event");
+    let body = stream_body_from_async(move |sender| {
+        let stream = HttpBodyStream::from(upstream.into_body());
+        pump_http_body_stream(stream, sender, move |bytes| {
+            let mut out = Vec::new();
+            for payload in decoder.push_with_done(&bytes, true) {
+                match translator.translate_sse_payload(&payload) {
+                    Ok(events) => {
+                        for event in events {
+                            write_sse_data(&mut out, &event);
                         }
                     }
+                    Err(err) => {
+                        warn!(?err, "failed to translate OpenAI SSE event");
+                    }
                 }
-                Frame::data(Bytes::from(out))
-            })
+            }
+            Bytes::from(out)
         })
-        .map_err(|err| -> BoxError { Box::new(err) });
+    });
 
     response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(http_body_util::BodyExt::boxed_unsync(StreamBody::new(
-            stream,
-        )))
+        .body(body)
         .unwrap_or_else(|err| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -538,10 +518,7 @@ pub(crate) async fn openai_image_json_as_stream(
 pub(crate) fn upstream_to_response(upstream: Response<HttpBody>) -> Response<GatewayBody> {
     let (parts, body) = upstream.into_parts();
     let status = parts.status;
-    let stream = HttpBodyStream::from(body)
-        .map_err(|err| std::io::Error::other(err.to_string()))
-        .map_ok(Frame::data)
-        .map_err(|err| -> BoxError { Box::new(err) });
+    // Already a monoio-http body; keep streaming as-is.
 
     let mut builder = response_builder(status);
     for (name, value) in &parts.headers {
@@ -549,17 +526,13 @@ pub(crate) fn upstream_to_response(upstream: Response<HttpBody>) -> Response<Gat
             builder = builder.header(name, value);
         }
     }
-    let mut resp = builder
-        .body(http_body_util::BodyExt::boxed_unsync(StreamBody::new(
-            stream,
-        )))
-        .unwrap_or_else(|err| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &err.to_string(),
-            )
-        });
+    let mut resp = builder.body(body).unwrap_or_else(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &err.to_string(),
+        )
+    });
     if !status.is_success() {
         attach_channel_feedback(&mut resp, ChannelFeedbackMeta::upstream_status(status, ""));
     }
@@ -696,9 +669,50 @@ pub(crate) fn response_builder(status: StatusCode) -> http::response::Builder {
 }
 
 pub(crate) fn full_body(body: impl Into<Bytes>) -> GatewayBody {
-    Full::new(body.into())
-        .map_err(|never| match never {})
-        .boxed_unsync()
+    HttpBody::fixed_body(Some(body.into()))
+}
+
+/// Bridge an async chunk producer into a monoio-http streaming body.
+pub(crate) fn stream_body_from_async<F, Fut>(producer: F) -> GatewayBody
+where
+    F: FnOnce(StreamPayloadSender) -> Fut + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+{
+    let (payload, sender) = stream_payload_pair::<Bytes, HttpError>();
+    monoio::spawn(async move {
+        producer(sender).await;
+    });
+    HttpBody::H1(Payload::Stream(payload))
+}
+
+pub(crate) type StreamPayloadSender =
+    monoio_http::h1::payload::StreamPayloadSender<Bytes, HttpError>;
+
+/// Pump a monoio HttpBodyStream into a stream payload sender, mapping each
+/// chunk through `map`. Used by SSE translators.
+pub(crate) async fn pump_http_body_stream<F>(
+    mut stream: HttpBodyStream,
+    mut sender: StreamPayloadSender,
+    mut map: F,
+) where
+    F: FnMut(Bytes) -> Bytes + 'static,
+{
+    use futures_util::StreamExt;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(bytes) => {
+                let out = map(bytes);
+                if !out.is_empty() {
+                    sender.feed_data(Some(out));
+                }
+            }
+            Err(err) => {
+                sender.feed_error(err);
+                return;
+            }
+        }
+    }
+    sender.feed_data(None);
 }
 
 pub(crate) fn attach_response_usage(

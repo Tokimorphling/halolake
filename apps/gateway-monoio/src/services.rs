@@ -133,6 +133,7 @@ where
             .relay
             .call(OpenAiChatRelayRequest {
                 request: openai_req,
+                raw_body: req.body,
                 cx,
             })
             .await?;
@@ -744,8 +745,10 @@ fn finalize_response_usage(
                 reporter.report(event);
             }
         });
-        let body = StreamingUsageBody::new(body, report_tx, parts, status, started).boxed_unsync();
-        *resp.body_mut() = body;
+        // Tee the stream into a monoio-http payload while collecting usage from
+        // SSE frames via monoio-http stream payload.
+
+        *resp.body_mut() = wrap_streaming_usage_body(body, report_tx, parts, status, started);
         resp
     } else {
         report_response_usage(reporter, parts, &resp, started.elapsed().as_millis() as u64);
@@ -810,6 +813,19 @@ fn report_usage_event(
     usage: Option<ResponseUsage>,
     latency_ms: u64,
 ) {
+    let http_status = match status {
+        UsageStatus::Success => StatusCode::OK,
+        UsageStatus::ClientError => StatusCode::BAD_REQUEST,
+        UsageStatus::UpstreamError | UsageStatus::GatewayError => StatusCode::BAD_GATEWAY,
+    };
+    log_response_usage(
+        &parts.request_id,
+        http_status,
+        latency_ms,
+        usage,
+        &parts.upstream_request_id,
+        parts.is_stream,
+    );
     reporter.report(UsageEvent {
         request_id: parts.request_id,
         user_id: parts.user_id,
@@ -845,39 +861,50 @@ fn usage_status_from_http(status: StatusCode) -> UsageStatus {
     }
 }
 
-struct StreamingUsageBody {
+fn wrap_streaming_usage_body(
     inner: GatewayBody,
     report_tx: mpsc::UnboundedSender<UsageEvent>,
-    parts: Option<UsageEventParts>,
+    parts: UsageEventParts,
     status: UsageStatus,
     started: Instant,
-    collector: SseUsageCollector,
-}
-
-impl StreamingUsageBody {
-    fn new(
-        inner: GatewayBody,
-        report_tx: mpsc::UnboundedSender<UsageEvent>,
-        parts: UsageEventParts,
-        status: UsageStatus,
-        started: Instant,
-    ) -> Self {
-        Self {
-            inner,
-            report_tx,
-            parts: Some(parts),
-            status,
-            started,
-            collector: SseUsageCollector::default(),
+) -> GatewayBody {
+    stream_body_from_async(move |mut sender| async move {
+        let mut collector = SseUsageCollector::default();
+        let mut status = status;
+        let mut body = inner;
+        loop {
+            match MonoioBody::next_data(&mut body).await {
+                Some(Ok(bytes)) => {
+                    collector.push(&bytes);
+                    sender.feed_data(Some(bytes));
+                }
+                Some(Err(err)) => {
+                    status = UsageStatus::UpstreamError;
+                    sender.feed_error(err);
+                    break;
+                }
+                None => {
+                    sender.feed_data(None);
+                    break;
+                }
+            }
         }
-    }
-
-    fn report_once(&mut self) {
-        let Some(parts) = self.parts.take() else {
-            return;
+        let usage = collector.usage();
+        let latency_ms = started.elapsed().as_millis() as u64;
+        let http_status = match status {
+            UsageStatus::Success => StatusCode::OK,
+            UsageStatus::ClientError => StatusCode::BAD_REQUEST,
+            UsageStatus::UpstreamError | UsageStatus::GatewayError => StatusCode::BAD_GATEWAY,
         };
-        let usage = self.collector.usage();
-        let _ = self.report_tx.unbounded_send(UsageEvent {
+        log_response_usage(
+            &parts.request_id,
+            http_status,
+            latency_ms,
+            usage,
+            &parts.upstream_request_id,
+            parts.is_stream,
+        );
+        let _ = report_tx.unbounded_send(UsageEvent {
             request_id: parts.request_id,
             user_id: parts.user_id,
             token_id: parts.token_id,
@@ -893,61 +920,15 @@ impl StreamingUsageBody {
             image_tokens: usage.and_then(|usage| usage.image_tokens),
             audio_tokens: usage.and_then(|usage| usage.audio_tokens),
             quota: None,
-            status: self.status,
-            latency_ms: self.started.elapsed().as_millis() as u64,
+            status,
+            latency_ms,
             is_stream: parts.is_stream,
             ip: parts.ip,
             upstream_request_id: parts.upstream_request_id,
             created_at_unix_ms: now_unix_ms_i64(),
         });
-    }
+    })
 }
-
-impl HttpBodyTrait for StreamingUsageBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut TaskContext<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.as_mut().get_mut();
-        match Pin::new(&mut this.inner).poll_frame(cx) {
-            Poll::Ready(Some(Ok(frame))) => {
-                if let Some(bytes) = frame.data_ref() {
-                    this.collector.push(bytes);
-                }
-                Poll::Ready(Some(Ok(frame)))
-            }
-            Poll::Ready(Some(Err(err))) => {
-                this.status = UsageStatus::UpstreamError;
-                this.report_once();
-                Poll::Ready(Some(Err(err)))
-            }
-            Poll::Ready(None) => {
-                this.report_once();
-                Poll::Ready(None)
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
-    }
-}
-
-impl Drop for StreamingUsageBody {
-    fn drop(&mut self) {
-        self.report_once();
-    }
-}
-
-impl Unpin for StreamingUsageBody {}
 
 #[derive(Default)]
 struct SseUsageCollector {

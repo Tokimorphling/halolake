@@ -1381,11 +1381,7 @@ dependencies = [
  "halolake-protocol",
  "halolake-router-core",
  "http",
- "http-body",
- "http-body-util",
- "hyper",
  "monoio",
- "monoio-compat",
  "monoio-http",
  "monoio-native-tls",
  "monoio-transports",
@@ -2020,7 +2016,6 @@ dependencies = [
  "pin-project-lite",
  "socket2 0.5.10",
  "threadpool",
- "tokio",
  "windows-sys 0.48.0",
 ]
 
@@ -2041,9 +2036,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aab377095e8792bb9829fac13c5cb111a0af4b733f4821581ca3f6e1eec5ae6c"
 dependencies = [
- "hyper",
  "monoio",
- "pin-project-lite",
  "reusable-box-future",
  "tokio",
 ]

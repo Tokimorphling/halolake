@@ -3,12 +3,10 @@ use std::{
     error::Error,
     fs,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    task::{Context as TaskContext, Poll},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -17,7 +15,7 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use certain_map::{Param, ParamRef, ParamSet};
 use futures_channel::mpsc;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use halolake_api_contract::{JsonValue, claude, gemini, openai};
 use halolake_control_plane::{
     ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError, ChannelFeedbackEvent,
@@ -37,15 +35,14 @@ use halolake_router_core::{
     Provider, RouteError,
 };
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, header};
-use http_body::{Body as HttpBodyTrait, SizeHint};
-use http_body_util::{BodyExt, Full, StreamBody, combinators::UnsyncBoxBody};
-use hyper::{body::Frame, body::Incoming, server::conn::http1, service::service_fn};
-use monoio::{
-    io::IntoPollIo,
-    net::{ListenerOpts, TcpListener, TcpStream},
+use monoio::net::{ListenerOpts, TcpListener, TcpStream};
+use monoio_http::{
+    common::{
+        body::{Body as MonoioBody, FixedBody, HttpBody, HttpBodyStream},
+        error::HttpError,
+    },
+    h1::payload::{stream_payload_pair, Payload},
 };
-use monoio_compat::hyper::MonoioIo;
-use monoio_http::common::body::{Body as MonoioBody, FixedBody, HttpBody, HttpBodyStream};
 use monoio_transports::{
     connectors::{Connector, TcpConnector, TcpTlsAddr, TlsConnector, TlsStream},
     http::{HttpConnection, HttpConnector},
@@ -56,7 +53,8 @@ use tracing::{Instrument, debug, error, info, warn};
 use uuid::Uuid;
 
 type BoxError = Box<dyn Error + Send + Sync>;
-pub type GatewayBody = UnsyncBoxBody<Bytes, BoxError>;
+/// Downstream/upstream response body (native monoio-http).
+pub type GatewayBody = HttpBody;
 type HttpUpstream = HttpConnector<TcpConnector, SocketAddr, TcpStream>;
 type HttpsUpstream = HttpConnector<TlsConnector<TcpConnector>, TcpTlsAddr, TlsStream<TcpStream>>;
 
@@ -170,6 +168,7 @@ fn nonzero_u32(value: u32) -> Option<u64> {
 mod config;
 mod context;
 mod control;
+mod downstream;
 mod gateway;
 mod image;
 mod relay;

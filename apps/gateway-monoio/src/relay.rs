@@ -145,6 +145,9 @@ impl RelayService {
 
 pub(crate) struct OpenAiChatRelayRequest<CX> {
     pub(crate) request: openai::ChatCompletionRequest,
+    /// Original downstream body; used for redacted structured logs and
+    /// OpenAI passthrough so unknown fields (e.g. reasoning_effort) survive.
+    pub(crate) raw_body: Bytes,
     pub(crate) cx: CX,
 }
 
@@ -157,7 +160,7 @@ where
 
     async fn call(&self, req: OpenAiChatRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
         let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
-        debug_relay(&req.cx, req.request.is_stream());
+        debug_relay(&req.cx, req.request.is_stream(), Some(req.raw_body.as_ref()));
 
         match route.provider {
             Provider::Claude => {
@@ -198,10 +201,9 @@ where
                 }
             }
             Provider::OpenAi => {
-                let mut request = req.request;
-                request.model = route.upstream_model.clone();
-                let body = match serde_json::to_vec(&request) {
-                    Ok(body) => Bytes::from(body),
+                let body = match rewrite_openai_chat_model_body(&req.raw_body, &route.upstream_model)
+                {
+                    Ok(body) => body,
                     Err(err) => {
                         return Ok(json_error(
                             StatusCode::BAD_REQUEST,
@@ -278,7 +280,8 @@ where
             .get("stream")
             .and_then(JsonValue::as_bool)
             .unwrap_or_else(|| is_stream_like(&req.downstream_headers));
-        debug_relay(&req.cx, is_stream);
+        let body_bytes = serde_json::to_vec(&req.value).ok();
+        debug_relay(&req.cx, is_stream, body_bytes.as_deref());
 
         match route.provider {
             Provider::Claude => {
@@ -465,7 +468,7 @@ where
 
     async fn call(&self, req: OpenAiImageRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
         let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
-        debug_relay(&req.cx, req.stream);
+        debug_relay(&req.cx, req.stream, Some(req.body.as_ref()));
 
         match route.provider {
             Provider::OpenAi => {
@@ -599,7 +602,11 @@ where
         req: OpenAiPassthroughRelayRequest<CX>,
     ) -> Result<Self::Response, Self::Error> {
         let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
-        debug_relay(&req.cx, is_stream_like(&req.downstream_headers));
+        debug_relay(
+            &req.cx,
+            is_stream_like(&req.downstream_headers),
+            Some(req.body.as_ref()),
+        );
         if route.provider != Provider::OpenAi {
             return Ok(json_error(
                 StatusCode::BAD_GATEWAY,
@@ -621,7 +628,7 @@ where
 
     async fn call(&self, req: GeminiNativeRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
         let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
-        debug_relay(&req.cx, req.stream);
+        debug_relay(&req.cx, req.stream, Some(req.body.as_ref()));
 
         match route.provider {
             Provider::Gemini => {
@@ -915,4 +922,13 @@ impl RelayService {
             }
         }
     }
+}
+
+fn rewrite_openai_chat_model_body(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {
+    let mut value: JsonValue =
+        serde_json::from_slice(raw_body).context("parse OpenAI chat request body")?;
+    value["model"] = JsonValue::String(upstream_model.to_string());
+    Ok(Bytes::from(
+        serde_json::to_vec(&value).context("serialize OpenAI chat request body")?,
+    ))
 }

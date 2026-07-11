@@ -22,11 +22,7 @@ clap = { workspace = true }
 futures-channel = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http-body = { workspace = true }
-http-body-util = { workspace = true }
-hyper = { workspace = true }
 monoio = { workspace = true }
-monoio-compat = { workspace = true }
 monoio-http = { workspace = true }
 monoio-native-tls = { workspace = true }
 monoio-transports = { workspace = true }
