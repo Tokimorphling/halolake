@@ -75,61 +75,12 @@ impl PrefillStore {
     }
 }
 
-impl Service<ListPrefillGroupsRequest> for PrefillStore {
-    type Response = Vec<PrefillGroup>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: ListPrefillGroupsRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<CreatePrefillGroupRequest> for PrefillStore {
-    type Response = PrefillGroup;
-    type Error = ManagementError;
-
-    async fn call(&self, req: CreatePrefillGroupRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<UpdatePrefillGroupRequest> for PrefillStore {
-    type Response = PrefillGroup;
-    type Error = ManagementError;
-
-    async fn call(&self, req: UpdatePrefillGroupRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<DeletePrefillGroupRequest> for PrefillStore {
-    type Response = ();
-    type Error = ManagementError;
-
-    async fn call(&self, req: DeletePrefillGroupRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
+crate::impl_backend_service!(PrefillStore, {
+    ListPrefillGroupsRequest => Vec<PrefillGroup>,
+    CreatePrefillGroupRequest => PrefillGroup,
+    UpdatePrefillGroupRequest => PrefillGroup,
+    DeletePrefillGroupRequest => (),
+});
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MemoryPrefillStore {

@@ -78,33 +78,10 @@ impl CheckinStore {
     }
 }
 
-impl Service<GetCheckinStatsRequest> for CheckinStore {
-    type Response = CheckinStats;
-    type Error = ManagementError;
-
-    async fn call(&self, req: GetCheckinStatsRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<CreateCheckinRequest> for CheckinStore {
-    type Response = CheckinRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: CreateCheckinRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
+crate::impl_backend_service!(CheckinStore, {
+    GetCheckinStatsRequest => CheckinStats,
+    CreateCheckinRequest => CheckinRecord,
+});
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MemoryCheckinStore {

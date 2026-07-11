@@ -96,75 +96,13 @@ impl ProxyStore {
     }
 }
 
-impl Service<ListProxiesRequest> for ProxyStore {
-    type Response = Vec<ProxyRecord>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: ListProxiesRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<CreateProxyRequest> for ProxyStore {
-    type Response = ProxyRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: CreateProxyRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<UpdateProxyRequest> for ProxyStore {
-    type Response = ProxyRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: UpdateProxyRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<DeleteProxyRequest> for ProxyStore {
-    type Response = ();
-    type Error = ManagementError;
-
-    async fn call(&self, req: DeleteProxyRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<GetProxyRequest> for ProxyStore {
-    type Response = ProxyRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: GetProxyRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
+crate::impl_backend_service!(ProxyStore, {
+    ListProxiesRequest => Vec<ProxyRecord>,
+    CreateProxyRequest => ProxyRecord,
+    UpdateProxyRequest => ProxyRecord,
+    DeleteProxyRequest => (),
+    GetProxyRequest => ProxyRecord,
+});
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MemoryProxyStore {

@@ -1,13 +1,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    fs,
     net::SocketAddr,
     path::{Component, Path as FsPath, PathBuf},
     sync::Arc,
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     body::Body,
@@ -41,7 +40,7 @@ use halolake_domain::{
     SearchRequest, TokenRecord, UsageEvent, UsageStatus, UserRecord,
 };
 use halolake_router_core::{
-    ChannelAffinityConfig, ChannelAffinityRule, ChannelConfig, GatewaySnapshot, GroupRoutingConfig,
+    ChannelAffinityConfig, ChannelAffinityRule, GatewaySnapshot, GroupRoutingConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -49,6 +48,7 @@ use service_async::Service;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+mod config;
 mod billing;
 mod catalog;
 mod channel_affinity;
@@ -68,6 +68,7 @@ mod security;
 mod session;
 mod storage;
 mod system_instance;
+mod store_open;
 mod system_task;
 use billing::{
     BillingStore, CompleteTopUpRequest, CreateRedemptionsRequest, DeleteInvalidRedemptionsRequest,
@@ -134,6 +135,17 @@ use system_task::{
     StartLogCleanupTaskRequest, SystemTaskRecord, SystemTaskStore, spawn_log_cleanup_task,
 };
 
+
+
+pub(crate) use config::{
+    ensure_supported_storage_backend, storage_backend_name,
+};
+
+pub use config::{
+    ControlApiConfig, InternalConfig, LogStorageBackend, ServerConfig, SessionConfig, StorageBackend,
+    StorageConfig, SystemConfig, WebConfig,
+};
+
 const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
 const SNAPSHOT_VERSION_HEADER: &str = "x-halolake-snapshot-version";
 const NEW_API_USER_HEADER: &str = "new-api-user";
@@ -151,162 +163,6 @@ struct EmbeddedAsset {
 }
 
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ControlApiConfig {
-    #[serde(default)]
-    pub server: ServerConfig,
-    #[serde(default)]
-    pub internal: InternalConfig,
-    #[serde(default)]
-    pub system: SystemConfig,
-    #[serde(default)]
-    pub web: WebConfig,
-    #[serde(default)]
-    pub storage: StorageConfig,
-    #[serde(default)]
-    pub session: SessionConfig,
-    #[serde(default)]
-    pub options: BTreeMap<String, toml::Value>,
-    #[serde(default)]
-    pub users: Vec<UserRecord>,
-    #[serde(default = "default_version")]
-    pub version: u64,
-    #[serde(default)]
-    pub tokens: Vec<halolake_router_core::TokenConfig>,
-    #[serde(default)]
-    pub channels: Vec<ChannelConfig>,
-    #[serde(default)]
-    pub model_mappings: Vec<halolake_router_core::ModelMapping>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct ServerConfig {
-    #[serde(default = "default_listen")]
-    pub listen: SocketAddr,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            listen: default_listen(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct SessionConfig {
-    /// HMAC secret for signing session cookies. Prefer env SESSION_SECRET.
-    #[serde(default)]
-    pub secret: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct InternalConfig {
-    #[serde(default)]
-    pub secret: Option<String>,
-    /// Base URL of the gateway data plane used by the playground proxy
-    /// (`/pg/chat/completions`). Defaults to `http://127.0.0.1:8082`.
-    #[serde(default)]
-    pub gateway_base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SystemConfig {
-    #[serde(default = "default_system_name")]
-    pub name: String,
-    #[serde(default)]
-    pub task_scheduler_enabled: bool,
-    #[serde(default = "default_channel_test_interval_seconds")]
-    pub channel_test_interval_seconds: u64,
-    #[serde(default = "default_model_update_interval_seconds")]
-    pub model_update_interval_seconds: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct WebConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_web_default_dist")]
-    pub default_dist: PathBuf,
-    #[serde(default = "default_web_classic_dist")]
-    pub classic_dist: PathBuf,
-    #[serde(default = "default_web_theme")]
-    pub theme: String,
-}
-
-impl Default for WebConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            default_dist: default_web_default_dist(),
-            classic_dist: default_web_classic_dist(),
-            theme: default_web_theme(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StorageConfig {
-    #[serde(default)]
-    pub backend: StorageBackend,
-    #[serde(default)]
-    pub sqlite_url: Option<String>,
-    #[serde(default)]
-    pub database_url: Option<String>,
-    #[serde(default)]
-    pub log_backend: Option<LogStorageBackend>,
-    #[serde(default)]
-    pub log_database_url: Option<String>,
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            backend: StorageBackend::Memory,
-            sqlite_url: None,
-            database_url: None,
-            log_backend: None,
-            log_database_url: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum StorageBackend {
-    #[default]
-    Memory,
-    Sqlite,
-    #[serde(rename = "mysql", alias = "my_sql")]
-    MySql,
-    #[serde(rename = "postgres", alias = "postgresql")]
-    Postgres,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LogStorageBackend {
-    Memory,
-    Sqlite,
-    #[serde(rename = "mysql", alias = "my_sql")]
-    MySql,
-    #[serde(rename = "postgres", alias = "postgresql")]
-    Postgres,
-    #[serde(rename = "clickhouse", alias = "click_house")]
-    ClickHouse,
-}
-
-impl Default for SystemConfig {
-    fn default() -> Self {
-        Self {
-            name: default_system_name(),
-            task_scheduler_enabled: false,
-            channel_test_interval_seconds: default_channel_test_interval_seconds(),
-            model_update_interval_seconds: default_model_update_interval_seconds(),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ControlApi {
@@ -722,77 +578,6 @@ struct ErrorBody {
     message: String,
 }
 
-impl ControlApiConfig {
-    pub fn load(path: &str) -> Result<Self> {
-        let data = fs::read_to_string(path).with_context(|| format!("read config {path}"))?;
-        let mut config: Self =
-            toml::from_str(&data).with_context(|| format!("parse config {path}"))?;
-        config.resolve_storage_env()?;
-        config.resolve_channel_env_keys()?;
-        Ok(config)
-    }
-
-    fn resolve_storage_env(&mut self) -> Result<()> {
-        if self.storage.sqlite_url.is_none()
-            && let Ok(path) = std::env::var("SQLITE_PATH")
-            && !path.trim().is_empty()
-        {
-            self.storage.sqlite_url = Some(sqlite_url_from_path(path.trim()));
-            if self.storage.backend == StorageBackend::Memory && self.storage.database_url.is_none()
-            {
-                self.storage.backend = StorageBackend::Sqlite;
-            }
-        }
-
-        if self.storage.database_url.is_none()
-            && let Ok(dsn) = std::env::var("SQL_DSN")
-            && !dsn.trim().is_empty()
-        {
-            let dsn = dsn.trim().to_string();
-            self.storage.backend = infer_main_storage_backend(&dsn)?;
-            if self.storage.backend == StorageBackend::Sqlite && self.storage.sqlite_url.is_none() {
-                self.storage.sqlite_url = Some(default_sqlite_url());
-            }
-            self.storage.database_url = Some(dsn);
-        }
-
-        if self.storage.log_database_url.is_none()
-            && let Ok(dsn) = std::env::var("LOG_SQL_DSN")
-            && !dsn.trim().is_empty()
-        {
-            let dsn = dsn.trim().to_string();
-            self.storage.log_backend = Some(infer_log_storage_backend(&dsn));
-            self.storage.log_database_url = Some(dsn);
-        }
-
-        Ok(())
-    }
-
-    fn resolve_channel_env_keys(&mut self) -> Result<()> {
-        for channel in &mut self.channels {
-            if channel.api_key.is_empty() {
-                if let Some(env_name) = &channel.api_key_env {
-                    channel.api_key = std::env::var(env_name).with_context(|| {
-                        format!("read env var {env_name} for channel {}", channel.id)
-                    })?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn snapshot(&self) -> GatewaySnapshot {
-        GatewaySnapshot {
-            version: self.version,
-            tokens: self.tokens.clone(),
-            channels: self.channels.clone(),
-            model_mappings: self.model_mappings.clone(),
-            channel_affinity: ChannelAffinityConfig::default(),
-            group_routing: GroupRoutingConfig::default(),
-        }
-    }
-}
-
 impl ControlApi {
     pub async fn try_from_config(config: ControlApiConfig) -> Result<Self> {
         ensure_supported_storage_backend(&config.storage)?;
@@ -830,343 +615,24 @@ impl ControlApi {
         management_data.users = config.users;
         normalize_config_users(&mut management_data.users)?;
         let catalog_seed = CatalogData::from_management(&management_data);
-        let management = match config.storage.backend {
-            StorageBackend::Memory => ManagementStore::memory(management_data),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                ManagementStore::sqlite(sqlite_url, management_data).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                ManagementStore::postgres(database_url, management_data).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                ManagementStore::mysql(&database_url, management_data).await?
-            },
-        };
-        let usage_events = match config.storage.backend {
-            StorageBackend::Memory => UsageStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                UsageStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                UsageStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                UsageStore::mysql(&database_url).await?
-            },
-        };
-        let catalog = match config.storage.backend {
-            StorageBackend::Memory => CatalogStore::memory(catalog_seed),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                CatalogStore::sqlite(sqlite_url, catalog_seed).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                CatalogStore::postgres(database_url, catalog_seed).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                CatalogStore::mysql(&database_url, catalog_seed).await?
-            },
-        };
-        let options = match config.storage.backend {
-            StorageBackend::Memory => OptionStore::memory(option_defaults),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                OptionStore::sqlite(sqlite_url, option_defaults).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                OptionStore::postgres(database_url, option_defaults).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                OptionStore::mysql(&database_url, option_defaults).await?
-            },
-        };
-        let security_store = match config.storage.backend {
-            StorageBackend::Memory => SecurityStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                SecurityStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                SecurityStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                SecurityStore::mysql(&database_url).await?
-            },
-        };
+        // Zero-cost monomorphized open: each store type is resolved statically.
+        let management: ManagementStore =
+            store_open::open_seeded_from_config(&config.storage, management_data).await?;
+        let usage_events: UsageStore = store_open::open_from_config(&config.storage).await?;
+        let catalog: CatalogStore =
+            store_open::open_seeded_from_config(&config.storage, catalog_seed).await?;
+        let options: OptionStore =
+            store_open::open_seeded_from_config(&config.storage, option_defaults).await?;
+        let security_store: SecurityStore = store_open::open_from_config(&config.storage).await?;
         let security = SecurityService::new(options.clone(), security_store);
-        let billing = match config.storage.backend {
-            StorageBackend::Memory => BillingStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                BillingStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                BillingStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                BillingStore::mysql(&database_url).await?
-            },
-        };
-        let checkins = match config.storage.backend {
-            StorageBackend::Memory => CheckinStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                CheckinStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                CheckinStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                CheckinStore::mysql(&database_url).await?
-            }
-        };
-        let prefill = match config.storage.backend {
-            StorageBackend::Memory => PrefillStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                PrefillStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                PrefillStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                PrefillStore::mysql(&database_url).await?
-            }
-        };
-        let proxies = match config.storage.backend {
-            StorageBackend::Memory => ProxyStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                ProxyStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                ProxyStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                ProxyStore::mysql(&database_url).await?
-            }
-        };
-        let system_tasks = match config.storage.backend {
-            StorageBackend::Memory => SystemTaskStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                SystemTaskStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                SystemTaskStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                SystemTaskStore::mysql(&database_url).await?
-            },
-        };
-        let system_instances = match config.storage.backend {
-            StorageBackend::Memory => SystemInstanceStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                SystemInstanceStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                SystemInstanceStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                SystemInstanceStore::mysql(&database_url).await?
-            },
-        };
-        let sessions = match config.storage.backend {
-            StorageBackend::Memory => SessionStore::memory(),
-            StorageBackend::Sqlite => {
-                let sqlite_url = config
-                    .storage
-                    .sqlite_url
-                    .as_deref()
-                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
-                SessionStore::sqlite(sqlite_url).await?
-            }
-            StorageBackend::Postgres => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = postgres")?;
-                SessionStore::postgres(database_url).await?
-            }
-            StorageBackend::MySql => {
-                let database_url = config
-                    .storage
-                    .database_url
-                    .as_deref()
-                    .context("storage.database_url is required when storage.backend = mysql")?;
-                let database_url = normalize_mysql_url(database_url);
-                SessionStore::mysql(&database_url).await?
-            },
-        };
+        let billing: BillingStore = store_open::open_from_config(&config.storage).await?;
+        let checkins: CheckinStore = store_open::open_from_config(&config.storage).await?;
+        let prefill: PrefillStore = store_open::open_from_config(&config.storage).await?;
+        let proxies: ProxyStore = store_open::open_from_config(&config.storage).await?;
+        let system_tasks: SystemTaskStore = store_open::open_from_config(&config.storage).await?;
+        let system_instances: SystemInstanceStore =
+            store_open::open_from_config(&config.storage).await?;
+        let sessions: SessionStore = store_open::open_from_config(&config.storage).await?;
         let session_secret = config
             .session
             .secret
@@ -8202,6 +7668,29 @@ fn generate_token_key() -> String {
     key
 }
 
+fn default_page() -> usize {
+    1
+}
+
+fn default_page_size() -> usize {
+    10
+}
+
+fn default_ranking_period() -> String {
+    "week".to_string()
+}
+
+fn default_perf_hours() -> i64 {
+    24
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
+
 async fn shutdown_signal() {
     if let Err(err) = tokio::signal::ctrl_c().await {
         warn!(?err, "failed to install ctrl-c handler");
@@ -8220,171 +7709,13 @@ fn json_error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
-fn default_listen() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 9090))
-}
-
-fn default_version() -> u64 {
-    1
-}
-
-fn default_page() -> usize {
-    1
-}
-
-fn default_page_size() -> usize {
-    10
-}
-
-fn default_ranking_period() -> String {
-    "week".to_string()
-}
-
-fn default_perf_hours() -> i64 {
-    24
-}
-
-fn default_system_name() -> String {
-    "Halolake".to_string()
-}
-
-fn default_web_default_dist() -> PathBuf {
-    PathBuf::from("web/new-api/default/dist")
-}
-
-fn default_web_classic_dist() -> PathBuf {
-    PathBuf::from("web/new-api/classic/dist")
-}
-
-fn default_web_theme() -> String {
-    "default".to_string()
-}
-
-fn default_sqlite_url() -> String {
-    sqlite_url_from_path("one-api.db?_busy_timeout=30000")
-}
-
-fn sqlite_url_from_path(path: &str) -> String {
-    if path.starts_with("sqlite:") {
-        path.to_string()
-    } else {
-        format!("sqlite://{path}")
-    }
-}
-
-
-fn normalize_mysql_url(url: &str) -> String {
-    let url = url.trim();
-    if url.starts_with("mysql://") || url.starts_with("mysql:////") {
-        return url.to_string();
-    }
-    if let Some(rest) = url.split_once("@tcp(") {
-        let userinfo = rest.0;
-        let after = rest.1;
-        if let Some((hostport, dbpart)) = after.split_once(")/") {
-            let db = dbpart.split('?').next().unwrap_or(dbpart);
-            return format!("mysql://{userinfo}@{hostport}/{db}");
-        }
-    }
-    if !url.contains("://") {
-        return format!("mysql://{url}");
-    }
-    url.to_string()
-}
-
-fn infer_main_storage_backend(dsn: &str) -> Result<StorageBackend> {
-    let dsn = dsn.trim();
-    if dsn.is_empty() || dsn.starts_with("local") {
-        return Ok(StorageBackend::Sqlite);
-    }
-    if is_clickhouse_dsn(dsn) {
-        bail!(
-            "SQL_DSN does not support ClickHouse; use SQLite, MySQL, or PostgreSQL for the primary database and LOG_SQL_DSN for ClickHouse logs"
-        );
-    }
-    if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
-        Ok(StorageBackend::Postgres)
-    } else {
-        Ok(StorageBackend::MySql)
-    }
-}
-
-fn infer_log_storage_backend(dsn: &str) -> LogStorageBackend {
-    let dsn = dsn.trim();
-    if dsn.is_empty() || dsn.starts_with("local") {
-        LogStorageBackend::Sqlite
-    } else if is_clickhouse_dsn(dsn) {
-        LogStorageBackend::ClickHouse
-    } else if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
-        LogStorageBackend::Postgres
-    } else {
-        LogStorageBackend::MySql
-    }
-}
-
-fn is_clickhouse_dsn(dsn: &str) -> bool {
-    dsn.starts_with("clickhouse://")
-        || dsn.starts_with("tcp://")
-        || dsn.starts_with("http://")
-        || dsn.starts_with("https://")
-}
-
-fn ensure_supported_storage_backend(storage: &StorageConfig) -> Result<()> {
-    match storage.backend {
-        StorageBackend::Memory
-        | StorageBackend::Sqlite
-        | StorageBackend::MySql
-        | StorageBackend::Postgres => {}
-    }
-    if let Some(log_backend) = storage.log_backend
-        && log_backend != LogStorageBackend::Memory
-        && log_backend != LogStorageBackend::Sqlite
-    {
-        bail!(
-            "storage.log_backend = {} is recognized for new-api compatibility but separate log storage is not implemented yet in halolake-control-api",
-            log_storage_backend_name(log_backend)
-        );
-    }
-    Ok(())
-}
-
-fn default_channel_test_interval_seconds() -> u64 {
-    600
-}
-
-fn default_model_update_interval_seconds() -> u64 {
-    1_800
-}
-
-fn storage_backend_name(backend: StorageBackend) -> &'static str {
-    match backend {
-        StorageBackend::Memory => "memory",
-        StorageBackend::Sqlite => "sqlite",
-        StorageBackend::MySql => "mysql",
-        StorageBackend::Postgres => "postgres",
-    }
-}
-
-fn log_storage_backend_name(backend: LogStorageBackend) -> &'static str {
-    match backend {
-        LogStorageBackend::Memory => "memory",
-        LogStorageBackend::Sqlite => "sqlite",
-        LogStorageBackend::MySql => "mysql",
-        LogStorageBackend::Postgres => "postgres",
-        LogStorageBackend::ClickHouse => "clickhouse",
-    }
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{
+        infer_log_storage_backend, infer_main_storage_backend, normalize_mysql_url, StorageBackend,
+        StorageConfig, LogStorageBackend, ensure_supported_storage_backend,
+    };
 
     #[test]
     fn infers_main_storage_backend_like_new_api() {
