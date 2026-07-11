@@ -18,12 +18,11 @@ use axum::{
 };
 use halolake_control_plane::{
     CreateTokenRequest, ManagementData,
-    ManagementError, MemorySnapshotBus, PublishSnapshotRequest, UpdateUserRequest, ensure_user_password_hashed,
+    ManagementError, MemorySnapshotBus, UpdateUserRequest, ensure_user_password_hashed,
 };
 use halolake_domain::{
     PageRequest, PageResult, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, TokenRecord, UserRecord,
 };
-use halolake_router_core::GatewaySnapshot;
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
@@ -51,6 +50,7 @@ mod session;
 mod storage;
 mod system_instance;
 mod store_open;
+mod snapshot_publish;
 mod http_response;
 mod http_auth;
 mod api_channel;
@@ -105,6 +105,9 @@ pub(crate) use api_user::*;
 pub(crate) use api_catalog::*;
 pub(crate) use api_system::*;
 pub(crate) use options_util::*;
+pub(crate) use snapshot_publish::{
+    publish_enriched_management_snapshot, publish_management_snapshot,
+};
 
 pub use config::{
     ControlApiConfig, InternalConfig, LogStorageBackend, ServerConfig, SessionConfig, StorageBackend,
@@ -680,61 +683,6 @@ pub async fn serve(addr: SocketAddr, api: ControlApi) -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serve control-api")
-}
-
-pub(crate) async fn publish_management_snapshot(state: &AppState) -> Result<(), ManagementError> {
-    publish_enriched_management_snapshot(
-        &state.management,
-        &state.options,
-        &state.snapshots,
-        &state.proxies,
-    )
-    .await
-}
-
-pub(crate) async fn publish_enriched_management_snapshot(
-    management: &ManagementStore,
-    options: &OptionStore,
-    snapshots: &MemorySnapshotBus,
-    proxies: &ProxyStore,
-) -> Result<(), ManagementError> {
-    // Do NOT bump here. Write paths already advanced the version via
-    // `mutate()`. Options-only changes must call `bump_version()` before this
-    // helper so the gateway does not treat the republish as NotModified.
-    let data = management.current_data()?;
-    let mut snapshot = data.build_snapshot()?;
-    apply_channel_proxies(&mut snapshot, &data, proxies);
-    let option_values = options.values()?;
-    snapshot.channel_affinity = channel_affinity_config_from_options(&option_values);
-    snapshot.group_routing = group_routing_config_from_options(&option_values);
-    snapshots
-        .call(PublishSnapshotRequest { snapshot })
-        .await
-        .map_err(ManagementError::Snapshot)?;
-    Ok(())
-}
-
-fn apply_channel_proxies(
-    snapshot: &mut GatewaySnapshot,
-    management: &ManagementData,
-    proxies: &ProxyStore,
-) {
-    for ch in &mut snapshot.channels {
-        let Some(rec) = management.channels.iter().find(|c| {
-            c.snapshot_id
-                .as_deref()
-                .unwrap_or(&c.id.to_string())
-                == ch.id.as_str()
-                || c.id.to_string() == ch.id
-        }) else {
-            continue;
-        };
-        if let Some(pid) = rec.proxy_id {
-            if let Some(url) = proxies.resolve_url(Some(pid)) {
-                ch.proxy = Some(url);
-            }
-        }
-    }
 }
 
 fn normalize_config_users(users: &mut [UserRecord]) -> Result<()> {

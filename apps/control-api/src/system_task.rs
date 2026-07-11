@@ -220,131 +220,17 @@ impl MemorySystemTaskStore {
     }
 }
 
-impl Service<StartLogCleanupTaskRequest> for SystemTaskStore {
-    type Response = SystemTaskRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: StartLogCleanupTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<StartSystemTaskRequest> for SystemTaskStore {
-    type Response = SystemTaskRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: StartSystemTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<EnqueueSystemTaskRequest> for SystemTaskStore {
-    type Response = EnqueueSystemTaskResponse;
-    type Error = ManagementError;
-
-    async fn call(&self, req: EnqueueSystemTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<GetCurrentSystemTaskRequest> for SystemTaskStore {
-    type Response = Option<SystemTaskRecord>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: GetCurrentSystemTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<GetSystemTaskRequest> for SystemTaskStore {
-    type Response = Option<SystemTaskRecord>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: GetSystemTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<ListSystemTasksRequest> for SystemTaskStore {
-    type Response = Vec<SystemTaskRecord>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: ListSystemTasksRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<ClaimSystemTaskRequest> for SystemTaskStore {
-    type Response = Option<SystemTaskRecord>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: ClaimSystemTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<UpdateSystemTaskStateRequest> for SystemTaskStore {
-    type Response = SystemTaskRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: UpdateSystemTaskStateRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<FinishSystemTaskRequest> for SystemTaskStore {
-    type Response = SystemTaskRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: FinishSystemTaskRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
+crate::impl_backend_service!(SystemTaskStore, {
+    StartLogCleanupTaskRequest => SystemTaskRecord,
+    StartSystemTaskRequest => SystemTaskRecord,
+    EnqueueSystemTaskRequest => EnqueueSystemTaskResponse,
+    GetCurrentSystemTaskRequest => Option<SystemTaskRecord>,
+    GetSystemTaskRequest => Option<SystemTaskRecord>,
+    ListSystemTasksRequest => Vec<SystemTaskRecord>,
+    ClaimSystemTaskRequest => Option<SystemTaskRecord>,
+    UpdateSystemTaskStateRequest => SystemTaskRecord,
+    FinishSystemTaskRequest => SystemTaskRecord,
+});
 
 impl Service<StartLogCleanupTaskRequest> for MemorySystemTaskStore {
     type Response = SystemTaskRecord;

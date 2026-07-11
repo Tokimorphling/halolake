@@ -110,67 +110,12 @@ impl MemorySystemInstanceStore {
     }
 }
 
-impl Service<UpsertSystemInstanceRequest> for SystemInstanceStore {
-    type Response = ();
-    type Error = ManagementError;
-
-    async fn call(&self, req: UpsertSystemInstanceRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<ListSystemInstancesRequest> for SystemInstanceStore {
-    type Response = Vec<SystemInstanceResponse>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: ListSystemInstancesRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<DeleteStaleSystemInstancesRequest> for SystemInstanceStore {
-    type Response = usize;
-    type Error = ManagementError;
-
-    async fn call(
-        &self,
-        req: DeleteStaleSystemInstancesRequest,
-    ) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<DeleteStaleSystemInstanceRequest> for SystemInstanceStore {
-    type Response = bool;
-    type Error = ManagementError;
-
-    async fn call(
-        &self,
-        req: DeleteStaleSystemInstanceRequest,
-    ) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
+crate::impl_backend_service!(SystemInstanceStore, {
+    UpsertSystemInstanceRequest => (),
+    ListSystemInstancesRequest => Vec<SystemInstanceResponse>,
+    DeleteStaleSystemInstancesRequest => usize,
+    DeleteStaleSystemInstanceRequest => bool,
+});
 
 impl Service<UpsertSystemInstanceRequest> for MemorySystemInstanceStore {
     type Response = ();

@@ -2078,33 +2078,10 @@ impl OptionStore {
     }
 }
 
-impl Service<ListOptionsRequest> for OptionStore {
-    type Response = Vec<OptionRecord>;
-    type Error = ManagementError;
-
-    async fn call(&self, req: ListOptionsRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
-
-impl Service<UpdateOptionRequest> for OptionStore {
-    type Response = OptionRecord;
-    type Error = ManagementError;
-
-    async fn call(&self, req: UpdateOptionRequest) -> Result<Self::Response, Self::Error> {
-        match self {
-            Self::Memory(store) => store.call(req).await,
-            Self::Sqlite(store) => store.call(req).await,
-            Self::MySql(store) => store.call(req).await,
-            Self::Postgres(store) => store.call(req).await,
-        }
-    }
-}
+crate::impl_backend_service!(OptionStore, {
+    ListOptionsRequest => Vec<OptionRecord>,
+    UpdateOptionRequest => OptionRecord,
+});
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryOptionStore {
