@@ -11,14 +11,14 @@
 
 ## 1. 最快：不 clone 仓库，只下 compose
 
-镜像由 GitHub Actions 推到 GHCR：
+镜像由 GitHub Actions 推到 GHCR（**linux/arm64**，原生 ARM runner）：
 
 ```text
 ghcr.io/tokimorphling/halolake:main     # 推 main
 ghcr.io/tokimorphling/halolake:latest   # 打 v* tag
 ```
 
-**前提**：机器已装 Docker + Compose；GHCR 包需 **Public**，或先 `docker login ghcr.io`。
+**前提**：线上机为 **arm64**；已装 Docker + Compose；GHCR 包需 **Public**，或先 `docker login ghcr.io`。
 
 ### 1.1 一键（推荐）
 

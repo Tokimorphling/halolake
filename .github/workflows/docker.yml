@@ -1,19 +1,11 @@
-# Publish multi-arch (when possible) image to GHCR for one-shot deploy.
+# Publish arm64 image to GHCR for one-shot deploy.
 #
 # Triggers:
 #   - push tags v*  → ghcr.io/<owner>/halolake:<tag> + :latest
 #   - push main     → ghcr.io/<owner>/halolake:main + :sha-...
 #   - workflow_dispatch
 #
-# Deploy (Linux host network recommended):
-#   docker pull ghcr.io/<owner>/halolake:latest
-#   docker run -d --name halolake --network host \
-#     -e SESSION_SECRET=... \
-#     -v ./data:/data \
-#     ghcr.io/<owner>/halolake:latest
-#
-# Or: docker compose -f docker-compose.host.yml up -d
-# (set image: ghcr.io/<owner>/halolake:latest and remove build:)
+# Platform: linux/arm64 (native GitHub ARM runner — matches online hosts)
 
 name: Docker image
 
@@ -27,12 +19,12 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # GHCR requires lowercase image names
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Native aarch64 so Rust/bun build without QEMU (much faster/reliable).
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
@@ -76,17 +68,15 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Single platform keeps CI time/cost reasonable for a fat Rust+web image.
-          platforms: linux/amd64
+          platforms: linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
 
-  # Optional smoke: only after push to main/tags (image must exist on GHCR)
   smoke:
     if: github.event_name != 'pull_request'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       packages: read
     steps:

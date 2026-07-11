@@ -1,4 +1,4 @@
-# Halolake one-shot (no git clone required)
+# Halolake one-shot (no git clone required) — image is linux/arm64
 #
 #   mkdir -p halolake && cd halolake
 #   curl -fsSL -o docker-compose.yml \
