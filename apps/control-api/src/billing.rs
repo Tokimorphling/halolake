@@ -8,7 +8,9 @@ use halolake_domain::{PageRequest, PageResult};
 use serde::{Deserialize, Serialize};
 use service_async::Service;
 use sqlx::{
-    Row, SqlitePool, Transaction,
+    MySqlPool, PgPool, Row, SqlitePool, Transaction,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use uuid::Uuid;
@@ -161,6 +163,8 @@ pub(crate) struct CompletedTopUp {
 pub(crate) enum BillingStore {
     Memory(MemoryBillingStore),
     Sqlite(SqliteBillingStore),
+    MySql(MySqlBillingStore),
+    Postgres(PostgresBillingStore),
 }
 
 impl BillingStore {
@@ -170,6 +174,14 @@ impl BillingStore {
 
     pub(crate) async fn sqlite(url: &str) -> Result<Self, ManagementError> {
         Ok(Self::Sqlite(SqliteBillingStore::connect(url).await?))
+    }
+
+    pub(crate) async fn mysql(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::MySql(MySqlBillingStore::connect(url).await?))
+    }
+
+    pub(crate) async fn postgres(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::Postgres(PostgresBillingStore::connect(url).await?))
     }
 }
 
@@ -214,6 +226,8 @@ macro_rules! impl_billing_service {
                 match self {
                     Self::Memory(store) => store.call(req).await,
                     Self::Sqlite(store) => store.call(req).await,
+                    Self::MySql(store) => store.call(req).await,
+                    Self::Postgres(store) => store.call(req).await,
                 }
             }
         }
@@ -588,12 +602,52 @@ macro_rules! impl_sqlite_billing_read_service {
                 self.memory.call(req).await
             }
         }
+
+        impl Service<$req> for MySqlBillingStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                self.memory.call(req).await
+            }
+        }
+
+        impl Service<$req> for PostgresBillingStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                self.memory.call(req).await
+            }
+        }
     };
 }
 
 macro_rules! impl_sqlite_billing_write_service {
     ($req:ty, $resp:ty) => {
         impl Service<$req> for SqliteBillingStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                let resp = self.memory.call(req).await?;
+                self.persist().await?;
+                Ok(resp)
+            }
+        }
+
+        impl Service<$req> for MySqlBillingStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                let resp = self.memory.call(req).await?;
+                self.persist().await?;
+                Ok(resp)
+            }
+        }
+
+        impl Service<$req> for PostgresBillingStore {
             type Response = $resp;
             type Error = ManagementError;
 
@@ -778,6 +832,382 @@ async fn save_billing_tx(
     Ok(())
 }
 
+
+#[derive(Debug, Clone)]
+pub(crate) struct MySqlBillingStore {
+    pool: MySqlPool,
+    memory: MemoryBillingStore,
+}
+
+impl MySqlBillingStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(storage_err)?;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_billing_mysql(&pool).await?;
+        let data = load_billing_mysql(&pool).await?;
+        Ok(Self {
+            pool,
+            memory: MemoryBillingStore::new(data),
+        })
+    }
+
+    async fn persist(&self) -> Result<(), ManagementError> {
+        let data = self.memory.current_data()?;
+        save_billing_mysql(&self.pool, &data).await
+    }
+}
+
+
+
+async fn migrate_billing_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS redemptions (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            key TEXT NOT NULL UNIQUE,
+            status INTEGER NOT NULL DEFAULT 1,
+            name TEXT NOT NULL DEFAULT '',
+            quota BIGINT NOT NULL DEFAULT 100,
+            created_time BIGINT NOT NULL DEFAULT 0,
+            redeemed_time INTEGER NOT NULL DEFAULT 0,
+            used_user_id BIGINT NOT NULL DEFAULT 0,
+            expired_time INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS topups (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            amount INTEGER NOT NULL DEFAULT 0,
+            money REAL NOT NULL DEFAULT 0,
+            trade_no TEXT NOT NULL UNIQUE,
+            payment_method TEXT NOT NULL DEFAULT '',
+            payment_provider TEXT NOT NULL DEFAULT '',
+            create_time INTEGER NOT NULL DEFAULT 0,
+            complete_time INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_redemptions_status ON redemptions(status)",
+        "CREATE INDEX IF NOT EXISTS idx_topups_user_id ON topups(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_topups_create_time ON topups(create_time)",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
+async fn load_billing_mysql(pool: &MySqlPool) -> Result<BillingData, ManagementError> {
+    let redemptions = sqlx::query(
+        "SELECT id, user_id, key, status, name, quota, created_time, redeemed_time,
+            used_user_id, expired_time
+         FROM redemptions ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(RedemptionRecord {
+            id: u64_col_mysql(&row, "id")?,
+            user_id: u64_col_mysql(&row, "user_id")?,
+            key: string_col_mysql(&row, "key")?,
+            status: i32_col_mysql(&row, "status")?,
+            name: string_col_mysql(&row, "name")?,
+            quota: i64_col_mysql(&row, "quota")?,
+            created_time: i64_col_mysql(&row, "created_time")?,
+            redeemed_time: i64_col_mysql(&row, "redeemed_time")?,
+            count: 0,
+            used_user_id: u64_col_mysql(&row, "used_user_id")?,
+            expired_time: i64_col_mysql(&row, "expired_time")?,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    let topups = sqlx::query(
+        "SELECT id, user_id, amount, money, trade_no, payment_method, payment_provider,
+            create_time, complete_time, status
+         FROM topups ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(TopUpRecord {
+            id: u64_col_mysql(&row, "id")?,
+            user_id: u64_col_mysql(&row, "user_id")?,
+            amount: i64_col_mysql(&row, "amount")?,
+            money: f64_col_mysql(&row, "money")?,
+            trade_no: string_col_mysql(&row, "trade_no")?,
+            payment_method: string_col_mysql(&row, "payment_method")?,
+            payment_provider: string_col_mysql(&row, "payment_provider")?,
+            create_time: i64_col_mysql(&row, "create_time")?,
+            complete_time: i64_col_mysql(&row, "complete_time")?,
+            status: string_col_mysql(&row, "status")?,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    Ok(BillingData {
+        redemptions,
+        topups,
+    })
+}
+
+async fn save_billing_mysql(pool: &MySqlPool, data: &BillingData) -> Result<(), ManagementError> {
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query("DELETE FROM topups")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    sqlx::query("DELETE FROM redemptions")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+
+    for redemption in &data.redemptions {
+        sqlx::query(
+            "INSERT INTO redemptions (
+                id, user_id, key, status, name, quota, created_time, redeemed_time,
+                used_user_id, expired_time
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(redemption.id as i64)
+        .bind(redemption.user_id as i64)
+        .bind(&redemption.key)
+        .bind(redemption.status as i64)
+        .bind(&redemption.name)
+        .bind(redemption.quota)
+        .bind(redemption.created_time)
+        .bind(redemption.redeemed_time)
+        .bind(redemption.used_user_id as i64)
+        .bind(redemption.expired_time)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+
+    for topup in &data.topups {
+        sqlx::query(
+            "INSERT INTO topups (
+                id, user_id, amount, money, trade_no, payment_method, payment_provider,
+                create_time, complete_time, status
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(topup.id as i64)
+        .bind(topup.user_id as i64)
+        .bind(topup.amount)
+        .bind(topup.money)
+        .bind(&topup.trade_no)
+        .bind(&topup.payment_method)
+        .bind(&topup.payment_provider)
+        .bind(topup.create_time)
+        .bind(topup.complete_time)
+        .bind(&topup.status)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    tx.commit().await.map_err(storage_err)
+}
+
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct PostgresBillingStore {
+    pool: PgPool,
+    memory: MemoryBillingStore,
+}
+
+impl PostgresBillingStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = PgConnectOptions::from_str(url).map_err(storage_err)?;
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_billing_pg(&pool).await?;
+        let data = load_billing_pg(&pool).await?;
+        Ok(Self {
+            pool,
+            memory: MemoryBillingStore::new(data),
+        })
+    }
+
+    async fn persist(&self) -> Result<(), ManagementError> {
+        let data = self.memory.current_data()?;
+        save_billing_pg(&self.pool, &data).await
+    }
+}
+
+async fn migrate_billing_pg(pool: &PgPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS redemptions (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            key TEXT NOT NULL UNIQUE,
+            status INTEGER NOT NULL DEFAULT 1,
+            name TEXT NOT NULL DEFAULT '',
+            quota BIGINT NOT NULL DEFAULT 100,
+            created_time BIGINT NOT NULL DEFAULT 0,
+            redeemed_time BIGINT NOT NULL DEFAULT 0,
+            used_user_id BIGINT NOT NULL DEFAULT 0,
+            expired_time BIGINT NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS topups (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            amount BIGINT NOT NULL DEFAULT 0,
+            money DOUBLE PRECISION NOT NULL DEFAULT 0,
+            trade_no TEXT NOT NULL UNIQUE,
+            payment_method TEXT NOT NULL DEFAULT '',
+            payment_provider TEXT NOT NULL DEFAULT '',
+            create_time BIGINT NOT NULL DEFAULT 0,
+            complete_time BIGINT NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_redemptions_status ON redemptions(status)",
+        "CREATE INDEX IF NOT EXISTS idx_topups_user_id ON topups(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_topups_create_time ON topups(create_time)",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
+async fn load_billing_pg(pool: &PgPool) -> Result<BillingData, ManagementError> {
+    let redemptions = sqlx::query(
+        "SELECT id, user_id, key, status, name, quota, created_time, redeemed_time,
+            used_user_id, expired_time
+         FROM redemptions ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(RedemptionRecord {
+            id: pg_u64_col(&row, "id")?,
+            user_id: pg_u64_col(&row, "user_id")?,
+            key: pg_string_col(&row, "key")?,
+            status: pg_i32_col(&row, "status")?,
+            name: pg_string_col(&row, "name")?,
+            quota: pg_i64_col(&row, "quota")?,
+            created_time: pg_i64_col(&row, "created_time")?,
+            redeemed_time: pg_i64_col(&row, "redeemed_time")?,
+            count: 0,
+            used_user_id: pg_u64_col(&row, "used_user_id")?,
+            expired_time: pg_i64_col(&row, "expired_time")?,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    let topups = sqlx::query(
+        "SELECT id, user_id, amount, money, trade_no, payment_method, payment_provider,
+            create_time, complete_time, status
+         FROM topups ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(TopUpRecord {
+            id: pg_u64_col(&row, "id")?,
+            user_id: pg_u64_col(&row, "user_id")?,
+            amount: pg_i64_col(&row, "amount")?,
+            money: pg_f64_col(&row, "money")?,
+            trade_no: pg_string_col(&row, "trade_no")?,
+            payment_method: pg_string_col(&row, "payment_method")?,
+            payment_provider: pg_string_col(&row, "payment_provider")?,
+            create_time: pg_i64_col(&row, "create_time")?,
+            complete_time: pg_i64_col(&row, "complete_time")?,
+            status: pg_string_col(&row, "status")?,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    Ok(BillingData { redemptions, topups })
+}
+
+async fn save_billing_pg(pool: &PgPool, data: &BillingData) -> Result<(), ManagementError> {
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query("DELETE FROM topups")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    sqlx::query("DELETE FROM redemptions")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    for redemption in &data.redemptions {
+        sqlx::query(
+            "INSERT INTO redemptions (
+                id, user_id, key, status, name, quota, created_time, redeemed_time,
+                used_user_id, expired_time
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        )
+        .bind(redemption.id as i64)
+        .bind(redemption.user_id as i64)
+        .bind(&redemption.key)
+        .bind(redemption.status as i32)
+        .bind(&redemption.name)
+        .bind(redemption.quota)
+        .bind(redemption.created_time)
+        .bind(redemption.redeemed_time)
+        .bind(redemption.used_user_id as i64)
+        .bind(redemption.expired_time)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    for topup in &data.topups {
+        sqlx::query(
+            "INSERT INTO topups (
+                id, user_id, amount, money, trade_no, payment_method, payment_provider,
+                create_time, complete_time, status
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        )
+        .bind(topup.id as i64)
+        .bind(topup.user_id as i64)
+        .bind(topup.amount)
+        .bind(topup.money)
+        .bind(&topup.trade_no)
+        .bind(&topup.payment_method)
+        .bind(&topup.payment_provider)
+        .bind(topup.create_time)
+        .bind(topup.complete_time)
+        .bind(&topup.status)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    tx.commit().await.map_err(storage_err)
+}
+
+fn pg_string_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+fn pg_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+fn pg_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<u64, ManagementError> {
+    pg_i64_col(row, name).map(|v| v.max(0) as u64)
+}
+fn pg_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i32, ManagementError> {
+    if let Ok(v) = row.try_get::<i32, _>(name) {
+        return Ok(v);
+    }
+    pg_i64_col(row, name).map(|v| v as i32)
+}
+fn pg_f64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<f64, ManagementError> {
+    row.try_get::<f64, _>(name).map_err(storage_err)
+}
+
 fn validate_redemption_create(redemption: &mut RedemptionRecord) -> Result<(), ManagementError> {
     redemption.name = redemption.name.trim().to_string();
     let name_len = redemption.name.chars().count();
@@ -886,7 +1316,15 @@ fn string_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, Manag
     row.try_get::<String, _>(name).map_err(storage_err)
 }
 
+fn string_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+
 fn i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+
+fn i64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i64, ManagementError> {
     row.try_get::<i64, _>(name).map_err(storage_err)
 }
 
@@ -894,11 +1332,23 @@ fn u64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<u64, ManagementE
     i64_col(row, name).map(|value| value.max(0) as u64)
 }
 
+fn u64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<u64, ManagementError> {
+    i64_col_mysql(row, name).map(|value| value.max(0) as u64)
+}
+
 fn i32_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i32, ManagementError> {
     i64_col(row, name).map(|value| value as i32)
 }
 
+fn i32_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i32, ManagementError> {
+    i64_col_mysql(row, name).map(|value| value as i32)
+}
+
 fn f64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<f64, ManagementError> {
+    row.try_get::<f64, _>(name).map_err(storage_err)
+}
+
+fn f64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<f64, ManagementError> {
     row.try_get::<f64, _>(name).map_err(storage_err)
 }
 

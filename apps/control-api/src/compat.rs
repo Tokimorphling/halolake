@@ -7,29 +7,8 @@
 //! authz catalog, empty MJ/task pages) is implemented for real.
 
 use super::*;
+use crate::prefill::{self, PrefillGroup};
 use axum::routing::{delete, put};
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static PREFILL_NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Debug, Clone, Default)]
-struct PrefillStore {
-    inner: Arc<RwLock<Vec<PrefillGroup>>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-struct PrefillGroup {
-    #[serde(default)]
-    id: u64,
-    name: String,
-    #[serde(rename = "type")]
-    group_type: String,
-    #[serde(default)]
-    items: JsonValue,
-    #[serde(default)]
-    description: String,
-}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct PrefillListQuery {
@@ -130,88 +109,6 @@ struct PerformanceLogsQuery {
     mode: String,
     #[serde(default)]
     value: i64,
-}
-
-static PREFILL: OnceLock<PrefillStore> = OnceLock::new();
-
-fn prefill_store() -> &'static PrefillStore {
-    PREFILL.get_or_init(PrefillStore::default)
-}
-
-impl PrefillStore {
-    fn list(&self, group_type: &str) -> Result<Vec<PrefillGroup>, ManagementError> {
-        let groups = self
-            .inner
-            .read()
-            .map_err(|_| ManagementError::Poisoned("prefill"))?
-            .clone();
-        if group_type.is_empty() {
-            return Ok(groups);
-        }
-        Ok(groups
-            .into_iter()
-            .filter(|group| group.group_type == group_type)
-            .collect())
-    }
-
-    fn create(&self, mut group: PrefillGroup) -> Result<PrefillGroup, ManagementError> {
-        group.name = group.name.trim().to_string();
-        group.group_type = group.group_type.trim().to_string();
-        if group.name.is_empty() || group.group_type.is_empty() {
-            return Err(ManagementError::InvalidRequest(
-                "name and type are required",
-            ));
-        }
-        if group.id == 0 {
-            group.id = PREFILL_NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        }
-        let mut groups = self
-            .inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("prefill"))?;
-        groups.push(group.clone());
-        Ok(group)
-    }
-
-    fn update(&self, group: PrefillGroup) -> Result<PrefillGroup, ManagementError> {
-        if group.id == 0 {
-            return Err(ManagementError::InvalidRequest("id is required"));
-        }
-        let mut groups = self
-            .inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("prefill"))?;
-        let current = groups
-            .iter_mut()
-            .find(|item| item.id == group.id)
-            .ok_or(ManagementError::NotFound)?;
-        if !group.name.trim().is_empty() {
-            current.name = group.name.trim().to_string();
-        }
-        if !group.group_type.trim().is_empty() {
-            current.group_type = group.group_type.trim().to_string();
-        }
-        if !group.items.is_null() {
-            current.items = group.items;
-        }
-        if !group.description.is_empty() {
-            current.description = group.description;
-        }
-        Ok(current.clone())
-    }
-
-    fn delete(&self, id: u64) -> Result<(), ManagementError> {
-        let mut groups = self
-            .inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("prefill"))?;
-        let before = groups.len();
-        groups.retain(|group| group.id != id);
-        if before == groups.len() {
-            return Err(ManagementError::NotFound);
-        }
-        Ok(())
-    }
 }
 
 pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
@@ -536,7 +433,13 @@ async fn list_prefill_groups(
     if let Err(resp) = require_role(&state, &headers, ROLE_ADMIN_USER).await {
         return resp;
     }
-    match prefill_store().list(&query.group_type) {
+    match state
+        .prefill
+        .call(prefill::ListPrefillGroupsRequest {
+            group_type: query.group_type,
+        })
+        .await
+    {
         Ok(groups) => api_success(groups),
         Err(err) => management_error(err),
     }
@@ -550,7 +453,11 @@ async fn create_prefill_group(
     if let Err(resp) = require_role(&state, &headers, ROLE_ADMIN_USER).await {
         return resp;
     }
-    match prefill_store().create(group) {
+    match state
+        .prefill
+        .call(prefill::CreatePrefillGroupRequest { group })
+        .await
+    {
         Ok(group) => api_success(group),
         Err(err) => management_error(err),
     }
@@ -564,7 +471,11 @@ async fn update_prefill_group(
     if let Err(resp) = require_role(&state, &headers, ROLE_ADMIN_USER).await {
         return resp;
     }
-    match prefill_store().update(group) {
+    match state
+        .prefill
+        .call(prefill::UpdatePrefillGroupRequest { group })
+        .await
+    {
         Ok(group) => api_success(group),
         Err(err) => management_error(err),
     }
@@ -578,7 +489,11 @@ async fn delete_prefill_group(
     if let Err(resp) = require_role(&state, &headers, ROLE_ADMIN_USER).await {
         return resp;
     }
-    match prefill_store().delete(id) {
+    match state
+        .prefill
+        .call(prefill::DeletePrefillGroupRequest { id })
+        .await
+    {
         Ok(()) => api_ok(),
         Err(err) => management_error(err),
     }

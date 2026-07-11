@@ -3,7 +3,7 @@ use std::{
     fs,
     net::SocketAddr,
     path::{Component, Path as FsPath, PathBuf},
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -61,8 +61,10 @@ mod checkin;
 mod compat;
 mod model_sync;
 mod playground;
+mod prefill;
 mod ratio_sync;
 mod security;
+mod session;
 mod storage;
 mod system_instance;
 mod system_task;
@@ -101,8 +103,10 @@ use channel_task::{
     spawn_model_update_task,
 };
 use checkin::{CheckinStore, CreateCheckinRequest, GetCheckinStatsRequest};
+use prefill::PrefillStore;
 use model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest};
 use ratio_sync::{FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService};
+use session::{SecureVerificationError, SessionSigner, SessionStore};
 use security::{
     AdminDisableTwoFaRequest, AdminResetPasskeyRequest, AdminTwoFaStatsRequest,
     DeletePasskeyRequest, DisableTwoFaRequest, EnableTwoFaRequest, GetPasskeyStatusRequest,
@@ -132,8 +136,6 @@ const SESSION_COOKIE_NAME: &str = "session";
 const MAX_RECENT_TOKEN_LOGS: usize = 1000;
 const TOKEN_STATUS_EXPIRED: i32 = 3;
 const TOKEN_STATUS_EXHAUSTED: i32 = 4;
-/// Matches new-api SecureVerificationTimeout (5 minutes).
-const SECURE_VERIFICATION_TIMEOUT_SECS: i64 = 300;
 const DEFAULT_MODEL_RATIO_JSON: &str = "{}";
 const DEFAULT_CHANNEL_AFFINITY_RULES_JSON: &str = r#"[{"name":"codex cli trace","model_regex":["^gpt-.*$"],"path_regex":["/v1/responses"],"key_sources":[{"type":"gjson","path":"prompt_cache_key"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["Originator","Session_id","User-Agent","X-Codex-Beta-Features","X-Codex-Turn-Metadata"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true},{"name":"claude cli trace","model_regex":["^claude-.*$"],"path_regex":["/v1/messages"],"key_sources":[{"type":"gjson","path":"metadata.user_id"}],"value_regex":"","ttl_seconds":0,"param_override_template":{"operations":[{"mode":"pass_headers","value":["X-Stainless-Arch","X-Stainless-Lang","X-Stainless-Os","X-Stainless-Package-Version","X-Stainless-Retry-Count","X-Stainless-Runtime","X-Stainless-Runtime-Version","X-Stainless-Timeout","User-Agent","X-App","Anthropic-Beta","Anthropic-Dangerous-Direct-Browser-Access","Anthropic-Version"],"keep_origin":true}]},"skip_retry_on_failure":true,"include_using_group":true,"include_rule_name":true}]"#;
 
@@ -157,6 +159,8 @@ pub struct ControlApiConfig {
     pub web: WebConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub session: SessionConfig,
     #[serde(default)]
     pub options: BTreeMap<String, toml::Value>,
     #[serde(default)]
@@ -183,6 +187,13 @@ impl Default for ServerConfig {
             listen: default_listen(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SessionConfig {
+    /// HMAC secret for signing session cookies. Prefer env SESSION_SECRET.
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -306,10 +317,12 @@ struct AppState {
     options: OptionStore,
     billing: BillingStore,
     checkins: CheckinStore,
+    prefill: PrefillStore,
     security: SecurityService,
     system_tasks: SystemTaskStore,
     system_instances: SystemInstanceStore,
-    sessions: MemorySessionStore,
+    sessions: SessionStore,
+    session_signer: SessionSigner,
     web: WebConfig,
     internal_secret: Option<Arc<str>>,
     gateway_base_url: Option<String>,
@@ -318,20 +331,6 @@ struct AppState {
     storage_backend: StorageBackend,
 }
 
-#[derive(Debug, Clone, Default)]
-struct MemorySessionStore {
-    inner: Arc<RwLock<HashMap<String, SessionRecord>>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SessionRecord {
-    user_id: Option<u64>,
-    pending_user_id: Option<u64>,
-    /// Unix timestamp of last successful `/api/verify` (2FA/passkey).
-    /// Used by sensitive ops such as channel key reveal, matching new-api
-    /// `secure_verified_at` session middleware (5 minute TTL).
-    secure_verified_at: Option<i64>,
-}
 
 #[derive(Debug, Deserialize)]
 struct SnapshotQuery {
@@ -835,7 +834,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 ManagementStore::sqlite(sqlite_url, management_data).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                ManagementStore::postgres(database_url, management_data).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                ManagementStore::mysql(&database_url, management_data).await?
+            },
         };
         let usage_events = match config.storage.backend {
             StorageBackend::Memory => UsageStore::memory(),
@@ -847,7 +862,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 UsageStore::sqlite(sqlite_url).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                UsageStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                UsageStore::mysql(&database_url).await?
+            },
         };
         let catalog = match config.storage.backend {
             StorageBackend::Memory => CatalogStore::memory(catalog_seed),
@@ -859,7 +890,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 CatalogStore::sqlite(sqlite_url, catalog_seed).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                CatalogStore::postgres(database_url, catalog_seed).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                CatalogStore::mysql(&database_url, catalog_seed).await?
+            },
         };
         let options = match config.storage.backend {
             StorageBackend::Memory => OptionStore::memory(option_defaults),
@@ -871,7 +918,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 OptionStore::sqlite(sqlite_url, option_defaults).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                OptionStore::postgres(database_url, option_defaults).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                OptionStore::mysql(&database_url, option_defaults).await?
+            },
         };
         let security_store = match config.storage.backend {
             StorageBackend::Memory => SecurityStore::memory(),
@@ -883,7 +946,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 SecurityStore::sqlite(sqlite_url).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                SecurityStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                SecurityStore::mysql(&database_url).await?
+            },
         };
         let security = SecurityService::new(options.clone(), security_store);
         let billing = match config.storage.backend {
@@ -896,7 +975,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 BillingStore::sqlite(sqlite_url).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                BillingStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                BillingStore::mysql(&database_url).await?
+            },
         };
         let checkins = match config.storage.backend {
             StorageBackend::Memory => CheckinStore::memory(),
@@ -908,7 +1003,51 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 CheckinStore::sqlite(sqlite_url).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                CheckinStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                CheckinStore::mysql(&database_url).await?
+            }
+        };
+        let prefill = match config.storage.backend {
+            StorageBackend::Memory => PrefillStore::memory(),
+            StorageBackend::Sqlite => {
+                let sqlite_url = config
+                    .storage
+                    .sqlite_url
+                    .as_deref()
+                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
+                PrefillStore::sqlite(sqlite_url).await?
+            }
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                PrefillStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                PrefillStore::mysql(&database_url).await?
+            }
         };
         let system_tasks = match config.storage.backend {
             StorageBackend::Memory => SystemTaskStore::memory(),
@@ -920,7 +1059,23 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 SystemTaskStore::sqlite(sqlite_url).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                SystemTaskStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                SystemTaskStore::mysql(&database_url).await?
+            },
         };
         let system_instances = match config.storage.backend {
             StorageBackend::Memory => SystemInstanceStore::memory(),
@@ -932,8 +1087,65 @@ impl ControlApi {
                     .context("storage.sqlite_url is required when storage.backend = sqlite")?;
                 SystemInstanceStore::sqlite(sqlite_url).await?
             }
-            StorageBackend::MySql | StorageBackend::Postgres => unreachable!(),
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                SystemInstanceStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                SystemInstanceStore::mysql(&database_url).await?
+            },
         };
+        let sessions = match config.storage.backend {
+            StorageBackend::Memory => SessionStore::memory(),
+            StorageBackend::Sqlite => {
+                let sqlite_url = config
+                    .storage
+                    .sqlite_url
+                    .as_deref()
+                    .context("storage.sqlite_url is required when storage.backend = sqlite")?;
+                SessionStore::sqlite(sqlite_url).await?
+            }
+            StorageBackend::Postgres => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = postgres")?;
+                SessionStore::postgres(database_url).await?
+            }
+            StorageBackend::MySql => {
+                let database_url = config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required when storage.backend = mysql")?;
+                let database_url = normalize_mysql_url(database_url);
+                SessionStore::mysql(&database_url).await?
+            },
+        };
+        let session_secret = config
+            .session
+            .secret
+            .clone()
+            .or_else(|| std::env::var("SESSION_SECRET").ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if session_secret.is_none() {
+            warn!(
+                "session.secret / SESSION_SECRET is not set; session cookies are unsigned                  (acceptable for local memory/dev only)"
+            );
+        }
+        let session_signer = SessionSigner::new(session_secret.unwrap_or_default());
         let snapshots = MemorySnapshotBus::new(snapshot);
         spawn_system_instance_reporter(system_instances.clone(), start_time_unix);
         if config.system.task_scheduler_enabled {
@@ -962,10 +1174,12 @@ impl ControlApi {
                 options,
                 billing,
                 checkins,
+                prefill,
                 security,
                 system_tasks,
                 system_instances,
-                sessions: MemorySessionStore::default(),
+                sessions,
+                session_signer,
                 web: config.web,
                 internal_secret,
                 gateway_base_url,
@@ -2661,7 +2875,7 @@ async fn login_user(State(state): State<AppState>, Json(req): Json<LoginRequest>
                 "require_2fa": true,
             }),
         );
-        if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id)) {
+        if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer)) {
             resp.headers_mut().insert(SET_COOKIE, value);
         }
         return resp;
@@ -2671,14 +2885,14 @@ async fn login_user(State(state): State<AppState>, Json(req): Json<LoginRequest>
         Err(err) => return management_error(err),
     };
     let mut resp = api_success(login_payload(&user));
-    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id)) {
+    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer)) {
         resp.headers_mut().insert(SET_COOKIE, value);
     }
     resp
 }
 
 async fn logout_user(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    state.sessions.remove_from_headers(&headers);
+    state.sessions.remove_from_headers(&headers, &state.session_signer);
     let mut resp = api_ok();
     if let Ok(value) = HeaderValue::from_str(&clear_session_cookie()) {
         resp.headers_mut().insert(SET_COOKIE, value);
@@ -2691,7 +2905,7 @@ async fn login_2fa(
     headers: HeaderMap,
     Json(payload): Json<TwoFaCodePayload>,
 ) -> Response {
-    let user_id = match state.sessions.pending_user_id_from_headers(&headers) {
+    let user_id = match state.sessions.pending_user_id_from_headers(&headers, &state.session_signer) {
         Ok(Some(user_id)) => user_id,
         Ok(None) => return api_error_status(StatusCode::OK, "会话已过期，请重新登录"),
         Err(err) => return management_error(err),
@@ -2702,7 +2916,7 @@ async fn login_2fa(
             user_id,
             method: VerificationMethod::TwoFa,
             code: Some(payload.code),
-            session_id: session_id_from_headers(&headers).map(str::to_string),
+            session_id: session_id_from_headers(&headers, &state.session_signer).map(str::to_string),
         })
         .await
     {
@@ -2713,13 +2927,13 @@ async fn login_2fa(
         Ok(user) => user,
         Err(err) => return management_error(err),
     };
-    let session_id = match state.sessions.promote_pending_from_headers(&headers) {
+    let session_id = match state.sessions.promote_pending_from_headers(&headers, &state.session_signer) {
         Ok(Some(session_id)) => session_id,
         Ok(None) => return api_error_status(StatusCode::OK, "会话已过期，请重新登录"),
         Err(err) => return management_error(err),
     };
     let mut resp = api_success(login_payload(&user));
-    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id)) {
+    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(&session_id, &state.session_signer)) {
         resp.headers_mut().insert(SET_COOKIE, value);
     }
     resp
@@ -2740,14 +2954,14 @@ async fn universal_verify(
             user_id: user.id,
             method: payload.method,
             code: payload.code,
-            session_id: session_id_from_headers(&headers).map(str::to_string),
+            session_id: session_id_from_headers(&headers, &state.session_signer).map(str::to_string),
         })
         .await
     {
         Ok(status) => {
             // Persist step-up verification on the login session so subsequent
             // sensitive endpoints (channel key reveal) can enforce it.
-            if let Some(session_id) = session_id_from_headers(&headers) {
+            if let Some(session_id) = session_id_from_headers(&headers, &state.session_signer) {
                 let _ = state.sessions.mark_secure_verified(session_id);
             }
             api_success_with_message("验证成功", status)
@@ -2932,7 +3146,7 @@ async fn passkey_login_begin(
 ) -> Response {
     let (session_id, set_cookie) = match state
         .sessions
-        .passkey_session_id_from_headers(&headers, true)
+        .passkey_session_id_from_headers(&headers, true, &state.session_signer)
     {
         Ok(Some(value)) => value,
         Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
@@ -2952,7 +3166,7 @@ async fn passkey_login_begin(
         Ok(PasskeyFlowResponse::Begin(begin)) => {
             let mut resp = api_success(begin);
             if set_cookie {
-                insert_session_cookie(&mut resp, &session_id);
+                insert_session_cookie(&mut resp, &session_id, &state.session_signer);
             }
             resp
         }
@@ -2971,7 +3185,7 @@ async fn passkey_login_finish(
 ) -> Response {
     let (session_id, _) = match state
         .sessions
-        .passkey_session_id_from_headers(&headers, false)
+        .passkey_session_id_from_headers(&headers, false, &state.session_signer)
     {
         Ok(Some(value)) => value,
         Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
@@ -3003,7 +3217,7 @@ async fn passkey_login_finish(
                 Err(err) => return management_error(err),
             };
             let mut resp = api_success(login_payload(&user));
-            insert_session_cookie(&mut resp, &session_id);
+            insert_session_cookie(&mut resp, &session_id, &state.session_signer);
             resp
         }
         Ok(_) => api_error_status(StatusCode::OK, "Passkey 登录状态异常"),
@@ -3113,6 +3327,7 @@ async fn passkey_user_flow(
     let (session_id, set_cookie) = match state.sessions.passkey_session_id_from_headers(
         headers,
         matches!(flow, PasskeyFlow::RegisterBegin | PasskeyFlow::VerifyBegin),
+        &state.session_signer,
     ) {
         Ok(Some(value)) => value,
         Ok(None) => return api_error_status(StatusCode::OK, "Passkey 会话不存在或已过期"),
@@ -3136,7 +3351,7 @@ async fn passkey_user_flow(
         Ok(PasskeyFlowResponse::Begin(begin)) => {
             let mut resp = api_success(begin);
             if set_cookie {
-                insert_session_cookie(&mut resp, &session_id);
+                insert_session_cookie(&mut resp, &session_id, &state.session_signer);
             }
             resp
         }
@@ -3297,7 +3512,7 @@ async fn delete_self(State(state): State<AppState>, headers: HeaderMap) -> Respo
         .await
     {
         Ok(()) => {
-            state.sessions.remove_from_headers(&headers);
+            state.sessions.remove_from_headers(&headers, &state.session_signer);
             match publish_management_snapshot(&state).await {
                 Ok(()) => api_ok(),
                 Err(err) => management_error(err),
@@ -3676,6 +3891,7 @@ async fn create_token(
 async fn update_token(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ModelUpdateQuery>,
     Json(patch): Json<TokenRecord>,
 ) -> Response {
     let user = match current_user(&state, &headers).await {
@@ -3695,27 +3911,32 @@ async fn update_token(
         Ok(token) => token,
         Err(err) => return management_error(err),
     };
-    // GetToken returns a masked key; fetch the real key via reveal internals
-    // would be wrong here. Instead re-apply the update through management which
-    // preserves the stored key when the payload key is empty.
+    // Frontend enable/disable sends `?status_only=true` with `{id, status}` only.
+    // Defaults on TokenRecord would otherwise wipe remain_quota / expired_time.
     let mut token = current;
     token.user_id = user.id;
     token.key.clear();
-    if !patch.name.trim().is_empty() {
-        token.name = patch.name.trim().to_string();
+    if query.status_only {
+        if patch.status == 0 || patch.status == STATUS_ENABLED {
+            token.status = patch.status;
+        }
+    } else {
+        if !patch.name.trim().is_empty() {
+            token.name = patch.name.trim().to_string();
+        }
+        token.expired_time = patch.expired_time;
+        token.remain_quota = patch.remain_quota.max(0);
+        token.unlimited_quota = patch.unlimited_quota;
+        token.model_limits_enabled = patch.model_limits_enabled;
+        token.model_limits = patch.model_limits;
+        token.allow_ips = patch.allow_ips;
+        if patch.status == 0 || patch.status == STATUS_ENABLED {
+            token.status = patch.status;
+        }
+        // group / cross_group_retry stay server-owned (inherit user group).
+        token.group.clear();
+        token.cross_group_retry = false;
     }
-    token.expired_time = patch.expired_time;
-    token.remain_quota = patch.remain_quota.max(0);
-    token.unlimited_quota = patch.unlimited_quota;
-    token.model_limits_enabled = patch.model_limits_enabled;
-    token.model_limits = patch.model_limits;
-    token.allow_ips = patch.allow_ips;
-    if patch.status == 0 || patch.status == STATUS_ENABLED {
-        token.status = patch.status;
-    }
-    // group / cross_group_retry stay server-owned (inherit user group).
-    token.group.clear();
-    token.cross_group_retry = false;
     match state
         .management
         .call(UpdateTokenRequest {
@@ -5321,188 +5542,8 @@ impl AppState {
     }
 }
 
-impl MemorySessionStore {
-    fn create_anonymous(&self) -> Result<String, ManagementError> {
-        let session_id = Uuid::new_v4().simple().to_string();
-        self.inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("sessions"))?
-            .insert(
-                session_id.clone(),
-                SessionRecord {
-                    user_id: None,
-                    pending_user_id: None,
-                    secure_verified_at: None,
-                },
-            );
-        Ok(session_id)
-    }
-
-    fn create(&self, user_id: u64) -> Result<String, ManagementError> {
-        let session_id = Uuid::new_v4().simple().to_string();
-        self.inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("sessions"))?
-            .insert(
-                session_id.clone(),
-                SessionRecord {
-                    user_id: Some(user_id),
-                    pending_user_id: None,
-                    secure_verified_at: None,
-                },
-            );
-        Ok(session_id)
-    }
-
-    fn create_pending(&self, user_id: u64) -> Result<String, ManagementError> {
-        let session_id = Uuid::new_v4().simple().to_string();
-        self.inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("sessions"))?
-            .insert(
-                session_id.clone(),
-                SessionRecord {
-                    user_id: None,
-                    pending_user_id: Some(user_id),
-                    secure_verified_at: None,
-                },
-            );
-        Ok(session_id)
-    }
-
-    fn get(&self, session_id: &str) -> Result<Option<u64>, ManagementError> {
-        self.inner
-            .read()
-            .map(|sessions| sessions.get(session_id).and_then(|record| record.user_id))
-            .map_err(|_| ManagementError::Poisoned("sessions"))
-    }
-
-    fn has_session(&self, session_id: &str) -> Result<bool, ManagementError> {
-        self.inner
-            .read()
-            .map(|sessions| sessions.contains_key(session_id))
-            .map_err(|_| ManagementError::Poisoned("sessions"))
-    }
-
-    fn mark_secure_verified(&self, session_id: &str) -> Result<(), ManagementError> {
-        let mut sessions = self
-            .inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("sessions"))?;
-        if let Some(record) = sessions.get_mut(session_id) {
-            record.secure_verified_at = Some(now_unix());
-        }
-        Ok(())
-    }
-
-    /// Returns Ok(()) when the session has a non-expired secure verification.
-    /// Clears expired markers, matching new-api SecureVerificationRequired.
-    fn require_secure_verified(&self, session_id: &str) -> Result<(), SecureVerificationError> {
-        let mut sessions = self
-            .inner
-            .write()
-            .map_err(|_| SecureVerificationError::Unavailable)?;
-        let Some(record) = sessions.get_mut(session_id) else {
-            return Err(SecureVerificationError::Required);
-        };
-        let Some(verified_at) = record.secure_verified_at else {
-            return Err(SecureVerificationError::Required);
-        };
-        let elapsed = now_unix().saturating_sub(verified_at);
-        if elapsed >= SECURE_VERIFICATION_TIMEOUT_SECS {
-            record.secure_verified_at = None;
-            return Err(SecureVerificationError::Expired);
-        }
-        Ok(())
-    }
-
-    fn passkey_session_id_from_headers(
-        &self,
-        headers: &HeaderMap,
-        create_if_missing: bool,
-    ) -> Result<Option<(String, bool)>, ManagementError> {
-        if let Some(session_id) = session_id_from_headers(headers) {
-            if self.has_session(session_id)? {
-                return Ok(Some((session_id.to_string(), false)));
-            }
-        }
-        if create_if_missing {
-            return self
-                .create_anonymous()
-                .map(|session_id| Some((session_id, true)));
-        }
-        Ok(None)
-    }
-
-    fn pending_user_id_from_headers(
-        &self,
-        headers: &HeaderMap,
-    ) -> Result<Option<u64>, ManagementError> {
-        let Some(session_id) = session_id_from_headers(headers) else {
-            return Ok(None);
-        };
-        self.inner
-            .read()
-            .map(|sessions| {
-                sessions
-                    .get(session_id)
-                    .and_then(|record| record.pending_user_id)
-            })
-            .map_err(|_| ManagementError::Poisoned("sessions"))
-    }
-
-    fn promote_pending_from_headers(
-        &self,
-        headers: &HeaderMap,
-    ) -> Result<Option<String>, ManagementError> {
-        let Some(session_id) = session_id_from_headers(headers) else {
-            return Ok(None);
-        };
-        let mut sessions = self
-            .inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("sessions"))?;
-        let Some(record) = sessions.get_mut(session_id) else {
-            return Ok(None);
-        };
-        let Some(user_id) = record.pending_user_id.take() else {
-            return Ok(None);
-        };
-        record.user_id = Some(user_id);
-        Ok(Some(session_id.to_string()))
-    }
-
-    fn remove(&self, session_id: &str) -> Result<(), ManagementError> {
-        self.inner
-            .write()
-            .map_err(|_| ManagementError::Poisoned("sessions"))?
-            .remove(session_id);
-        Ok(())
-    }
-
-    fn user_id_from_headers(&self, headers: &HeaderMap) -> Result<Option<u64>, ManagementError> {
-        let Some(session_id) = session_id_from_headers(headers) else {
-            return Ok(None);
-        };
-        self.get(session_id)
-    }
-
-    fn remove_from_headers(&self, headers: &HeaderMap) {
-        if let Some(session_id) = session_id_from_headers(headers) {
-            let _ = self.remove(session_id);
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SecureVerificationError {
-    Required,
-    Expired,
-    Unavailable,
-}
-
 fn require_secure_verification(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
-    let Some(session_id) = session_id_from_headers(headers) else {
+    let Some(session_id) = session_id_from_headers(headers, &state.session_signer) else {
         return Err(secure_verification_response(SecureVerificationError::Required));
     };
     match state.sessions.require_secure_verified(session_id) {
@@ -5533,7 +5574,7 @@ fn secure_verification_response(err: SecureVerificationError) -> Response {
 }
 
 async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<UserRecord, Response> {
-    let session_user_id = match state.sessions.user_id_from_headers(headers) {
+    let session_user_id = match state.sessions.user_id_from_headers(headers, &state.session_signer) {
         Ok(user_id) => user_id,
         Err(err) => return Err(management_error(err)),
     };
@@ -7677,11 +7718,14 @@ fn push_non_empty_group(groups: &mut BTreeSet<String>, group: String) {
     }
 }
 
-fn session_id_from_headers(headers: &HeaderMap) -> Option<&str> {
+fn session_id_from_headers<'a>(headers: &'a HeaderMap, signer: &SessionSigner) -> Option<&'a str> {
     let cookie = headers.get(COOKIE)?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
-        (name == SESSION_COOKIE_NAME && !value.is_empty()).then_some(value)
+        if name != SESSION_COOKIE_NAME || value.is_empty() {
+            return None;
+        }
+        signer.verify_cookie_value(value)
     })
 }
 
@@ -7703,8 +7747,8 @@ fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn insert_session_cookie(resp: &mut Response, session_id: &str) {
-    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(session_id)) {
+fn insert_session_cookie(resp: &mut Response, session_id: &str, signer: &SessionSigner) {
+    if let Ok(value) = HeaderValue::from_str(&set_session_cookie(session_id, signer)) {
         resp.headers_mut().insert(SET_COOKIE, value);
     }
 }
@@ -7733,9 +7777,10 @@ fn new_api_user_id(headers: &HeaderMap) -> Option<Result<u64, ()>> {
     })
 }
 
-fn set_session_cookie(session_id: &str) -> String {
+fn set_session_cookie(session_id: &str, signer: &SessionSigner) -> String {
+    let value = signer.sign(session_id);
     format!(
-        "{SESSION_COOKIE_NAME}={session_id}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict"
+        "{SESSION_COOKIE_NAME}={value}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict"
     )
 }
 
@@ -8061,6 +8106,26 @@ fn sqlite_url_from_path(path: &str) -> String {
     }
 }
 
+
+fn normalize_mysql_url(url: &str) -> String {
+    let url = url.trim();
+    if url.starts_with("mysql://") || url.starts_with("mysql:////") {
+        return url.to_string();
+    }
+    if let Some(rest) = url.split_once("@tcp(") {
+        let userinfo = rest.0;
+        let after = rest.1;
+        if let Some((hostport, dbpart)) = after.split_once(")/") {
+            let db = dbpart.split('?').next().unwrap_or(dbpart);
+            return format!("mysql://{userinfo}@{hostport}/{db}");
+        }
+    }
+    if !url.contains("://") {
+        return format!("mysql://{url}");
+    }
+    url.to_string()
+}
+
 fn infer_main_storage_backend(dsn: &str) -> Result<StorageBackend> {
     let dsn = dsn.trim();
     if dsn.is_empty() || dsn.starts_with("local") {
@@ -8100,11 +8165,10 @@ fn is_clickhouse_dsn(dsn: &str) -> bool {
 
 fn ensure_supported_storage_backend(storage: &StorageConfig) -> Result<()> {
     match storage.backend {
-        StorageBackend::Memory | StorageBackend::Sqlite => {}
-        StorageBackend::MySql | StorageBackend::Postgres => bail!(
-            "storage.backend = {} is recognized for new-api compatibility but is not implemented yet in halolake-control-api",
-            storage_backend_name(storage.backend)
-        ),
+        StorageBackend::Memory
+        | StorageBackend::Sqlite
+        | StorageBackend::MySql
+        | StorageBackend::Postgres => {}
     }
     if let Some(log_backend) = storage.log_backend
         && log_backend != LogStorageBackend::Memory
@@ -8216,14 +8280,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_recognized_unimplemented_storage_backends() {
+    fn model_status_only_payload_deserializes_without_model_name() {
+        // Frontend enable/disable: PUT /api/models/?status_only=true {id, status}
+        let model: crate::catalog::ModelRecord =
+            serde_json::from_str(r#"{"id":1,"status":0}"#).expect("status_only body");
+        assert_eq!(model.id, 1);
+        assert_eq!(model.status, 0);
+        assert!(model.model_name.is_empty());
+    }
+
+    #[test]
+    fn model_update_query_defaults_status_only_false() {
+        let query: ModelUpdateQuery = serde_json::from_str("{}").expect("empty");
+        assert!(!query.status_only);
+        let query: ModelUpdateQuery =
+            serde_json::from_str(r#"{"status_only":true}"#).expect("flag");
+        assert!(query.status_only);
+    }
+
+    #[test]
+    fn accepts_postgres_and_mysql_main_backend_and_rejects_clickhouse_log() {
         let storage = StorageConfig {
             backend: StorageBackend::Postgres,
+            database_url: Some("postgres://localhost/halolake".into()),
             ..StorageConfig::default()
         };
-        let err = ensure_supported_storage_backend(&storage)
-            .expect_err("postgres should be recognized but not implemented yet");
-        assert!(err.to_string().contains("not implemented yet"), "{err}");
+        ensure_supported_storage_backend(&storage).expect("postgres main store is supported");
+
+        let storage = StorageConfig {
+            backend: StorageBackend::MySql,
+            database_url: Some("mysql://localhost/halolake".into()),
+            ..StorageConfig::default()
+        };
+        ensure_supported_storage_backend(&storage).expect("mysql main store is supported");
 
         let storage = StorageConfig {
             log_backend: Some(LogStorageBackend::ClickHouse),
@@ -8235,6 +8324,18 @@ mod tests {
             err.to_string()
                 .contains("separate log storage is not implemented yet"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn normalizes_go_style_mysql_dsn() {
+        assert_eq!(
+            normalize_mysql_url("user:pass@tcp(127.0.0.1:3306)/oneapi"),
+            "mysql://user:pass@127.0.0.1:3306/oneapi"
+        );
+        assert_eq!(
+            normalize_mysql_url("mysql://user:pass@127.0.0.1:3306/oneapi"),
+            "mysql://user:pass@127.0.0.1:3306/oneapi"
         );
     }
 }

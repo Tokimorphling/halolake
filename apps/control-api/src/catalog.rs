@@ -9,7 +9,9 @@ use halolake_domain::{ChannelRecord, PageRequest, PageResult, STATUS_ENABLED, Se
 use serde::{Deserialize, Serialize};
 use service_async::Service;
 use sqlx::{
-    Row, SqlitePool, Transaction,
+    MySqlPool, PgPool, Row, SqlitePool, Transaction,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
@@ -188,6 +190,8 @@ pub(crate) struct VendorModelCountsRequest;
 pub(crate) enum CatalogStore {
     Memory(MemoryCatalogStore),
     Sqlite(SqliteCatalogStore),
+    MySql(MySqlCatalogStore),
+    Postgres(PostgresCatalogStore),
 }
 
 impl CatalogStore {
@@ -199,10 +203,20 @@ impl CatalogStore {
         Ok(Self::Sqlite(SqliteCatalogStore::connect(url, seed).await?))
     }
 
+    pub(crate) async fn mysql(url: &str, seed: CatalogData) -> Result<Self, ManagementError> {
+        Ok(Self::MySql(MySqlCatalogStore::connect(url, seed).await?))
+    }
+
+    pub(crate) async fn postgres(url: &str, seed: CatalogData) -> Result<Self, ManagementError> {
+        Ok(Self::Postgres(PostgresCatalogStore::connect(url, seed).await?))
+    }
+
     pub(crate) fn current_data(&self) -> Result<CatalogData, ManagementError> {
         match self {
             Self::Memory(store) => store.current_data(),
             Self::Sqlite(store) => store.current_data(),
+            Self::MySql(store) => store.current_data(),
+            Self::Postgres(store) => store.current_data(),
         }
     }
 }
@@ -248,6 +262,8 @@ macro_rules! impl_catalog_service {
                 match self {
                     Self::Memory(store) => store.call(req).await,
                     Self::Sqlite(store) => store.call(req).await,
+                    Self::MySql(store) => store.call(req).await,
+                    Self::Postgres(store) => store.call(req).await,
                 }
             }
         }
@@ -600,12 +616,52 @@ macro_rules! impl_sqlite_read_service {
                 self.memory.call(req).await
             }
         }
+
+        impl Service<$req> for MySqlCatalogStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                self.memory.call(req).await
+            }
+        }
+
+        impl Service<$req> for PostgresCatalogStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                self.memory.call(req).await
+            }
+        }
     };
 }
 
 macro_rules! impl_sqlite_write_service {
     ($req:ty, $resp:ty) => {
         impl Service<$req> for SqliteCatalogStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                let resp = self.memory.call(req).await?;
+                self.persist().await?;
+                Ok(resp)
+            }
+        }
+
+        impl Service<$req> for MySqlCatalogStore {
+            type Response = $resp;
+            type Error = ManagementError;
+
+            async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
+                let resp = self.memory.call(req).await?;
+                self.persist().await?;
+                Ok(resp)
+            }
+        }
+
+        impl Service<$req> for PostgresCatalogStore {
             type Response = $resp;
             type Error = ManagementError;
 
@@ -632,6 +688,255 @@ impl_sqlite_write_service!(DeleteVendorRequest, ());
 impl_sqlite_write_service!(CreateModelRequest, ModelRecord);
 impl_sqlite_write_service!(UpdateModelRequest, ModelRecord);
 impl_sqlite_write_service!(DeleteModelRequest, ());
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct MySqlCatalogStore {
+    pool: MySqlPool,
+    memory: MemoryCatalogStore,
+}
+
+impl MySqlCatalogStore {
+    async fn connect(url: &str, seed: CatalogData) -> Result<Self, ManagementError> {
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(storage_err)?;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_catalog_mysql(&pool).await?;
+
+        let data = if catalog_is_empty_mysql(&pool).await? {
+            save_catalog_mysql(&pool, &seed).await?;
+            seed
+        } else {
+            load_catalog_mysql(&pool).await?
+        };
+
+        Ok(Self {
+            pool,
+            memory: MemoryCatalogStore::new(data),
+        })
+    }
+
+    fn current_data(&self) -> Result<CatalogData, ManagementError> {
+        self.memory.current_data()
+    }
+
+    async fn persist(&self) -> Result<(), ManagementError> {
+        let data = self.memory.current_data()?;
+        save_catalog_mysql(&self.pool, &data).await
+    }
+}
+
+
+
+
+
+
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct PostgresCatalogStore {
+    pool: PgPool,
+    memory: MemoryCatalogStore,
+}
+
+impl PostgresCatalogStore {
+    async fn connect(url: &str, seed: CatalogData) -> Result<Self, ManagementError> {
+        let options = PgConnectOptions::from_str(url).map_err(storage_err)?;
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_catalog_pg(&pool).await?;
+        let data = if catalog_is_empty_pg(&pool).await? {
+            save_catalog_pg(&pool, &seed).await?;
+            seed
+        } else {
+            load_catalog_pg(&pool).await?
+        };
+        Ok(Self {
+            pool,
+            memory: MemoryCatalogStore::new(data),
+        })
+    }
+
+    fn current_data(&self) -> Result<CatalogData, ManagementError> {
+        self.memory.current_data()
+    }
+
+    async fn persist(&self) -> Result<(), ManagementError> {
+        let data = self.memory.current_data()?;
+        save_catalog_pg(&self.pool, &data).await
+    }
+}
+
+async fn migrate_catalog_pg(pool: &PgPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS vendors (
+            id BIGINT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            icon TEXT NOT NULL DEFAULT '',
+            status INTEGER NOT NULL DEFAULT 1,
+            created_time BIGINT NOT NULL DEFAULT 0,
+            updated_time BIGINT NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS models (
+            id BIGINT PRIMARY KEY,
+            model_name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            icon TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '',
+            vendor_id BIGINT NOT NULL DEFAULT 0,
+            endpoints TEXT NOT NULL DEFAULT '',
+            status INTEGER NOT NULL DEFAULT 1,
+            sync_official INTEGER NOT NULL DEFAULT 1,
+            created_time BIGINT NOT NULL DEFAULT 0,
+            updated_time BIGINT NOT NULL DEFAULT 0,
+            name_rule INTEGER NOT NULL DEFAULT 0
+        )",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
+async fn catalog_is_empty_pg(pool: &PgPool) -> Result<bool, ManagementError> {
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM models")
+        .fetch_one(pool)
+        .await
+        .map_err(storage_err)?;
+    Ok(row.try_get::<i64, _>("count").map_err(storage_err)? == 0)
+}
+
+async fn load_catalog_pg(pool: &PgPool) -> Result<CatalogData, ManagementError> {
+    let vendors = sqlx::query(
+        "SELECT id, name, description, icon, status, created_time, updated_time
+         FROM vendors ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(VendorRecord {
+            id: pg_u64_col(&row, "id")?,
+            name: pg_string_col(&row, "name")?,
+            description: pg_string_col(&row, "description")?,
+            icon: pg_string_col(&row, "icon")?,
+            status: pg_i32_col(&row, "status")?,
+            created_time: pg_i64_col(&row, "created_time")?,
+            updated_time: pg_i64_col(&row, "updated_time")?,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    let models = sqlx::query(
+        "SELECT id, model_name, description, icon, tags, vendor_id, endpoints, status,
+            sync_official, created_time, updated_time, name_rule
+         FROM models ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(ModelRecord {
+            id: pg_u64_col(&row, "id")?,
+            model_name: pg_string_col(&row, "model_name")?,
+            description: pg_string_col(&row, "description")?,
+            icon: pg_string_col(&row, "icon")?,
+            tags: pg_string_col(&row, "tags")?,
+            vendor_id: pg_u64_col(&row, "vendor_id")?,
+            endpoints: pg_string_col(&row, "endpoints")?,
+            status: pg_i32_col(&row, "status")?,
+            sync_official: pg_i32_col(&row, "sync_official")?,
+            created_time: pg_i64_col(&row, "created_time")?,
+            updated_time: pg_i64_col(&row, "updated_time")?,
+            bound_channels: Vec::new(),
+            enable_groups: Vec::new(),
+            quota_types: Vec::new(),
+            name_rule: pg_i32_col(&row, "name_rule")?,
+            matched_models: Vec::new(),
+            matched_count: 0,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    Ok(CatalogData { vendors, models })
+}
+
+async fn save_catalog_pg(pool: &PgPool, data: &CatalogData) -> Result<(), ManagementError> {
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query("DELETE FROM models")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    sqlx::query("DELETE FROM vendors")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    for vendor in &data.vendors {
+        sqlx::query(
+            "INSERT INTO vendors (id, name, description, icon, status, created_time, updated_time)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(vendor.id as i64)
+        .bind(&vendor.name)
+        .bind(&vendor.description)
+        .bind(&vendor.icon)
+        .bind(vendor.status as i32)
+        .bind(vendor.created_time)
+        .bind(vendor.updated_time)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    for model in &data.models {
+        sqlx::query(
+            "INSERT INTO models (
+                id, model_name, description, icon, tags, vendor_id, endpoints, status,
+                sync_official, created_time, updated_time, name_rule
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+        )
+        .bind(model.id as i64)
+        .bind(&model.model_name)
+        .bind(&model.description)
+        .bind(&model.icon)
+        .bind(&model.tags)
+        .bind(model.vendor_id as i64)
+        .bind(&model.endpoints)
+        .bind(model.status as i32)
+        .bind(model.sync_official as i32)
+        .bind(model.created_time)
+        .bind(model.updated_time)
+        .bind(model.name_rule as i32)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    tx.commit().await.map_err(storage_err)
+}
+
+fn pg_string_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+fn pg_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+fn pg_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<u64, ManagementError> {
+    pg_i64_col(row, name).map(|v| v.max(0) as u64)
+}
+fn pg_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i32, ManagementError> {
+    if let Ok(v) = row.try_get::<i32, _>(name) {
+        return Ok(v);
+    }
+    pg_i64_col(row, name).map(|v| v as i32)
+}
 
 pub(crate) fn enrich_models(models: &mut [ModelRecord], management: &ManagementData) {
     let all_models = enabled_model_names(management);
@@ -721,7 +1026,46 @@ async fn migrate_catalog(pool: &SqlitePool) -> Result<(), ManagementError> {
     Ok(())
 }
 
+async fn migrate_catalog_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS vendors (
+            id BIGINT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            icon TEXT NOT NULL DEFAULT '',
+            status INTEGER NOT NULL DEFAULT 1,
+            created_time BIGINT NOT NULL DEFAULT 0,
+            updated_time INTEGER NOT NULL DEFAULT 0
+        )",
+        "CREATE TABLE IF NOT EXISTS models (
+            id BIGINT PRIMARY KEY,
+            model_name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            icon TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '',
+            vendor_id INTEGER NOT NULL DEFAULT 0,
+            endpoints TEXT NOT NULL DEFAULT '',
+            status INTEGER NOT NULL DEFAULT 1,
+            sync_official INTEGER NOT NULL DEFAULT 1,
+            created_time BIGINT NOT NULL DEFAULT 0,
+            updated_time INTEGER NOT NULL DEFAULT 0,
+            name_rule INTEGER NOT NULL DEFAULT 0
+        )",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
 async fn catalog_is_empty(pool: &SqlitePool) -> Result<bool, ManagementError> {
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM models")
+        .fetch_one(pool)
+        .await
+        .map_err(storage_err)?;
+    Ok(row.try_get::<i64, _>("count").map_err(storage_err)? == 0)
+}
+
+async fn catalog_is_empty_mysql(pool: &MySqlPool) -> Result<bool, ManagementError> {
     let row = sqlx::query("SELECT COUNT(*) AS count FROM models")
         .fetch_one(pool)
         .await
@@ -786,9 +1130,120 @@ async fn load_catalog(pool: &SqlitePool) -> Result<CatalogData, ManagementError>
     Ok(CatalogData { vendors, models })
 }
 
+async fn load_catalog_mysql(pool: &MySqlPool) -> Result<CatalogData, ManagementError> {
+    let vendors = sqlx::query(
+        "SELECT id, name, description, icon, status, created_time, updated_time
+         FROM vendors ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(VendorRecord {
+            id: u64_col_mysql(&row, "id")?,
+            name: string_col_mysql(&row, "name")?,
+            description: string_col_mysql(&row, "description")?,
+            icon: string_col_mysql(&row, "icon")?,
+            status: i32_col_mysql(&row, "status")?,
+            created_time: i64_col_mysql(&row, "created_time")?,
+            updated_time: i64_col_mysql(&row, "updated_time")?,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    let models = sqlx::query(
+        "SELECT id, model_name, description, icon, tags, vendor_id, endpoints, status,
+            sync_official, created_time, updated_time, name_rule
+         FROM models ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(ModelRecord {
+            id: u64_col_mysql(&row, "id")?,
+            model_name: string_col_mysql(&row, "model_name")?,
+            description: string_col_mysql(&row, "description")?,
+            icon: string_col_mysql(&row, "icon")?,
+            tags: string_col_mysql(&row, "tags")?,
+            vendor_id: u64_col_mysql(&row, "vendor_id")?,
+            endpoints: string_col_mysql(&row, "endpoints")?,
+            status: i32_col_mysql(&row, "status")?,
+            sync_official: i32_col_mysql(&row, "sync_official")?,
+            created_time: i64_col_mysql(&row, "created_time")?,
+            updated_time: i64_col_mysql(&row, "updated_time")?,
+            bound_channels: Vec::new(),
+            enable_groups: Vec::new(),
+            quota_types: Vec::new(),
+            name_rule: i32_col_mysql(&row, "name_rule")?,
+            matched_models: Vec::new(),
+            matched_count: 0,
+        })
+    })
+    .collect::<Result<Vec<_>, ManagementError>>()?;
+
+    Ok(CatalogData { vendors, models })
+}
+
 async fn save_catalog(pool: &SqlitePool, data: &CatalogData) -> Result<(), ManagementError> {
     let mut tx = pool.begin().await.map_err(storage_err)?;
     save_catalog_tx(&mut tx, data).await?;
+    tx.commit().await.map_err(storage_err)
+}
+
+async fn save_catalog_mysql(pool: &MySqlPool, data: &CatalogData) -> Result<(), ManagementError> {
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query("DELETE FROM models")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    sqlx::query("DELETE FROM vendors")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+
+    for vendor in &data.vendors {
+        sqlx::query(
+            "INSERT INTO vendors (id, name, description, icon, status, created_time, updated_time)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(vendor.id as i64)
+        .bind(&vendor.name)
+        .bind(&vendor.description)
+        .bind(&vendor.icon)
+        .bind(vendor.status as i64)
+        .bind(vendor.created_time)
+        .bind(vendor.updated_time)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+
+    for model in &data.models {
+        sqlx::query(
+            "INSERT INTO models (
+                id, model_name, description, icon, tags, vendor_id, endpoints, status,
+                sync_official, created_time, updated_time, name_rule
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(model.id as i64)
+        .bind(&model.model_name)
+        .bind(&model.description)
+        .bind(&model.icon)
+        .bind(&model.tags)
+        .bind(model.vendor_id as i64)
+        .bind(&model.endpoints)
+        .bind(model.status as i64)
+        .bind(model.sync_official as i64)
+        .bind(model.created_time)
+        .bind(model.updated_time)
+        .bind(model.name_rule as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
     tx.commit().await.map_err(storage_err)
 }
 
@@ -970,7 +1425,15 @@ fn string_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, Manag
     row.try_get::<String, _>(name).map_err(storage_err)
 }
 
+fn string_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+
 fn i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+
+fn i64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i64, ManagementError> {
     row.try_get::<i64, _>(name).map_err(storage_err)
 }
 
@@ -978,8 +1441,16 @@ fn u64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<u64, ManagementE
     i64_col(row, name).map(|value| value.max(0) as u64)
 }
 
+fn u64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<u64, ManagementError> {
+    i64_col_mysql(row, name).map(|value| value.max(0) as u64)
+}
+
 fn i32_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i32, ManagementError> {
     i64_col(row, name).map(|value| value as i32)
+}
+
+fn i32_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i32, ManagementError> {
+    i64_col_mysql(row, name).map(|value| value as i32)
 }
 
 fn storage_err(err: impl std::fmt::Display) -> ManagementError {

@@ -108,9 +108,9 @@ control-api 当前注册的 `/api` 路由集中在 `apps/control-api/src/lib.rs`
 - 首页/setup/login/self/token/channel/log/data 等核心后台可部分打开
 - 支付、订阅、deployment、OAuth、异步任务相关页面会直接失败
 
-### P1: model 启停接口有 route，但前端真实请求会 422
+### 已修复: model/token 启停 `status_only`
 
-前端只发送：
+前端发送：
 
 ```json
 { "id": 1, "status": 0 }
@@ -120,27 +120,14 @@ control-api 当前注册的 `/api` 路由集中在 `apps/control-api/src/lib.rs`
 
 ```http
 PUT /api/models/?status_only=true
+PUT /api/token/?status_only=true
 ```
 
-相关位置：
+当前：
 
-- `web/new-api/default/src/features/models/api.ts`
-- `web/new-api/classic/src/hooks/models/useModelsData.jsx`
-
-后端 handler 先按完整 `ModelRecord` 反序列化：
-
-- `apps/control-api/src/lib.rs`：`update_model_meta`
-- `apps/control-api/src/catalog.rs`：`ModelRecord.model_name` 为必填字段
-
-实测返回：
-
-```text
-HTTP/1.1 422 Unprocessable Entity
-Failed to deserialize the JSON body into the target type: missing field `model_name`
-```
-
-这会直接破坏模型列表里的 enable/disable 操作。
-注意：service 层已经支持 `status_only`，问题在 HTTP adapter 的反序列化形状。
+- `ModelRecord.model_name` 带 `#[serde(default)]`，`{id,status}` 可反序列化
+- token update 识别 `status_only`，不会用默认值覆盖 `remain_quota`/`expired_time`
+- 单元测试覆盖 status_only payload / query
 
 ### P1: 还不是可替换 new-api 的持久化/运维后端
 
@@ -150,10 +137,16 @@ Failed to deserialize the JSON body into the target type: missing field `model_n
 - SQLite 可用
 - 配置层可识别 new-api 风格 `SQL_DSN` / `LOG_SQL_DSN` / `SQLITE_PATH`
 
+已补：
+
+- Postgres 主库 Stage 1：management / options / usage / prefill
+- prefill_group 持久化（不再是进程内 OnceLock）
+
 仍缺：
 
-- Postgres/MySQL 实际 store
-- 完整 new-api schema 迁移
+- Postgres 上 catalog/billing/security/checkin/system_* 仍回退内存
+- MySQL 实际 store
+- 完整 new-api schema 迁移 / abilities 表
 - session 持久化 / 过期清理
 - session secret 签名或等价安全策略
 
@@ -230,10 +223,10 @@ rsync -a --delete \
 - deployment 管理
 - MJ / task 异步日志与后台
 - performance 管理接口
-- prefill group
-- authz catalog
-- Postgres/MySQL
+- authz catalog（仅静态兼容返回）
+- Postgres 其余 store / MySQL
 - 生产级 session / 审计 / 细粒度权限
+- 在线支付 / OAuth / subscription / deployment（仍为 stub）
 
 ### 前端本身
 
@@ -243,15 +236,13 @@ rsync -a --delete \
 
 ## 建议优先级
 
-1. 先修已注册但前端不可用的兼容 bug
-   - 尤其是 `PUT /api/models/?status_only=true`
-2. 按 frontend 高频页面补齐最小 API 集合
-   - login/self/token/channel/log/data/options/catalog/redemption
+1. ~~`status_only` 422~~ 已修
+2. 补齐 Postgres 剩余 store（catalog/billing/security/checkin/system_*）
 3. 明确“当前目标是否包含支付/订阅/deployment/OAuth”
    - 若不包含，建议前端临时隐藏对应入口
 4. 再做生产化
    - session 安全与持久化
-   - Postgres/MySQL
+   - MySQL / 行级 SQL（替代全量 dump）
    - 审计与细粒度 authz
 
 ## 参考命令

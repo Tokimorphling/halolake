@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
 use sqlx::{
-    Row, SqlitePool,
+    MySqlPool, PgPool, Row, SqlitePool,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tracing::warn;
@@ -171,6 +173,8 @@ struct LogCleanupResult {
 pub(crate) enum SystemTaskStore {
     Memory(MemorySystemTaskStore),
     Sqlite(SqliteSystemTaskStore),
+    MySql(MySqlSystemTaskStore),
+    Postgres(PostgresSystemTaskStore),
 }
 
 impl SystemTaskStore {
@@ -180,6 +184,14 @@ impl SystemTaskStore {
 
     pub(crate) async fn sqlite(url: &str) -> Result<Self, ManagementError> {
         Ok(Self::Sqlite(SqliteSystemTaskStore::connect(url).await?))
+    }
+
+    pub(crate) async fn mysql(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::MySql(MySqlSystemTaskStore::connect(url).await?))
+    }
+
+    pub(crate) async fn postgres(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::Postgres(PostgresSystemTaskStore::connect(url).await?))
     }
 }
 
@@ -216,6 +228,8 @@ impl Service<StartLogCleanupTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -228,6 +242,8 @@ impl Service<StartSystemTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -240,6 +256,8 @@ impl Service<EnqueueSystemTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -252,6 +270,8 @@ impl Service<GetCurrentSystemTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -264,6 +284,8 @@ impl Service<GetSystemTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -276,6 +298,8 @@ impl Service<ListSystemTasksRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -288,6 +312,8 @@ impl Service<ClaimSystemTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -300,6 +326,8 @@ impl Service<UpdateSystemTaskStateRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -312,6 +340,8 @@ impl Service<FinishSystemTaskRequest> for SystemTaskStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -677,6 +707,326 @@ impl Service<FinishSystemTaskRequest> for SqliteSystemTaskStore {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MySqlSystemTaskStore {
+    pool: MySqlPool,
+    memory: MemorySystemTaskStore,
+}
+
+impl MySqlSystemTaskStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(storage_err)?;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_system_tasks_mysql(&pool).await?;
+        let tasks = load_system_tasks_mysql(&pool).await?;
+        Ok(Self {
+            pool,
+            memory: MemorySystemTaskStore::from_tasks(tasks),
+        })
+    }
+
+    async fn persist_task(&self, task: &SystemTaskRecord) -> Result<(), ManagementError> {
+        sqlx::query(
+            "INSERT INTO system_tasks (
+                id, task_id, task_type, status, active_key, payload, state, result,
+                error, locked_by, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE task_type = VALUES(task_type),
+                status = VALUES(status),
+                active_key = VALUES(active_key),
+                payload = VALUES(payload),
+                state = VALUES(state),
+                result = VALUES(result),
+                error = VALUES(error),
+                locked_by = VALUES(locked_by),
+                updated_at = VALUES(updated_at)",
+        )
+        .bind(task.id)
+        .bind(&task.task_id)
+        .bind(&task.task_type)
+        .bind(task.status.as_str())
+        .bind(&task.active_key)
+        .bind(json_text(&task.payload)?)
+        .bind(json_text(&task.state)?)
+        .bind(json_text(&task.result)?)
+        .bind(&task.error)
+        .bind(&task.locked_by)
+        .bind(task.created_at)
+        .bind(task.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(storage_err)?;
+        Ok(())
+    }
+}
+
+impl Service<StartLogCleanupTaskRequest> for MySqlSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: StartLogCleanupTaskRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        self.persist_task(&task).await?;
+        Ok(task)
+    }
+}
+
+impl Service<StartSystemTaskRequest> for MySqlSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: StartSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        Ok(self
+            .call(EnqueueSystemTaskRequest {
+                task_type: req.task_type,
+                payload: req.payload,
+                state: req.state,
+            })
+            .await?
+            .task)
+    }
+}
+
+impl Service<EnqueueSystemTaskRequest> for MySqlSystemTaskStore {
+    type Response = EnqueueSystemTaskResponse;
+    type Error = ManagementError;
+
+    async fn call(&self, req: EnqueueSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        let response = self.memory.call(req).await?;
+        if response.created {
+            self.persist_task(&response.task).await?;
+        }
+        Ok(response)
+    }
+}
+
+impl Service<GetCurrentSystemTaskRequest> for MySqlSystemTaskStore {
+    type Response = Option<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: GetCurrentSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<GetSystemTaskRequest> for MySqlSystemTaskStore {
+    type Response = Option<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: GetSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<ListSystemTasksRequest> for MySqlSystemTaskStore {
+    type Response = Vec<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: ListSystemTasksRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<ClaimSystemTaskRequest> for MySqlSystemTaskStore {
+    type Response = Option<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: ClaimSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        if let Some(task) = &task {
+            self.persist_task(task).await?;
+        }
+        Ok(task)
+    }
+}
+
+impl Service<UpdateSystemTaskStateRequest> for MySqlSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: UpdateSystemTaskStateRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        self.persist_task(&task).await?;
+        Ok(task)
+    }
+}
+
+impl Service<FinishSystemTaskRequest> for MySqlSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: FinishSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        self.persist_task(&task).await?;
+        Ok(task)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PostgresSystemTaskStore {
+    pool: PgPool,
+    memory: MemorySystemTaskStore,
+}
+
+impl PostgresSystemTaskStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = PgConnectOptions::from_str(url).map_err(storage_err)?;
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_system_tasks_pg(&pool).await?;
+        let tasks = load_system_tasks_pg(&pool).await?;
+        Ok(Self {
+            pool,
+            memory: MemorySystemTaskStore::from_tasks(tasks),
+        })
+    }
+
+    async fn persist_task(&self, task: &SystemTaskRecord) -> Result<(), ManagementError> {
+        sqlx::query(
+            "INSERT INTO system_tasks (
+                id, task_id, task_type, status, active_key, payload, state, result,
+                error, locked_by, created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             ON CONFLICT(task_id) DO UPDATE SET
+                task_type = excluded.task_type,
+                status = excluded.status,
+                active_key = excluded.active_key,
+                payload = excluded.payload,
+                state = excluded.state,
+                result = excluded.result,
+                error = excluded.error,
+                locked_by = excluded.locked_by,
+                updated_at = excluded.updated_at",
+        )
+        .bind(task.id)
+        .bind(&task.task_id)
+        .bind(&task.task_type)
+        .bind(task.status.as_str())
+        .bind(&task.active_key)
+        .bind(json_text(&task.payload)?)
+        .bind(json_text(&task.state)?)
+        .bind(json_text(&task.result)?)
+        .bind(&task.error)
+        .bind(&task.locked_by)
+        .bind(task.created_at)
+        .bind(task.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(storage_err)?;
+        Ok(())
+    }
+}
+
+impl Service<StartLogCleanupTaskRequest> for PostgresSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: StartLogCleanupTaskRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        self.persist_task(&task).await?;
+        Ok(task)
+    }
+}
+
+impl Service<StartSystemTaskRequest> for PostgresSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: StartSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        Ok(self
+            .call(EnqueueSystemTaskRequest {
+                task_type: req.task_type,
+                payload: req.payload,
+                state: req.state,
+            })
+            .await?
+            .task)
+    }
+}
+
+impl Service<EnqueueSystemTaskRequest> for PostgresSystemTaskStore {
+    type Response = EnqueueSystemTaskResponse;
+    type Error = ManagementError;
+
+    async fn call(&self, req: EnqueueSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        let response = self.memory.call(req).await?;
+        if response.created {
+            self.persist_task(&response.task).await?;
+        }
+        Ok(response)
+    }
+}
+
+impl Service<GetCurrentSystemTaskRequest> for PostgresSystemTaskStore {
+    type Response = Option<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: GetCurrentSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<GetSystemTaskRequest> for PostgresSystemTaskStore {
+    type Response = Option<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: GetSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<ListSystemTasksRequest> for PostgresSystemTaskStore {
+    type Response = Vec<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: ListSystemTasksRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<ClaimSystemTaskRequest> for PostgresSystemTaskStore {
+    type Response = Option<SystemTaskRecord>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: ClaimSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        if let Some(task) = &task {
+            self.persist_task(task).await?;
+        }
+        Ok(task)
+    }
+}
+
+impl Service<UpdateSystemTaskStateRequest> for PostgresSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: UpdateSystemTaskStateRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        self.persist_task(&task).await?;
+        Ok(task)
+    }
+}
+
+impl Service<FinishSystemTaskRequest> for PostgresSystemTaskStore {
+    type Response = SystemTaskRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: FinishSystemTaskRequest) -> Result<Self::Response, Self::Error> {
+        let task = self.memory.call(req).await?;
+        self.persist_task(&task).await?;
+        Ok(task)
+    }
+}
+
 pub(crate) fn spawn_log_cleanup_task(
     tasks: SystemTaskStore,
     usage_events: UsageStore,
@@ -908,6 +1258,30 @@ async fn migrate_system_tasks(pool: &SqlitePool) -> Result<(), ManagementError> 
     Ok(())
 }
 
+async fn migrate_system_tasks_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS system_tasks (
+            id BIGINT PRIMARY KEY,
+            task_id TEXT NOT NULL UNIQUE,
+            task_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            active_key TEXT UNIQUE,
+            payload TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT '',
+            result TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '',
+            locked_by TEXT NOT NULL DEFAULT '',
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_updated_at ON system_tasks(updated_at)",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
 async fn load_system_tasks(pool: &SqlitePool) -> Result<Vec<SystemTaskRecord>, ManagementError> {
     sqlx::query(
         "SELECT id, task_id, task_type, status, active_key, payload, state, result,
@@ -920,18 +1294,100 @@ async fn load_system_tasks(pool: &SqlitePool) -> Result<Vec<SystemTaskRecord>, M
     .into_iter()
     .map(|row| {
         Ok(SystemTaskRecord {
-            id: i64_col(&row, "id")?,
-            task_id: string_col(&row, "task_id")?,
-            task_type: string_col(&row, "task_type")?,
-            status: SystemTaskStatus::from_str(&string_col(&row, "status")?)?,
-            active_key: opt_string_col(&row, "active_key")?,
-            payload: json_col(&row, "payload")?,
-            state: json_col(&row, "state")?,
-            result: json_col(&row, "result")?,
-            error: string_col(&row, "error")?,
-            locked_by: string_col(&row, "locked_by")?,
-            created_at: i64_col(&row, "created_at")?,
-            updated_at: i64_col(&row, "updated_at")?,
+            id: i64_col_sqlite(&row, "id")?,
+            task_id: string_col_sqlite(&row, "task_id")?,
+            task_type: string_col_sqlite(&row, "task_type")?,
+            status: SystemTaskStatus::from_str(&string_col_sqlite(&row, "status")?)?,
+            active_key: opt_string_col_sqlite(&row, "active_key")?,
+            payload: json_col_sqlite(&row, "payload")?,
+            state: json_col_sqlite(&row, "state")?,
+            result: json_col_sqlite(&row, "result")?,
+            error: string_col_sqlite(&row, "error")?,
+            locked_by: string_col_sqlite(&row, "locked_by")?,
+            created_at: i64_col_sqlite(&row, "created_at")?,
+            updated_at: i64_col_sqlite(&row, "updated_at")?,
+        })
+    })
+    .collect()
+}
+
+async fn load_system_tasks_mysql(pool: &MySqlPool) -> Result<Vec<SystemTaskRecord>, ManagementError> {
+    sqlx::query(
+        "SELECT id, task_id, task_type, status, active_key, payload, state, result,
+            error, locked_by, created_at, updated_at
+         FROM system_tasks ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(SystemTaskRecord {
+            id: i64_col_mysql(&row, "id")?,
+            task_id: string_col_mysql(&row, "task_id")?,
+            task_type: string_col_mysql(&row, "task_type")?,
+            status: SystemTaskStatus::from_str(&string_col_mysql(&row, "status")?)?,
+            active_key: opt_string_col_mysql(&row, "active_key")?,
+            payload: json_col_mysql(&row, "payload")?,
+            state: json_col_mysql(&row, "state")?,
+            result: json_col_mysql(&row, "result")?,
+            error: string_col_mysql(&row, "error")?,
+            locked_by: string_col_mysql(&row, "locked_by")?,
+            created_at: i64_col_mysql(&row, "created_at")?,
+            updated_at: i64_col_mysql(&row, "updated_at")?,
+        })
+    })
+    .collect()
+}
+
+async fn migrate_system_tasks_pg(pool: &PgPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS system_tasks (
+            id BIGINT PRIMARY KEY,
+            task_id TEXT NOT NULL UNIQUE,
+            task_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            active_key TEXT UNIQUE,
+            payload TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT '',
+            result TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '',
+            locked_by TEXT NOT NULL DEFAULT '',
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_type_status ON system_tasks(task_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_system_tasks_updated_at ON system_tasks(updated_at)",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
+async fn load_system_tasks_pg(pool: &PgPool) -> Result<Vec<SystemTaskRecord>, ManagementError> {
+    sqlx::query(
+        "SELECT id, task_id, task_type, status, active_key, payload, state, result,
+            error, locked_by, created_at, updated_at
+         FROM system_tasks ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(SystemTaskRecord {
+            id: i64_col_pg(&row, "id")?,
+            task_id: string_col_pg(&row, "task_id")?,
+            task_type: string_col_pg(&row, "task_type")?,
+            status: SystemTaskStatus::from_str(&string_col_pg(&row, "status")?)?,
+            active_key: opt_string_col_pg(&row, "active_key")?,
+            payload: json_col_pg(&row, "payload")?,
+            state: json_col_pg(&row, "state")?,
+            result: json_col_pg(&row, "result")?,
+            error: string_col_pg(&row, "error")?,
+            locked_by: string_col_pg(&row, "locked_by")?,
+            created_at: i64_col_pg(&row, "created_at")?,
+            updated_at: i64_col_pg(&row, "updated_at")?,
         })
     })
     .collect()
@@ -946,11 +1402,11 @@ fn json_text(value: &Option<JsonValue>) -> Result<String, ManagementError> {
         .map_err(storage_err)
 }
 
-fn json_col(
+fn json_col_sqlite(
     row: &sqlx::sqlite::SqliteRow,
     name: &str,
 ) -> Result<Option<JsonValue>, ManagementError> {
-    let raw = string_col(row, name)?;
+    let raw = string_col_sqlite(row, name)?;
     if raw.is_empty() {
         return Ok(None);
     }
@@ -959,18 +1415,74 @@ fn json_col(
         .map_err(|err| ManagementError::Storage(format!("invalid system task JSON {name}: {err}")))
 }
 
-fn string_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, ManagementError> {
+fn string_col_sqlite(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, ManagementError> {
     row.try_get::<String, _>(name).map_err(storage_err)
 }
 
-fn opt_string_col(
+fn opt_string_col_sqlite(
     row: &sqlx::sqlite::SqliteRow,
     name: &str,
 ) -> Result<Option<String>, ManagementError> {
     row.try_get::<Option<String>, _>(name).map_err(storage_err)
 }
 
-fn i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i64, ManagementError> {
+fn i64_col_sqlite(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+
+fn json_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<JsonValue>, ManagementError> {
+    let raw = string_col_mysql(row, name)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|err| ManagementError::Storage(format!("invalid system task JSON {name}: {err}")))
+}
+
+fn string_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+
+fn opt_string_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<String>, ManagementError> {
+    row.try_get::<Option<String>, _>(name).map_err(storage_err)
+}
+
+fn i64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+
+fn json_col_pg(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+) -> Result<Option<JsonValue>, ManagementError> {
+    let raw = string_col_pg(row, name)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|err| ManagementError::Storage(format!("invalid system task JSON {name}: {err}")))
+}
+
+fn string_col_pg(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+
+fn opt_string_col_pg(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+) -> Result<Option<String>, ManagementError> {
+    row.try_get::<Option<String>, _>(name).map_err(storage_err)
+}
+
+fn i64_col_pg(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, ManagementError> {
     row.try_get::<i64, _>(name).map_err(storage_err)
 }
 

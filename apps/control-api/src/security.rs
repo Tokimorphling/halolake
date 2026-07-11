@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    str::FromStr,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -12,7 +13,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use service_async::Service;
 use sha1::Sha1;
 use sqlx::{
-    Row, SqlitePool,
+    MySqlPool, PgPool, Row, SqlitePool,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use uuid::Uuid;
@@ -62,6 +65,8 @@ impl SecurityService {
 pub(crate) enum SecurityStore {
     Memory(MemorySecurityStore),
     Sqlite(SqliteSecurityStore),
+    MySql(MySqlSecurityStore),
+    Postgres(PostgresSecurityStore),
 }
 
 impl SecurityStore {
@@ -73,10 +78,22 @@ impl SecurityStore {
         Ok(Self::Sqlite(SqliteSecurityStore::connect(url).await?))
     }
 
+    pub(crate) async fn mysql(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::MySql(MySqlSecurityStore::connect(url).await?))
+    }
+
+    pub(crate) async fn postgres(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::Postgres(PostgresSecurityStore::connect(url).await?))
+    }
+
     async fn get_two_fa(&self, user_id: u64) -> Result<Option<TwoFaRecord>, SecurityError> {
         match self {
             Self::Memory(store) => store.get_two_fa(user_id),
             Self::Sqlite(store) => store.get_two_fa(user_id).await,
+
+            Self::MySql(store) => store.get_two_fa(user_id).await,
+
+            Self::Postgres(store) => store.get_two_fa(user_id).await,
         }
     }
 
@@ -84,6 +101,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.upsert_two_fa(record),
             Self::Sqlite(store) => store.upsert_two_fa(record).await,
+
+            Self::MySql(store) => store.upsert_two_fa(record).await,
+
+            Self::Postgres(store) => store.upsert_two_fa(record).await,
         }
     }
 
@@ -91,6 +112,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.delete_two_fa(user_id),
             Self::Sqlite(store) => store.delete_two_fa(user_id).await,
+
+            Self::MySql(store) => store.delete_two_fa(user_id).await,
+
+            Self::Postgres(store) => store.delete_two_fa(user_id).await,
         }
     }
 
@@ -103,6 +128,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.replace_backup_codes(user_id, codes, now),
             Self::Sqlite(store) => store.replace_backup_codes(user_id, codes, now).await,
+
+            Self::MySql(store) => store.replace_backup_codes(user_id, codes, now).await,
+
+            Self::Postgres(store) => store.replace_backup_codes(user_id, codes, now).await,
         }
     }
 
@@ -110,6 +139,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.unused_backup_code_count(user_id),
             Self::Sqlite(store) => store.unused_backup_code_count(user_id).await,
+
+            Self::MySql(store) => store.unused_backup_code_count(user_id).await,
+
+            Self::Postgres(store) => store.unused_backup_code_count(user_id).await,
         }
     }
 
@@ -117,6 +150,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.consume_backup_code(user_id, code),
             Self::Sqlite(store) => store.consume_backup_code(user_id, code).await,
+
+            Self::MySql(store) => store.consume_backup_code(user_id, code).await,
+
+            Self::Postgres(store) => store.consume_backup_code(user_id, code).await,
         }
     }
 
@@ -124,6 +161,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.two_fa_stats(total_users),
             Self::Sqlite(store) => store.two_fa_stats(total_users).await,
+
+            Self::MySql(store) => store.two_fa_stats(total_users).await,
+
+            Self::Postgres(store) => store.two_fa_stats(total_users).await,
         }
     }
 
@@ -134,6 +175,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.get_passkey_by_user(user_id),
             Self::Sqlite(store) => store.get_passkey_by_user(user_id).await,
+
+            Self::MySql(store) => store.get_passkey_by_user(user_id).await,
+
+            Self::Postgres(store) => store.get_passkey_by_user(user_id).await,
         }
     }
 
@@ -144,6 +189,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.get_passkey_by_credential_id(credential_id),
             Self::Sqlite(store) => store.get_passkey_by_credential_id(credential_id).await,
+
+            Self::MySql(store) => store.get_passkey_by_credential_id(credential_id).await,
+
+            Self::Postgres(store) => store.get_passkey_by_credential_id(credential_id).await,
         }
     }
 
@@ -151,6 +200,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.upsert_passkey(record),
             Self::Sqlite(store) => store.upsert_passkey(record).await,
+
+            Self::MySql(store) => store.upsert_passkey(record).await,
+
+            Self::Postgres(store) => store.upsert_passkey(record).await,
         }
     }
 
@@ -158,6 +211,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.delete_passkey(user_id),
             Self::Sqlite(store) => store.delete_passkey(user_id).await,
+
+            Self::MySql(store) => store.delete_passkey(user_id).await,
+
+            Self::Postgres(store) => store.delete_passkey(user_id).await,
         }
     }
 
@@ -168,6 +225,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.save_passkey_session(session),
             Self::Sqlite(store) => store.save_passkey_session(session).await,
+
+            Self::MySql(store) => store.save_passkey_session(session).await,
+
+            Self::Postgres(store) => store.save_passkey_session(session).await,
         }
     }
 
@@ -179,6 +240,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.pop_passkey_session(session_id, kind),
             Self::Sqlite(store) => store.pop_passkey_session(session_id, kind).await,
+
+            Self::MySql(store) => store.pop_passkey_session(session_id, kind).await,
+
+            Self::Postgres(store) => store.pop_passkey_session(session_id, kind).await,
         }
     }
 
@@ -186,6 +251,10 @@ impl SecurityStore {
         match self {
             Self::Memory(store) => store.consume_passkey_ready(session_id),
             Self::Sqlite(store) => store.consume_passkey_ready(session_id).await,
+
+            Self::MySql(store) => store.consume_passkey_ready(session_id).await,
+
+            Self::Postgres(store) => store.consume_passkey_ready(session_id).await,
         }
     }
 }
@@ -978,6 +1047,735 @@ impl SqliteSecurityStore {
             return Ok(None);
         };
         let session = passkey_session_from_row(&row)?;
+        if session.expires_at < now_unix() {
+            return Ok(None);
+        }
+        Ok(Some(session))
+    }
+
+    async fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
+        self.pop_passkey_session(session_id, PASSKEY_READY_SESSION)
+            .await
+            .map(|session| session.is_some())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MySqlSecurityStore {
+    pool: MySqlPool,
+}
+
+impl MySqlSecurityStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let store = Self { pool };
+        store.migrate().await?;
+        Ok(store)
+    }
+
+    async fn migrate(&self) -> Result<(), ManagementError> {
+        for sql in [
+            r#"CREATE TABLE IF NOT EXISTS two_fas (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                user_id BIGINT NOT NULL UNIQUE,
+                secret TEXT NOT NULL,
+                is_enabled INTEGER NOT NULL DEFAULT 0,
+                failed_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until BIGINT,
+                last_used_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL DEFAULT 0
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_two_fas_user_id ON two_fas(user_id)",
+            r#"CREATE TABLE IF NOT EXISTS two_fa_backup_codes (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                user_id BIGINT NOT NULL,
+                code_hash TEXT NOT NULL,
+                is_used INTEGER NOT NULL DEFAULT 0,
+                used_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT 0
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON two_fa_backup_codes(user_id)",
+            r#"CREATE TABLE IF NOT EXISTS passkey_credentials (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                user_id BIGINT NOT NULL UNIQUE,
+                user_uuid TEXT NOT NULL,
+                credential_id TEXT NOT NULL UNIQUE,
+                passkey_json TEXT NOT NULL,
+                last_used_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL DEFAULT 0
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id)",
+            r#"CREATE TABLE IF NOT EXISTS passkey_sessions (
+                session_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                user_id BIGINT,
+                expires_at BIGINT NOT NULL,
+                created_at BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY(session_id, kind)
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON passkey_sessions(expires_at)",
+        ] {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn get_two_fa(&self, user_id: u64) -> Result<Option<TwoFaRecord>, SecurityError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, secret, is_enabled, failed_attempts, locked_until,
+                last_used_at, created_at, updated_at
+            FROM two_fas WHERE user_id = ?",
+        )
+        .bind(user_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        row.map(|row| {
+            Ok(TwoFaRecord {
+                id: mysql_u64_col(&row, "id")?,
+                user_id: mysql_u64_col(&row, "user_id")?,
+                secret: mysql_string_col(&row, "secret")?,
+                is_enabled: mysql_bool_col(&row, "is_enabled")?,
+                failed_attempts: mysql_i32_col(&row, "failed_attempts")?,
+                locked_until: optional_mysql_i64_col(&row, "locked_until"),
+                last_used_at: optional_mysql_i64_col(&row, "last_used_at"),
+                created_at: mysql_i64_col(&row, "created_at")?,
+                updated_at: mysql_i64_col(&row, "updated_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn upsert_two_fa(&self, record: TwoFaRecord) -> Result<TwoFaRecord, SecurityError> {
+        sqlx::query(
+            r#"INSERT INTO two_fas
+                (user_id, secret, is_enabled, failed_attempts, locked_until, last_used_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                secret = VALUES(secret),
+                is_enabled = VALUES(is_enabled),
+                failed_attempts = VALUES(failed_attempts),
+                locked_until = VALUES(locked_until),
+                last_used_at = VALUES(last_used_at),
+                updated_at = VALUES(updated_at)"#,
+        )
+        .bind(record.user_id as i64)
+        .bind(&record.secret)
+        .bind(i64::from(record.is_enabled))
+        .bind(i64::from(record.failed_attempts))
+        .bind(record.locked_until)
+        .bind(record.last_used_at)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        self.get_two_fa(record.user_id).await?.ok_or_else(|| {
+            SecurityError::Management(ManagementError::Storage("2FA upsert failed".into()))
+        })
+    }
+
+    async fn delete_two_fa(&self, user_id: u64) -> Result<bool, SecurityError> {
+        let mut tx = self.pool.begin().await.map_err(sqlx_security_error)?;
+        sqlx::query("DELETE FROM two_fa_backup_codes WHERE user_id = ?")
+            .bind(user_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        let result = sqlx::query("DELETE FROM two_fas WHERE user_id = ?")
+            .bind(user_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        tx.commit().await.map_err(sqlx_security_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn replace_backup_codes(
+        &self,
+        user_id: u64,
+        codes: &[String],
+        now: i64,
+    ) -> Result<(), SecurityError> {
+        let mut tx = self.pool.begin().await.map_err(sqlx_security_error)?;
+        sqlx::query("DELETE FROM two_fa_backup_codes WHERE user_id = ?")
+            .bind(user_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        for code in codes {
+            sqlx::query(
+                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, created_at)
+                VALUES (?, ?, 0, NULL, ?)",
+            )
+            .bind(user_id as i64)
+            .bind(hash_backup_code(code)?)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        }
+        tx.commit().await.map_err(sqlx_security_error)?;
+        Ok(())
+    }
+
+    async fn unused_backup_code_count(&self, user_id: u64) -> Result<usize, SecurityError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM two_fa_backup_codes WHERE user_id = ? AND is_used = 0",
+        )
+        .bind(user_id as i64)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        Ok(count.max(0) as usize)
+    }
+
+    async fn consume_backup_code(&self, user_id: u64, code: &str) -> Result<bool, SecurityError> {
+        if !validate_backup_code_format(code) {
+            return Err(SecurityError::business("验证码或备用码不正确"));
+        }
+        let normalized = normalize_backup_code(code);
+        let rows = sqlx::query(
+            "SELECT id, code_hash FROM two_fa_backup_codes WHERE user_id = ? AND is_used = 0",
+        )
+        .bind(user_id as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        for row in rows {
+            let id = mysql_u64_col(&row, "id")?;
+            let code_hash = mysql_string_col(&row, "code_hash")?;
+            if verify(&normalized, &code_hash).unwrap_or(false) {
+                sqlx::query("UPDATE two_fa_backup_codes SET is_used = 1, used_at = ? WHERE id = ?")
+                    .bind(now_unix())
+                    .bind(id as i64)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(sqlx_security_error)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn two_fa_stats(&self, total_users: usize) -> Result<TwoFaStats, SecurityError> {
+        let rows = sqlx::query("SELECT is_enabled, locked_until FROM two_fas")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(sqlx_security_error)?;
+        let records = rows.into_iter().map(|row| TwoFaRecord {
+            id: 0,
+            user_id: 0,
+            secret: String::new(),
+            is_enabled: mysql_bool_col(&row, "is_enabled").unwrap_or(false),
+            failed_attempts: 0,
+            locked_until: optional_mysql_i64_col(&row, "locked_until"),
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+        });
+        Ok(two_fa_stats_from_records(total_users, records))
+    }
+
+    async fn get_passkey_by_user(
+        &self,
+        user_id: u64,
+    ) -> Result<Option<PasskeyRecord>, SecurityError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            FROM passkey_credentials WHERE user_id = ?",
+        )
+        .bind(user_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        row.map(|row| passkey_record_from_mysql_row(&row)).transpose()
+    }
+
+    async fn get_passkey_by_credential_id(
+        &self,
+        credential_id: &str,
+    ) -> Result<Option<PasskeyRecord>, SecurityError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            FROM passkey_credentials WHERE credential_id = ?",
+        )
+        .bind(credential_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        row.map(|row| passkey_record_from_mysql_row(&row)).transpose()
+    }
+
+    async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
+        sqlx::query(
+            r#"INSERT INTO passkey_credentials
+                (user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                user_uuid = VALUES(user_uuid),
+                credential_id = VALUES(credential_id),
+                passkey_json = VALUES(passkey_json),
+                last_used_at = VALUES(last_used_at),
+                updated_at = VALUES(updated_at)"#,
+        )
+        .bind(record.user_id as i64)
+        .bind(record.user_uuid.to_string())
+        .bind(&record.credential_id)
+        .bind(serde_json::to_string(&record.passkey).map_err(serde_security_error)?)
+        .bind(record.last_used_at)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        self.get_passkey_by_user(record.user_id)
+            .await?
+            .ok_or_else(|| {
+                SecurityError::Management(ManagementError::Storage("passkey upsert failed".into()))
+            })
+    }
+
+    async fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
+        let result = sqlx::query("DELETE FROM passkey_credentials WHERE user_id = ?")
+            .bind(user_id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_security_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn save_passkey_session(
+        &self,
+        session: PasskeySessionRecord,
+    ) -> Result<(), SecurityError> {
+        sqlx::query(
+            r#"INSERT INTO passkey_sessions
+                (session_id, kind, payload, user_id, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                payload = VALUES(payload),
+                user_id = VALUES(user_id),
+                expires_at = VALUES(expires_at),
+                created_at = VALUES(created_at)"#,
+        )
+        .bind(&session.session_id)
+        .bind(session.kind)
+        .bind(&session.payload)
+        .bind(session.user_id.map(|user_id| user_id as i64))
+        .bind(session.expires_at)
+        .bind(session.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        Ok(())
+    }
+
+    async fn pop_passkey_session(
+        &self,
+        session_id: &str,
+        kind: &'static str,
+    ) -> Result<Option<PasskeySessionRecord>, SecurityError> {
+        let mut tx = self.pool.begin().await.map_err(sqlx_security_error)?;
+        let row = sqlx::query(
+            "SELECT session_id, kind, payload, user_id, expires_at, created_at
+            FROM passkey_sessions WHERE session_id = ? AND kind = ?",
+        )
+        .bind(session_id)
+        .bind(kind)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(sqlx_security_error)?;
+        sqlx::query("DELETE FROM passkey_sessions WHERE session_id = ? AND kind = ?")
+            .bind(session_id)
+            .bind(kind)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        tx.commit().await.map_err(sqlx_security_error)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let session = passkey_session_from_mysql_row(&row)?;
+        if session.expires_at < now_unix() {
+            return Ok(None);
+        }
+        Ok(Some(session))
+    }
+
+    async fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
+        self.pop_passkey_session(session_id, PASSKEY_READY_SESSION)
+            .await
+            .map(|session| session.is_some())
+    }
+}
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct PostgresSecurityStore {
+    pool: PgPool,
+}
+
+impl PostgresSecurityStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = PgConnectOptions::from_str(url)
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let store = Self { pool };
+        store.migrate().await?;
+        Ok(store)
+    }
+
+    async fn migrate(&self) -> Result<(), ManagementError> {
+        for sql in [
+            r#"CREATE TABLE IF NOT EXISTS two_fas (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL UNIQUE,
+                secret TEXT NOT NULL,
+                is_enabled INTEGER NOT NULL DEFAULT 0,
+                failed_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until BIGINT,
+                last_used_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL DEFAULT 0
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_two_fas_user_id ON two_fas(user_id)",
+            r#"CREATE TABLE IF NOT EXISTS two_fa_backup_codes (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                code_hash TEXT NOT NULL,
+                is_used INTEGER NOT NULL DEFAULT 0,
+                used_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT 0
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_two_fa_backup_codes_user_id ON two_fa_backup_codes(user_id)",
+            r#"CREATE TABLE IF NOT EXISTS passkey_credentials (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL UNIQUE,
+                user_uuid TEXT NOT NULL,
+                credential_id TEXT NOT NULL UNIQUE,
+                passkey_json TEXT NOT NULL,
+                last_used_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL DEFAULT 0
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id)",
+            r#"CREATE TABLE IF NOT EXISTS passkey_sessions (
+                session_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                user_id BIGINT,
+                expires_at BIGINT NOT NULL,
+                created_at BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY(session_id, kind)
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_passkey_sessions_expires_at ON passkey_sessions(expires_at)",
+        ] {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn get_two_fa(&self, user_id: u64) -> Result<Option<TwoFaRecord>, SecurityError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, secret, is_enabled, failed_attempts, locked_until,
+                last_used_at, created_at, updated_at
+            FROM two_fas WHERE user_id = $1",
+        )
+        .bind(user_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        row.map(|row| {
+            Ok(TwoFaRecord {
+                id: pg_u64_col(&row, "id")?,
+                user_id: pg_u64_col(&row, "user_id")?,
+                secret: pg_string_col(&row, "secret")?,
+                is_enabled: pg_bool_col(&row, "is_enabled")?,
+                failed_attempts: pg_i32_col(&row, "failed_attempts")?,
+                locked_until: pg_optional_i64_col(&row, "locked_until"),
+                last_used_at: pg_optional_i64_col(&row, "last_used_at"),
+                created_at: pg_i64_col(&row, "created_at")?,
+                updated_at: pg_i64_col(&row, "updated_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn upsert_two_fa(&self, record: TwoFaRecord) -> Result<TwoFaRecord, SecurityError> {
+        sqlx::query(
+            r#"INSERT INTO two_fas
+                (user_id, secret, is_enabled, failed_attempts, locked_until, last_used_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT(user_id) DO UPDATE SET
+                secret = excluded.secret,
+                is_enabled = excluded.is_enabled,
+                failed_attempts = excluded.failed_attempts,
+                locked_until = excluded.locked_until,
+                last_used_at = excluded.last_used_at,
+                updated_at = excluded.updated_at"#,
+        )
+        .bind(record.user_id as i64)
+        .bind(&record.secret)
+        .bind(i64::from(record.is_enabled))
+        .bind(i64::from(record.failed_attempts))
+        .bind(record.locked_until)
+        .bind(record.last_used_at)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        self.get_two_fa(record.user_id).await?.ok_or_else(|| {
+            SecurityError::Management(ManagementError::Storage("2FA upsert failed".into()))
+        })
+    }
+
+    async fn delete_two_fa(&self, user_id: u64) -> Result<bool, SecurityError> {
+        let mut tx = self.pool.begin().await.map_err(sqlx_security_error)?;
+        sqlx::query("DELETE FROM two_fa_backup_codes WHERE user_id = $1")
+            .bind(user_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        let result = sqlx::query("DELETE FROM two_fas WHERE user_id = $1")
+            .bind(user_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        tx.commit().await.map_err(sqlx_security_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn replace_backup_codes(
+        &self,
+        user_id: u64,
+        codes: &[String],
+        now: i64,
+    ) -> Result<(), SecurityError> {
+        let mut tx = self.pool.begin().await.map_err(sqlx_security_error)?;
+        sqlx::query("DELETE FROM two_fa_backup_codes WHERE user_id = $1")
+            .bind(user_id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        for code in codes {
+            sqlx::query(
+                "INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used, used_at, created_at)
+                VALUES ($1, $2, 0, NULL, $3)",
+            )
+            .bind(user_id as i64)
+            .bind(hash_backup_code(code)?)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        }
+        tx.commit().await.map_err(sqlx_security_error)?;
+        Ok(())
+    }
+
+    async fn unused_backup_code_count(&self, user_id: u64) -> Result<usize, SecurityError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM two_fa_backup_codes WHERE user_id = $1 AND is_used = 0",
+        )
+        .bind(user_id as i64)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        Ok(count.max(0) as usize)
+    }
+
+    async fn consume_backup_code(&self, user_id: u64, code: &str) -> Result<bool, SecurityError> {
+        if !validate_backup_code_format(code) {
+            return Err(SecurityError::business("验证码或备用码不正确"));
+        }
+        let normalized = normalize_backup_code(code);
+        let rows = sqlx::query(
+            "SELECT id, code_hash FROM two_fa_backup_codes WHERE user_id = $1 AND is_used = 0",
+        )
+        .bind(user_id as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        for row in rows {
+            let id = pg_u64_col(&row, "id")?;
+            let code_hash = pg_string_col(&row, "code_hash")?;
+            if verify(&normalized, &code_hash).unwrap_or(false) {
+                sqlx::query(
+                    "UPDATE two_fa_backup_codes SET is_used = 1, used_at = $1 WHERE id = $2",
+                )
+                .bind(now_unix())
+                .bind(id as i64)
+                .execute(&self.pool)
+                .await
+                .map_err(sqlx_security_error)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn two_fa_stats(&self, total_users: usize) -> Result<TwoFaStats, SecurityError> {
+        let rows = sqlx::query("SELECT is_enabled, locked_until FROM two_fas")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(sqlx_security_error)?;
+        let records = rows.into_iter().map(|row| TwoFaRecord {
+            id: 0,
+            user_id: 0,
+            secret: String::new(),
+            is_enabled: pg_bool_col(&row, "is_enabled").unwrap_or(false),
+            failed_attempts: 0,
+            locked_until: pg_optional_i64_col(&row, "locked_until"),
+            last_used_at: None,
+            created_at: 0,
+            updated_at: 0,
+        });
+        Ok(two_fa_stats_from_records(total_users, records))
+    }
+
+    async fn get_passkey_by_user(
+        &self,
+        user_id: u64,
+    ) -> Result<Option<PasskeyRecord>, SecurityError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            FROM passkey_credentials WHERE user_id = $1",
+        )
+        .bind(user_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        row.map(|row| passkey_record_from_pg_row(&row)).transpose()
+    }
+
+    async fn get_passkey_by_credential_id(
+        &self,
+        credential_id: &str,
+    ) -> Result<Option<PasskeyRecord>, SecurityError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at
+            FROM passkey_credentials WHERE credential_id = $1",
+        )
+        .bind(credential_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        row.map(|row| passkey_record_from_pg_row(&row)).transpose()
+    }
+
+    async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
+        sqlx::query(
+            r#"INSERT INTO passkey_credentials
+                (user_id, user_uuid, credential_id, passkey_json, last_used_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT(user_id) DO UPDATE SET
+                user_uuid = excluded.user_uuid,
+                credential_id = excluded.credential_id,
+                passkey_json = excluded.passkey_json,
+                last_used_at = excluded.last_used_at,
+                updated_at = excluded.updated_at"#,
+        )
+        .bind(record.user_id as i64)
+        .bind(record.user_uuid.to_string())
+        .bind(&record.credential_id)
+        .bind(serde_json::to_string(&record.passkey).map_err(serde_security_error)?)
+        .bind(record.last_used_at)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        self.get_passkey_by_user(record.user_id)
+            .await?
+            .ok_or_else(|| {
+                SecurityError::Management(ManagementError::Storage("passkey upsert failed".into()))
+            })
+    }
+
+    async fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
+        let result = sqlx::query("DELETE FROM passkey_credentials WHERE user_id = $1")
+            .bind(user_id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(sqlx_security_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn save_passkey_session(
+        &self,
+        session: PasskeySessionRecord,
+    ) -> Result<(), SecurityError> {
+        sqlx::query(
+            r#"INSERT INTO passkey_sessions
+                (session_id, kind, payload, user_id, expires_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT(session_id, kind) DO UPDATE SET
+                payload = excluded.payload,
+                user_id = excluded.user_id,
+                expires_at = excluded.expires_at,
+                created_at = excluded.created_at"#,
+        )
+        .bind(&session.session_id)
+        .bind(session.kind)
+        .bind(&session.payload)
+        .bind(session.user_id.map(|user_id| user_id as i64))
+        .bind(session.expires_at)
+        .bind(session.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlx_security_error)?;
+        Ok(())
+    }
+
+    async fn pop_passkey_session(
+        &self,
+        session_id: &str,
+        kind: &'static str,
+    ) -> Result<Option<PasskeySessionRecord>, SecurityError> {
+        let mut tx = self.pool.begin().await.map_err(sqlx_security_error)?;
+        let row = sqlx::query(
+            "SELECT session_id, kind, payload, user_id, expires_at, created_at
+            FROM passkey_sessions WHERE session_id = $1 AND kind = $2",
+        )
+        .bind(session_id)
+        .bind(kind)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(sqlx_security_error)?;
+        sqlx::query("DELETE FROM passkey_sessions WHERE session_id = $1 AND kind = $2")
+            .bind(session_id)
+            .bind(kind)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlx_security_error)?;
+        tx.commit().await.map_err(sqlx_security_error)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let session = passkey_session_from_pg_row(&row)?;
         if session.expires_at < now_unix() {
             return Ok(None);
         }
@@ -1993,6 +2791,89 @@ fn optional_i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Option<i64> {
     row.try_get::<Option<i64>, _>(name).ok().flatten()
 }
 
+
+fn mysql_i64_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i64, SecurityError> {
+    row.try_get::<i64, _>(name).map_err(sqlx_security_error)
+}
+
+fn mysql_u64_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<u64, SecurityError> {
+    Ok(mysql_i64_col(row, name)?.max(0) as u64)
+}
+
+fn mysql_i32_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i32, SecurityError> {
+    Ok(mysql_i64_col(row, name)?.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+}
+
+fn mysql_bool_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<bool, SecurityError> {
+    Ok(mysql_i64_col(row, name)? != 0)
+}
+
+fn mysql_string_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, SecurityError> {
+    row.try_get::<String, _>(name).map_err(sqlx_security_error)
+}
+
+fn optional_mysql_i64_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Option<i64> {
+    row.try_get::<Option<i64>, _>(name).ok().flatten()
+}
+
+fn passkey_record_from_mysql_row(
+    row: &sqlx::mysql::MySqlRow,
+) -> Result<PasskeyRecord, SecurityError> {
+    let user_uuid = mysql_string_col(row, "user_uuid")?
+        .parse::<Uuid>()
+        .map_err(|err| SecurityError::Management(ManagementError::Storage(err.to_string())))?;
+    let passkey = serde_json::from_str::<Passkey>(&mysql_string_col(row, "passkey_json")?)
+        .map_err(serde_security_error)?;
+    Ok(PasskeyRecord {
+        id: mysql_u64_col(row, "id")?,
+        user_id: mysql_u64_col(row, "user_id")?,
+        user_uuid,
+        credential_id: mysql_string_col(row, "credential_id")?,
+        passkey,
+        last_used_at: optional_mysql_i64_col(row, "last_used_at"),
+        created_at: mysql_i64_col(row, "created_at")?,
+        updated_at: mysql_i64_col(row, "updated_at")?,
+    })
+}
+
+fn passkey_session_from_mysql_row(
+    row: &sqlx::mysql::MySqlRow,
+) -> Result<PasskeySessionRecord, SecurityError> {
+    let kind = passkey_session_kind_static(&mysql_string_col(row, "kind")?)?;
+    Ok(PasskeySessionRecord {
+        session_id: mysql_string_col(row, "session_id")?,
+        kind,
+        payload: mysql_string_col(row, "payload")?,
+        user_id: optional_mysql_i64_col(row, "user_id").map(|user_id| user_id.max(0) as u64),
+        expires_at: mysql_i64_col(row, "expires_at")?,
+        created_at: mysql_i64_col(row, "created_at")?,
+    })
+}
+
+fn pg_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, SecurityError> {
+    row.try_get::<i64, _>(name).map_err(sqlx_security_error)
+}
+
+fn pg_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<u64, SecurityError> {
+    Ok(pg_i64_col(row, name)?.max(0) as u64)
+}
+
+fn pg_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i32, SecurityError> {
+    Ok(pg_i64_col(row, name)?.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+}
+
+fn pg_bool_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<bool, SecurityError> {
+    Ok(pg_i64_col(row, name)? != 0)
+}
+
+fn pg_string_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, SecurityError> {
+    row.try_get::<String, _>(name).map_err(sqlx_security_error)
+}
+
+fn pg_optional_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Option<i64> {
+    row.try_get::<Option<i64>, _>(name).ok().flatten()
+}
+
 fn passkey_record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyRecord, SecurityError> {
     let user_uuid = string_col(row, "user_uuid")?
         .parse::<Uuid>()
@@ -2011,6 +2892,26 @@ fn passkey_record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyRecor
     })
 }
 
+fn passkey_record_from_pg_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<PasskeyRecord, SecurityError> {
+    let user_uuid = pg_string_col(row, "user_uuid")?
+        .parse::<Uuid>()
+        .map_err(|err| SecurityError::Management(ManagementError::Storage(err.to_string())))?;
+    let passkey = serde_json::from_str::<Passkey>(&pg_string_col(row, "passkey_json")?)
+        .map_err(serde_security_error)?;
+    Ok(PasskeyRecord {
+        id: pg_u64_col(row, "id")?,
+        user_id: pg_u64_col(row, "user_id")?,
+        user_uuid,
+        credential_id: pg_string_col(row, "credential_id")?,
+        passkey,
+        last_used_at: pg_optional_i64_col(row, "last_used_at"),
+        created_at: pg_i64_col(row, "created_at")?,
+        updated_at: pg_i64_col(row, "updated_at")?,
+    })
+}
+
 fn passkey_session_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> Result<PasskeySessionRecord, SecurityError> {
@@ -2022,6 +2923,20 @@ fn passkey_session_from_row(
         user_id: optional_i64_col(row, "user_id").map(|user_id| user_id.max(0) as u64),
         expires_at: i64_col(row, "expires_at")?,
         created_at: i64_col(row, "created_at")?,
+    })
+}
+
+fn passkey_session_from_pg_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<PasskeySessionRecord, SecurityError> {
+    let kind = passkey_session_kind_static(&pg_string_col(row, "kind")?)?;
+    Ok(PasskeySessionRecord {
+        session_id: pg_string_col(row, "session_id")?,
+        kind,
+        payload: pg_string_col(row, "payload")?,
+        user_id: pg_optional_i64_col(row, "user_id").map(|user_id| user_id.max(0) as u64),
+        expires_at: pg_i64_col(row, "expires_at")?,
+        created_at: pg_i64_col(row, "created_at")?,
     })
 }
 

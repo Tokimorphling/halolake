@@ -1,0 +1,62 @@
+version = 1
+
+[server]
+listen = "127.0.0.1:9090"
+
+[internal]
+secret = "dev-internal-secret"
+gateway_base_url = "http://127.0.0.1:8082"
+
+[session]
+secret = "dev-session-secret"
+
+[system]
+name = "Halolake"
+
+[web]
+enabled = true
+default_dist = "web/new-api/default/dist"
+classic_dist = "web/new-api/classic/dist"
+theme = "default"
+
+# Prefer SQL_DSN=user:pass@tcp(127.0.0.1:3306)/halolake
+# or database_url = "mysql://halolake:halolake@127.0.0.1:3306/halolake"
+[storage]
+backend = "mysql"
+database_url = "mysql://halolake:halolake@127.0.0.1:3306/halolake"
+
+[[users]]
+id = 1
+username = "root"
+password = "halolake-root-dev"
+display_name = "Root"
+role = 100
+status = 1
+group = "default"
+quota = 100000000
+
+[[tokens]]
+id = "dev-token"
+token = "dev-token"
+user_id = "1"
+enabled = true
+allowed_models = ["deepseek-v4-pro", "north-mini-code-free"]
+
+[[channels]]
+id = "openai-main"
+provider = "open_ai"
+base_url = "https://ioll.pp.ua"
+api_key_env = "OPENAI_API_KEY"
+enabled = true
+weight = 1
+models = ["deepseek-v4-pro", "north-mini-code-free"]
+
+[[model_mappings]]
+requested_model = "deepseek-v4-pro"
+channel_id = "openai-main"
+upstream_model = "deepseek-v4-pro"
+
+[[model_mappings]]
+requested_model = "north-mini-code-free"
+channel_id = "openai-main"
+upstream_model = "north-mini-code-free"

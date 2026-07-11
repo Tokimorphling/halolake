@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
 use sqlx::{
-    Row, SqlitePool,
+    MySqlPool, PgPool, Row, SqlitePool,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tracing::warn;
@@ -66,6 +68,8 @@ pub(crate) struct DeleteStaleSystemInstanceRequest {
 pub(crate) enum SystemInstanceStore {
     Memory(MemorySystemInstanceStore),
     Sqlite(SqliteSystemInstanceStore),
+    MySql(MySqlSystemInstanceStore),
+    Postgres(PostgresSystemInstanceStore),
 }
 
 impl SystemInstanceStore {
@@ -75,6 +79,16 @@ impl SystemInstanceStore {
 
     pub(crate) async fn sqlite(url: &str) -> Result<Self, ManagementError> {
         Ok(Self::Sqlite(SqliteSystemInstanceStore::connect(url).await?))
+    }
+
+    pub(crate) async fn mysql(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::MySql(MySqlSystemInstanceStore::connect(url).await?))
+    }
+
+    pub(crate) async fn postgres(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::Postgres(
+            PostgresSystemInstanceStore::connect(url).await?,
+        ))
     }
 }
 
@@ -104,6 +118,8 @@ impl Service<UpsertSystemInstanceRequest> for SystemInstanceStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -116,6 +132,8 @@ impl Service<ListSystemInstancesRequest> for SystemInstanceStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -131,6 +149,8 @@ impl Service<DeleteStaleSystemInstancesRequest> for SystemInstanceStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -146,6 +166,8 @@ impl Service<DeleteStaleSystemInstanceRequest> for SystemInstanceStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -354,6 +376,214 @@ impl Service<DeleteStaleSystemInstanceRequest> for SqliteSystemInstanceStore {
     }
 }
 
+#[derive(Debug, Clone)]
+
+pub(crate) struct MySqlSystemInstanceStore {
+    pool: MySqlPool,
+    memory: MemorySystemInstanceStore,
+}
+
+impl MySqlSystemInstanceStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(storage_err)?;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_system_instances_mysql(&pool).await?;
+        let records = load_system_instances_mysql(&pool).await?;
+        Ok(Self {
+            pool,
+            memory: MemorySystemInstanceStore::from_records(records),
+        })
+    }
+}
+
+impl Service<UpsertSystemInstanceRequest> for MySqlSystemInstanceStore {
+    type Response = ();
+    type Error = ManagementError;
+
+    async fn call(&self, req: UpsertSystemInstanceRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req.clone()).await?;
+        sqlx::query(
+            "INSERT INTO system_instances (
+                node_name, info, started_at, last_seen_at, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                info = VALUES(info),
+                started_at = VALUES(started_at),
+                last_seen_at = VALUES(last_seen_at),
+                updated_at = VALUES(updated_at)",
+        )
+        .bind(&req.node_name)
+        .bind(serde_json::to_string(&req.info).map_err(storage_err)?)
+        .bind(req.started_at)
+        .bind(req.last_seen_at)
+        .bind(req.last_seen_at)
+        .bind(req.last_seen_at)
+        .execute(&self.pool)
+        .await
+        .map_err(storage_err)?;
+        Ok(())
+    }
+}
+
+impl Service<ListSystemInstancesRequest> for MySqlSystemInstanceStore {
+    type Response = Vec<SystemInstanceResponse>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: ListSystemInstancesRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<DeleteStaleSystemInstancesRequest> for MySqlSystemInstanceStore {
+    type Response = usize;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: DeleteStaleSystemInstancesRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let deleted = self.memory.call(req).await?;
+        if deleted > 0 {
+            sqlx::query("DELETE FROM system_instances WHERE last_seen_at < ?")
+                .bind(stale_threshold(req.now))
+                .execute(&self.pool)
+                .await
+                .map_err(storage_err)?;
+        }
+        Ok(deleted)
+    }
+}
+
+impl Service<DeleteStaleSystemInstanceRequest> for MySqlSystemInstanceStore {
+    type Response = bool;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: DeleteStaleSystemInstanceRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let deleted = self.memory.call(req.clone()).await?;
+        if deleted {
+            sqlx::query("DELETE FROM system_instances WHERE node_name = ? AND last_seen_at < ?")
+                .bind(&req.node_name)
+                .bind(stale_threshold(req.now))
+                .execute(&self.pool)
+                .await
+                .map_err(storage_err)?;
+        }
+        Ok(deleted)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PostgresSystemInstanceStore {
+    pool: PgPool,
+    memory: MemorySystemInstanceStore,
+}
+
+impl PostgresSystemInstanceStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = PgConnectOptions::from_str(url).map_err(storage_err)?;
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(storage_err)?;
+        migrate_system_instances_pg(&pool).await?;
+        let records = load_system_instances_pg(&pool).await?;
+        Ok(Self {
+            pool,
+            memory: MemorySystemInstanceStore::from_records(records),
+        })
+    }
+}
+
+impl Service<UpsertSystemInstanceRequest> for PostgresSystemInstanceStore {
+    type Response = ();
+    type Error = ManagementError;
+
+    async fn call(&self, req: UpsertSystemInstanceRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req.clone()).await?;
+        sqlx::query(
+            "INSERT INTO system_instances (
+                node_name, info, started_at, last_seen_at, created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT(node_name) DO UPDATE SET
+                info = excluded.info,
+                started_at = excluded.started_at,
+                last_seen_at = excluded.last_seen_at,
+                updated_at = excluded.updated_at",
+        )
+        .bind(&req.node_name)
+        .bind(serde_json::to_string(&req.info).map_err(storage_err)?)
+        .bind(req.started_at)
+        .bind(req.last_seen_at)
+        .bind(req.last_seen_at)
+        .bind(req.last_seen_at)
+        .execute(&self.pool)
+        .await
+        .map_err(storage_err)?;
+        Ok(())
+    }
+}
+
+impl Service<ListSystemInstancesRequest> for PostgresSystemInstanceStore {
+    type Response = Vec<SystemInstanceResponse>;
+    type Error = ManagementError;
+
+    async fn call(&self, req: ListSystemInstancesRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<DeleteStaleSystemInstancesRequest> for PostgresSystemInstanceStore {
+    type Response = usize;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: DeleteStaleSystemInstancesRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let deleted = self.memory.call(req).await?;
+        if deleted > 0 {
+            sqlx::query("DELETE FROM system_instances WHERE last_seen_at < $1")
+                .bind(stale_threshold(req.now))
+                .execute(&self.pool)
+                .await
+                .map_err(storage_err)?;
+        }
+        Ok(deleted)
+    }
+}
+
+impl Service<DeleteStaleSystemInstanceRequest> for PostgresSystemInstanceStore {
+    type Response = bool;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: DeleteStaleSystemInstanceRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        let deleted = self.memory.call(req.clone()).await?;
+        if deleted {
+            sqlx::query(
+                "DELETE FROM system_instances WHERE node_name = $1 AND last_seen_at < $2",
+            )
+            .bind(&req.node_name)
+            .bind(stale_threshold(req.now))
+            .execute(&self.pool)
+            .await
+            .map_err(storage_err)?;
+        }
+        Ok(deleted)
+    }
+}
+
 impl SystemInstanceRecord {
     fn to_response(self, now: i64) -> SystemInstanceResponse {
         let status = if now.saturating_sub(self.last_seen_at) > STALE_AFTER_SECONDS {
@@ -492,6 +722,28 @@ async fn migrate_system_instances(pool: &SqlitePool) -> Result<(), ManagementErr
     Ok(())
 }
 
+async fn migrate_system_instances_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS system_instances (
+            node_name VARCHAR(255) PRIMARY KEY,
+            info TEXT NOT NULL,
+            started_at BIGINT NOT NULL,
+            last_seen_at BIGINT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(storage_err)?;
+    let _ = sqlx::query(
+        "CREATE INDEX idx_system_instances_last_seen_at ON system_instances(last_seen_at)",
+    )
+    .execute(pool)
+    .await;
+    Ok(())
+}
+
 async fn load_system_instances(
     pool: &SqlitePool,
 ) -> Result<Vec<SystemInstanceRecord>, ManagementError> {
@@ -505,22 +757,87 @@ async fn load_system_instances(
     .into_iter()
     .map(|row| {
         Ok(SystemInstanceRecord {
-            node_name: string_col(&row, "node_name")?,
-            info: json_col(&row, "info")?,
-            started_at: i64_col(&row, "started_at")?,
-            last_seen_at: i64_col(&row, "last_seen_at")?,
-            created_at: i64_col(&row, "created_at")?,
-            updated_at: i64_col(&row, "updated_at")?,
+            node_name: string_col_sqlite(&row, "node_name")?,
+            info: json_col_sqlite(&row, "info")?,
+            started_at: i64_col_sqlite(&row, "started_at")?,
+            last_seen_at: i64_col_sqlite(&row, "last_seen_at")?,
+            created_at: i64_col_sqlite(&row, "created_at")?,
+            updated_at: i64_col_sqlite(&row, "updated_at")?,
         })
     })
     .collect()
 }
 
-fn json_col(
+async fn load_system_instances_mysql(
+    pool: &MySqlPool,
+) -> Result<Vec<SystemInstanceRecord>, ManagementError> {
+    sqlx::query(
+        "SELECT node_name, info, started_at, last_seen_at, created_at, updated_at
+         FROM system_instances ORDER BY last_seen_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(SystemInstanceRecord {
+            node_name: string_col_mysql(&row, "node_name")?,
+            info: json_col_mysql(&row, "info")?,
+            started_at: i64_col_mysql(&row, "started_at")?,
+            last_seen_at: i64_col_mysql(&row, "last_seen_at")?,
+            created_at: i64_col_mysql(&row, "created_at")?,
+            updated_at: i64_col_mysql(&row, "updated_at")?,
+        })
+    })
+    .collect()
+}
+
+async fn migrate_system_instances_pg(pool: &PgPool) -> Result<(), ManagementError> {
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS system_instances (
+            node_name TEXT PRIMARY KEY,
+            info TEXT NOT NULL DEFAULT '',
+            started_at BIGINT NOT NULL,
+            last_seen_at BIGINT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_system_instances_last_seen_at ON system_instances(last_seen_at)",
+    ] {
+        sqlx::query(stmt).execute(pool).await.map_err(storage_err)?;
+    }
+    Ok(())
+}
+
+async fn load_system_instances_pg(
+    pool: &PgPool,
+) -> Result<Vec<SystemInstanceRecord>, ManagementError> {
+    sqlx::query(
+        "SELECT node_name, info, started_at, last_seen_at, created_at, updated_at
+         FROM system_instances ORDER BY last_seen_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(storage_err)?
+    .into_iter()
+    .map(|row| {
+        Ok(SystemInstanceRecord {
+            node_name: string_col_pg(&row, "node_name")?,
+            info: json_col_pg(&row, "info")?,
+            started_at: i64_col_pg(&row, "started_at")?,
+            last_seen_at: i64_col_pg(&row, "last_seen_at")?,
+            created_at: i64_col_pg(&row, "created_at")?,
+            updated_at: i64_col_pg(&row, "updated_at")?,
+        })
+    })
+    .collect()
+}
+
+fn json_col_sqlite(
     row: &sqlx::sqlite::SqliteRow,
     name: &str,
 ) -> Result<Option<JsonValue>, ManagementError> {
-    let raw = string_col(row, name)?;
+    let raw = string_col_sqlite(row, name)?;
     if raw.is_empty() {
         return Ok(None);
     }
@@ -529,11 +846,53 @@ fn json_col(
     })
 }
 
-fn string_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, ManagementError> {
+fn string_col_sqlite(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, ManagementError> {
     row.try_get::<String, _>(name).map_err(storage_err)
 }
 
-fn i64_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i64, ManagementError> {
+fn i64_col_sqlite(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+
+fn json_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<Option<JsonValue>, ManagementError> {
+    let raw = string_col_mysql(row, name)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&raw).map(Some).map_err(|err| {
+        ManagementError::Storage(format!("invalid system instance JSON {name}: {err}"))
+    })
+}
+
+fn string_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+
+fn i64_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<i64, ManagementError> {
+    row.try_get::<i64, _>(name).map_err(storage_err)
+}
+
+fn json_col_pg(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+) -> Result<Option<JsonValue>, ManagementError> {
+    let raw = string_col_pg(row, name)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&raw).map(Some).map_err(|err| {
+        ManagementError::Storage(format!("invalid system instance JSON {name}: {err}"))
+    })
+}
+
+fn string_col_pg(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, ManagementError> {
+    row.try_get::<String, _>(name).map_err(storage_err)
+}
+
+fn i64_col_pg(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, ManagementError> {
     row.try_get::<i64, _>(name).map_err(storage_err)
 }
 

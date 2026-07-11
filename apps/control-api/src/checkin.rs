@@ -7,7 +7,9 @@ use halolake_control_plane::ManagementError;
 use serde::Serialize;
 use service_async::Service;
 use sqlx::{
-    Row, SqlitePool,
+    MySqlPool, PgPool, Row, SqlitePool,
+    mysql::{MySqlConnectOptions, MySqlPoolOptions},
+    postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
@@ -54,6 +56,8 @@ pub(crate) struct CreateCheckinRequest {
 pub(crate) enum CheckinStore {
     Memory(MemoryCheckinStore),
     Sqlite(SqliteCheckinStore),
+    MySql(MySqlCheckinStore),
+    Postgres(PostgresCheckinStore),
 }
 
 impl CheckinStore {
@@ -63,6 +67,14 @@ impl CheckinStore {
 
     pub(crate) async fn sqlite(url: &str) -> Result<Self, ManagementError> {
         Ok(Self::Sqlite(SqliteCheckinStore::connect(url).await?))
+    }
+
+    pub(crate) async fn mysql(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::MySql(MySqlCheckinStore::connect(url).await?))
+    }
+
+    pub(crate) async fn postgres(url: &str) -> Result<Self, ManagementError> {
+        Ok(Self::Postgres(PostgresCheckinStore::connect(url).await?))
     }
 }
 
@@ -74,6 +86,8 @@ impl Service<GetCheckinStatsRequest> for CheckinStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -86,6 +100,8 @@ impl Service<CreateCheckinRequest> for CheckinStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
         }
     }
 }
@@ -265,6 +281,237 @@ async fn migrate_checkins(pool: &SqlitePool) -> Result<(), ManagementError> {
 }
 
 async fn load_checkins(pool: &SqlitePool) -> Result<Vec<CheckinRecord>, ManagementError> {
+    sqlx::query(
+        "SELECT id, user_id, checkin_date, quota_awarded, created_at
+         FROM checkins ORDER BY checkin_date DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|err| ManagementError::Storage(err.to_string()))?
+    .into_iter()
+    .map(|row| {
+        Ok(CheckinRecord {
+            id: row
+                .try_get::<i64, _>("id")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?
+                .max(0) as u64,
+            user_id: row
+                .try_get::<i64, _>("user_id")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?
+                .max(0) as u64,
+            checkin_date: row
+                .try_get("checkin_date")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?,
+            quota_awarded: row
+                .try_get("quota_awarded")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?,
+        })
+    })
+    .collect()
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MySqlCheckinStore {
+    pool: MySqlPool,
+    memory: MemoryCheckinStore,
+}
+
+impl MySqlCheckinStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = MySqlConnectOptions::from_str(url)
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        migrate_checkins_mysql(&pool).await?;
+        let memory = MemoryCheckinStore::default();
+        for record in load_checkins_mysql(&pool).await? {
+            memory.insert(record)?;
+        }
+        Ok(Self { pool, memory })
+    }
+}
+
+impl Service<GetCheckinStatsRequest> for MySqlCheckinStore {
+    type Response = CheckinStats;
+    type Error = ManagementError;
+
+    async fn call(&self, req: GetCheckinStatsRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<CreateCheckinRequest> for MySqlCheckinStore {
+    type Response = CheckinRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: CreateCheckinRequest) -> Result<Self::Response, Self::Error> {
+        let result = sqlx::query(
+            "INSERT IGNORE INTO checkins (user_id, checkin_date, quota_awarded, created_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(req.user_id as i64)
+        .bind(&req.checkin_date)
+        .bind(req.quota_awarded)
+        .bind(req.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        if result.rows_affected() == 0 {
+            return Err(ManagementError::Duplicate);
+        }
+        let id = result.last_insert_id().max(0) as u64;
+        self.memory.insert(CheckinRecord {
+            id,
+            user_id: req.user_id,
+            checkin_date: req.checkin_date,
+            quota_awarded: req.quota_awarded,
+            created_at: req.created_at,
+        })
+    }
+}
+
+async fn migrate_checkins_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS checkins (
+            id BIGINT PRIMARY KEY AUTO_INCREMENT,
+            user_id BIGINT NOT NULL,
+            checkin_date TEXT NOT NULL,
+            quota_awarded BIGINT NOT NULL,
+            created_at BIGINT NOT NULL,
+            UNIQUE(user_id, checkin_date)
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|err| ManagementError::Storage(err.to_string()))?;
+    Ok(())
+}
+
+async fn load_checkins_mysql(pool: &MySqlPool) -> Result<Vec<CheckinRecord>, ManagementError> {
+    sqlx::query(
+        "SELECT id, user_id, checkin_date, quota_awarded, created_at
+         FROM checkins ORDER BY checkin_date DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|err| ManagementError::Storage(err.to_string()))?
+    .into_iter()
+    .map(|row| {
+        Ok(CheckinRecord {
+            id: row
+                .try_get::<i64, _>("id")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?
+                .max(0) as u64,
+            user_id: row
+                .try_get::<i64, _>("user_id")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?
+                .max(0) as u64,
+            checkin_date: row
+                .try_get("checkin_date")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?,
+            quota_awarded: row
+                .try_get("quota_awarded")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|err| ManagementError::Storage(err.to_string()))?,
+        })
+    })
+    .collect()
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PostgresCheckinStore {
+    pool: PgPool,
+    memory: MemoryCheckinStore,
+}
+
+impl PostgresCheckinStore {
+    async fn connect(url: &str) -> Result<Self, ManagementError> {
+        let options = PgConnectOptions::from_str(url)
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        migrate_checkins_pg(&pool).await?;
+        let memory = MemoryCheckinStore::default();
+        for record in load_checkins_pg(&pool).await? {
+            let _ = memory.insert(record);
+        }
+        Ok(Self { pool, memory })
+    }
+}
+
+impl Service<GetCheckinStatsRequest> for PostgresCheckinStore {
+    type Response = CheckinStats;
+    type Error = ManagementError;
+
+    async fn call(&self, req: GetCheckinStatsRequest) -> Result<Self::Response, Self::Error> {
+        self.memory.call(req).await
+    }
+}
+
+impl Service<CreateCheckinRequest> for PostgresCheckinStore {
+    type Response = CheckinRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: CreateCheckinRequest) -> Result<Self::Response, Self::Error> {
+        let result = sqlx::query(
+            "INSERT INTO checkins (user_id, checkin_date, quota_awarded, created_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_id, checkin_date) DO NOTHING
+             RETURNING id",
+        )
+        .bind(req.user_id as i64)
+        .bind(&req.checkin_date)
+        .bind(req.quota_awarded)
+        .bind(req.created_at)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| ManagementError::Storage(err.to_string()))?;
+        let Some(row) = result else {
+            return Err(ManagementError::Duplicate);
+        };
+        let id = row
+            .try_get::<i64, _>("id")
+            .map_err(|err| ManagementError::Storage(err.to_string()))?
+            .max(0) as u64;
+        self.memory.insert(CheckinRecord {
+            id,
+            user_id: req.user_id,
+            checkin_date: req.checkin_date,
+            quota_awarded: req.quota_awarded,
+            created_at: req.created_at,
+        })
+    }
+}
+
+async fn migrate_checkins_pg(pool: &PgPool) -> Result<(), ManagementError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS checkins (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            checkin_date TEXT NOT NULL,
+            quota_awarded BIGINT NOT NULL,
+            created_at BIGINT NOT NULL,
+            UNIQUE(user_id, checkin_date)
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|err| ManagementError::Storage(err.to_string()))?;
+    Ok(())
+}
+
+async fn load_checkins_pg(pool: &PgPool) -> Result<Vec<CheckinRecord>, ManagementError> {
     sqlx::query(
         "SELECT id, user_id, checkin_date, quota_awarded, created_at
          FROM checkins ORDER BY checkin_date DESC",
