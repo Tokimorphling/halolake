@@ -1991,10 +1991,29 @@ fn pg_opt_string_col(
 }
 
 fn pg_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, ManagementError> {
+    // PG INTEGER is INT4; BIGINT is INT8. Accept both (and bool-as-0/1).
+    if let Ok(v) = row.try_get::<i64, _>(name) {
+        return Ok(v);
+    }
+    if let Ok(v) = row.try_get::<i32, _>(name) {
+        return Ok(i64::from(v));
+    }
+    if let Ok(v) = row.try_get::<bool, _>(name) {
+        return Ok(i64::from(v));
+    }
     row.try_get::<i64, _>(name).map_err(storage_err)
 }
 
 fn pg_opt_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<i64>, ManagementError> {
+    if let Ok(v) = row.try_get::<Option<i64>, _>(name) {
+        return Ok(v);
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(name) {
+        return Ok(v.map(i64::from));
+    }
+    if let Ok(v) = row.try_get::<Option<bool>, _>(name) {
+        return Ok(v.map(i64::from));
+    }
     row.try_get::<Option<i64>, _>(name).map_err(storage_err)
 }
 
@@ -2003,26 +2022,54 @@ fn pg_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<u64, Management
 }
 
 fn pg_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i32, ManagementError> {
-    // PG may return i32 or i64 depending on column type
     if let Ok(v) = row.try_get::<i32, _>(name) {
         return Ok(v);
     }
-    pg_i64_col(row, name).map(|value| value as i32)
+    if let Ok(v) = row.try_get::<i64, _>(name) {
+        return Ok(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+    }
+    if let Ok(v) = row.try_get::<bool, _>(name) {
+        return Ok(i32::from(v));
+    }
+    row.try_get::<i32, _>(name).map_err(storage_err)
 }
 
 fn pg_opt_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<i32>, ManagementError> {
     if let Ok(v) = row.try_get::<Option<i32>, _>(name) {
         return Ok(v);
     }
-    pg_opt_i64_col(row, name).map(|value| value.map(|value| value as i32))
+    if let Ok(v) = row.try_get::<Option<i64>, _>(name) {
+        return Ok(v.map(|value| value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32));
+    }
+    if let Ok(v) = row.try_get::<Option<bool>, _>(name) {
+        return Ok(v.map(i32::from));
+    }
+    row.try_get::<Option<i32>, _>(name).map_err(storage_err)
 }
 
 fn pg_opt_u32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<u32>, ManagementError> {
-    pg_opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u32))
+    // weight is INTEGER (INT4); do not force INT8 decode.
+    if let Ok(v) = row.try_get::<Option<i32>, _>(name) {
+        return Ok(v.map(|value| value.max(0) as u32));
+    }
+    if let Ok(v) = row.try_get::<Option<i64>, _>(name) {
+        return Ok(v.map(|value| value.max(0) as u32));
+    }
+    row.try_get::<Option<i32>, _>(name)
+        .map(|v| v.map(|value| value.max(0) as u32))
+        .map_err(storage_err)
 }
 
 fn pg_opt_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<u64>, ManagementError> {
-    pg_opt_i64_col(row, name).map(|value| value.map(|value| value.max(0) as u64))
+    if let Ok(v) = row.try_get::<Option<i64>, _>(name) {
+        return Ok(v.map(|value| value.max(0) as u64));
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(name) {
+        return Ok(v.map(|value| value.max(0) as u64));
+    }
+    row.try_get::<Option<i64>, _>(name)
+        .map(|v| v.map(|value| value.max(0) as u64))
+        .map_err(storage_err)
 }
 
 fn pg_f64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<f64, ManagementError> {
