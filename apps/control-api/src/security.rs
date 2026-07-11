@@ -1538,8 +1538,8 @@ impl PostgresSecurityStore {
         )
         .bind(record.user_id as i64)
         .bind(&record.secret)
-        .bind(i64::from(record.is_enabled))
-        .bind(i64::from(record.failed_attempts))
+        .bind(i32::from(record.is_enabled))
+        .bind(record.failed_attempts)
         .bind(record.locked_until)
         .bind(record.last_used_at)
         .bind(record.created_at)
@@ -2851,6 +2851,16 @@ fn passkey_session_from_mysql_row(
 }
 
 fn pg_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i64, SecurityError> {
+    // Postgres INTEGER is INT4; BIGINT is INT8. Accept both.
+    if let Ok(v) = row.try_get::<i64, _>(name) {
+        return Ok(v);
+    }
+    if let Ok(v) = row.try_get::<i32, _>(name) {
+        return Ok(i64::from(v));
+    }
+    if let Ok(v) = row.try_get::<bool, _>(name) {
+        return Ok(i64::from(v));
+    }
     row.try_get::<i64, _>(name).map_err(sqlx_security_error)
 }
 
@@ -2859,11 +2869,29 @@ fn pg_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<u64, SecurityEr
 }
 
 fn pg_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<i32, SecurityError> {
-    Ok(pg_i64_col(row, name)?.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+    if let Ok(v) = row.try_get::<i32, _>(name) {
+        return Ok(v);
+    }
+    if let Ok(v) = row.try_get::<i64, _>(name) {
+        return Ok(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+    }
+    if let Ok(v) = row.try_get::<bool, _>(name) {
+        return Ok(i32::from(v));
+    }
+    row.try_get::<i32, _>(name).map_err(sqlx_security_error)
 }
 
 fn pg_bool_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<bool, SecurityError> {
-    Ok(pg_i64_col(row, name)? != 0)
+    if let Ok(v) = row.try_get::<bool, _>(name) {
+        return Ok(v);
+    }
+    if let Ok(v) = row.try_get::<i32, _>(name) {
+        return Ok(v != 0);
+    }
+    if let Ok(v) = row.try_get::<i64, _>(name) {
+        return Ok(v != 0);
+    }
+    row.try_get::<bool, _>(name).map_err(sqlx_security_error)
 }
 
 fn pg_string_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, SecurityError> {
@@ -2871,7 +2899,13 @@ fn pg_string_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<String, Secu
 }
 
 fn pg_optional_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Option<i64> {
-    row.try_get::<Option<i64>, _>(name).ok().flatten()
+    if let Ok(v) = row.try_get::<Option<i64>, _>(name) {
+        return v;
+    }
+    row.try_get::<Option<i32>, _>(name)
+        .ok()
+        .flatten()
+        .map(i64::from)
 }
 
 fn passkey_record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyRecord, SecurityError> {

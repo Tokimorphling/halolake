@@ -608,11 +608,21 @@ async fn load_pg(pool: &PgPool) -> Result<Vec<ProxyRecord>, ManagementError> {
         .map_err(storage_err)?
         .into_iter()
         .map(|row| {
+            let id = if let Ok(v) = row.try_get::<i64, _>("id") {
+                v
+            } else {
+                i64::from(row.try_get::<i32, _>("id").map_err(storage_err)?)
+            };
+            let status = if let Ok(v) = row.try_get::<i32, _>("status") {
+                v
+            } else {
+                row.try_get::<i64, _>("status").map_err(storage_err)? as i32
+            };
             Ok(ProxyRecord {
-                id: row.try_get::<i64, _>("id").map_err(storage_err)?.max(0) as u64,
+                id: id.max(0) as u64,
                 name: row.try_get("name").map_err(storage_err)?,
                 url: row.try_get("url").map_err(storage_err)?,
-                status: row.try_get::<i32, _>("status").map_err(storage_err)?,
+                status,
                 remark: row.try_get("remark").map_err(storage_err)?,
             })
         })

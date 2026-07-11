@@ -150,6 +150,32 @@ export function ChannelsPrimaryButtons() {
           />
         </div>
 
+        {/* Import credentials (auth files / sub2api / CLIProxy) */}
+        <Tooltip>
+          <TooltipTrigger render={<span className='inline-flex' />}>
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={!canEditSensitive}
+              onClick={() => {
+                if (!canEditSensitive) return
+                setShowImportDialog(true)
+              }}
+            >
+              <FileJson className='h-4 w-4' />
+              <span className='max-sm:hidden'>{t('Import credentials')}</span>
+              <span className='sm:hidden'>{t('Import')}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {canEditSensitive
+              ? t(
+                  'Import Sub2API / CLIProxyAPI / Codex auth files as channels'
+                )
+              : t('No permission to perform this action')}
+          </TooltipContent>
+        </Tooltip>
+
         {/* Create Channel */}
         <Tooltip>
           <TooltipTrigger render={<span className='inline-flex' />}>
