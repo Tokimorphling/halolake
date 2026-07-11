@@ -16,9 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 
-import useDialogState from '@/hooks/use-dialog'
+import { useDialogState } from '@/hooks/use-dialog'
 
 import type { ProxiesDialogType, Proxy } from '../types'
 
@@ -34,26 +34,31 @@ type ProxiesContextType = {
 const ProxiesContext = React.createContext<ProxiesContextType | null>(null)
 
 export function ProxiesProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useDialogState<ProxiesDialogType>(null)
+  const [open, setOpenState] = useDialogState<ProxiesDialogType>(null)
   const [currentRow, setCurrentRow] = useState<Proxy | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
 
-  const triggerRefresh = () => setRefreshTrigger((prev) => prev + 1)
+  const setOpen = useCallback((value: ProxiesDialogType | null) => {
+    setOpenState(value)
+  }, [setOpenState])
 
-  return (
-    <ProxiesContext
-      value={{
-        open,
-        setOpen,
-        currentRow,
-        setCurrentRow,
-        refreshTrigger,
-        triggerRefresh,
-      }}
-    >
-      {children}
-    </ProxiesContext>
+  const triggerRefresh = useCallback(() => {
+    setRefreshTrigger((prev) => prev + 1)
+  }, [])
+
+  const value = useMemo(
+    () => ({
+      open,
+      setOpen,
+      currentRow,
+      setCurrentRow,
+      refreshTrigger,
+      triggerRefresh,
+    }),
+    [open, setOpen, currentRow, refreshTrigger, triggerRefresh]
   )
+
+  return <ProxiesContext.Provider value={value}>{children}</ProxiesContext.Provider>
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

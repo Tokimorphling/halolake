@@ -47,11 +47,13 @@ export function DataTableRowActions<TData>({
   row,
 }: DataTableRowActionsProps<TData>) {
   const { t } = useTranslation()
-  const proxy = proxySchema.parse(row.original)
   const { setOpen, setCurrentRow, triggerRefresh } = useProxies()
-  const isEnabled = proxy.status === PROXY_STATUS.ENABLED
+  const parsed = proxySchema.safeParse(row.original)
+  const proxy = parsed.success ? parsed.data : null
+  const isEnabled = proxy?.status === PROXY_STATUS.ENABLED
 
   const handleToggleStatus = async () => {
+    if (!proxy) return
     const newStatus = isEnabled ? PROXY_STATUS.DISABLED : PROXY_STATUS.ENABLED
     const result = await updateProxy({
       id: proxy.id,
@@ -70,6 +72,10 @@ export function DataTableRowActions<TData>({
       )
       triggerRefresh()
     }
+  }
+
+  if (!proxy) {
+    return null
   }
 
   return (

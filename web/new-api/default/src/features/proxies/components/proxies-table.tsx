@@ -47,17 +47,26 @@ export function ProxiesTable() {
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['proxies', refreshTrigger],
     queryFn: async () => {
-      const result = await listProxies()
-      if (!result.success) {
-        toast.error(result.message || t(ERROR_MESSAGES.LOAD_FAILED))
+      try {
+        const result = await listProxies()
+        if (!result?.success) {
+          toast.error(result?.message || t(ERROR_MESSAGES.LOAD_FAILED))
+          return [] as Proxy[]
+        }
+        const items = result.data
+        return Array.isArray(items) ? items : []
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : t(ERROR_MESSAGES.LOAD_FAILED)
+        toast.error(message)
         return [] as Proxy[]
       }
-      return result.data || []
     },
     placeholderData: (previousData) => previousData,
+    retry: 1,
   })
 
-  const proxies = data || []
+  const proxies = Array.isArray(data) ? data : []
 
   const { table } = useDataTable({
     data: proxies,

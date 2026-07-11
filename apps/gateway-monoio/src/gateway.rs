@@ -198,30 +198,49 @@ async fn run_worker_async(
     if let Some(source) = &snapshot_source {
         let snapshot_url = config.control.snapshot_url.as_deref().unwrap_or_default();
         debug!(worker_id, %snapshot_url, "loading gateway snapshot from control api");
-        match source
-            .clone()
-            .call(SnapshotRequest {
-                since_version: None,
-            })
-            .await
-        {
-            Ok(SnapshotResponse::Updated { snapshot }) => {
-                debug!(
-                    worker_id,
-                    snapshot_version = snapshot.version,
-                    "loaded gateway snapshot from control api"
-                );
-                config.replace_snapshot(snapshot);
-            }
-            Ok(SnapshotResponse::NotModified { version }) => {
-                warn!(
-                    worker_id,
-                    snapshot_version = version,
-                    "control api returned not-modified for initial snapshot load"
-                );
-            }
-            Err(err) => {
-                anyhow::bail!("load gateway snapshot from control api: {err}");
+        // control-api may still be booting in one-shot Docker; retry briefly.
+        let max_attempts = 30u32;
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            match source
+                .clone()
+                .call(SnapshotRequest {
+                    since_version: None,
+                })
+                .await
+            {
+                Ok(SnapshotResponse::Updated { snapshot }) => {
+                    debug!(
+                        worker_id,
+                        snapshot_version = snapshot.version,
+                        attempt,
+                        "loaded gateway snapshot from control api"
+                    );
+                    config.replace_snapshot(snapshot);
+                    break;
+                }
+                Ok(SnapshotResponse::NotModified { version }) => {
+                    warn!(
+                        worker_id,
+                        snapshot_version = version,
+                        "control api returned not-modified for initial snapshot load"
+                    );
+                    break;
+                }
+                Err(err) if attempt < max_attempts => {
+                    warn!(
+                        worker_id,
+                        attempt,
+                        max_attempts,
+                        %err,
+                        "initial snapshot load failed; retrying"
+                    );
+                    monoio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Err(err) => {
+                    anyhow::bail!("load gateway snapshot from control api: {err}");
+                }
             }
         }
     }

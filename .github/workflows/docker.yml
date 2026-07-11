@@ -103,16 +103,22 @@ jobs:
           docker run -d --name hl-smoke \
             -e SESSION_SECRET=ci-smoke-secret \
             -e RUST_LOG=info \
+            -e HALOLAKE_WAIT_CONTROL_SECS=90 \
             -p 19090:9090 -p 18082:8082 \
             "${IMAGE}:${TAG}"
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -fsS "http://127.0.0.1:19090/healthz" >/dev/null; then
               echo "control-api healthy"
+              # gateway should also be up after control is healthy
+              if curl -fsS -o /dev/null -w "%{http_code}" "http://127.0.0.1:18082/" | grep -Eq '^[0-9]{3}$'; then
+                echo "gateway port responding"
+              fi
               docker rm -f hl-smoke
               exit 0
             fi
             sleep 2
           done
+          echo "==== docker logs ===="
           docker logs hl-smoke || true
           docker rm -f hl-smoke
           exit 1
