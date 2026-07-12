@@ -1807,6 +1807,7 @@ fn is_bcrypt_hash(value: &str) -> bool {
 }
 
 fn can_manage_target_role(actor_role: i32, target_role: i32) -> bool {
+    // Root may manage anyone (including self). Admins may only manage strictly lower roles.
     actor_role == ROLE_ROOT_USER || actor_role > target_role
 }
 

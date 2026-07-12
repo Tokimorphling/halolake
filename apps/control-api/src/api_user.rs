@@ -61,9 +61,9 @@ pub(crate) struct TokenSearchQuery {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct UserSearchQuery {
-    #[serde(default = "crate::default_page")]
+    #[serde(default = "crate::default_page", alias = "p")]
     pub(crate) page:      usize,
-    #[serde(default = "crate::default_page_size")]
+    #[serde(default = "crate::default_page_size", alias = "size")]
     pub(crate) page_size: usize,
     #[serde(default)]
     pub(crate) keyword:   String,
@@ -1013,9 +1013,18 @@ pub(crate) async fn list_users(
         .call(ListUsersRequest { page: query.into() })
         .await
     {
-        Ok(mut page) => {
-            page.items = page.items.into_iter().map(UserRecord::sanitized).collect();
-            api_success(page)
+        Ok(page) => {
+            let items: Vec<JsonValue> = page
+                .items
+                .into_iter()
+                .map(|u| user_to_api_json(u.sanitized()))
+                .collect();
+            api_success(json!({
+                "items": items,
+                "total": page.total,
+                "page": page.page,
+                "page_size": page.page_size,
+            }))
         }
         Err(err) => management_error(err),
     }
@@ -1046,9 +1055,18 @@ pub(crate) async fn search_users(
         })
         .await
     {
-        Ok(mut page) => {
-            page.items = page.items.into_iter().map(UserRecord::sanitized).collect();
-            api_success(page)
+        Ok(page) => {
+            let items: Vec<JsonValue> = page
+                .items
+                .into_iter()
+                .map(|u| user_to_api_json(u.sanitized()))
+                .collect();
+            api_success(json!({
+                "items": items,
+                "total": page.total,
+                "page": page.page,
+                "page_size": page.page_size,
+            }))
         }
         Err(err) => management_error(err),
     }
@@ -1064,7 +1082,7 @@ pub(crate) async fn get_user(
         Err(resp) => return resp,
     };
     match state.management.call(GetUserRequest { id }).await {
-        Ok(user) => api_success(user.sanitized()),
+        Ok(user) => api_success(user_to_api_json(user.sanitized())),
         Err(err) => management_error(err),
     }
 }
@@ -1152,20 +1170,35 @@ pub(crate) async fn manage_user(
         .management
         .call(ManageUserRequest {
             id:         req.id,
-            action:     req.action,
+            action:     req.action.clone(),
             value:      req.value,
-            mode:       req.mode,
+            mode:       req.mode.clone(),
             actor_role: actor.role,
         })
         .await
     {
-        Ok(user) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_success(json!({
-                "role": user.role,
-                "status": user.status,
-            })),
-            Err(err) => management_error(err),
-        },
+        Ok(user) => {
+            // Quota / role / status changes affect gateway settle & UI; republish.
+            if let Err(err) = publish_management_snapshot(&state).await {
+                return management_error(err);
+            }
+            // new-api returns { role, status } for enable/disable/promote/demote.
+            // For add_quota also return quota so the admin UI can refresh remaining balance.
+            if req.action == "add_quota" {
+                api_success(json!({
+                    "id": user.id,
+                    "role": user.role,
+                    "status": user.status,
+                    "quota": user.quota,
+                    "used_quota": user.used_quota,
+                }))
+            } else {
+                api_success(json!({
+                    "role": user.role,
+                    "status": user.status,
+                }))
+            }
+        }
         Err(err) => management_error(err),
     }
 }
@@ -1465,6 +1498,28 @@ pub(crate) async fn get_token_usage(State(state): State<AppState>, headers: Head
         "model_limits_enabled": token.model_limits_enabled,
         "expires_at": expired_at,
     }))
+}
+
+/// Enrich user JSON for new-api admin UI (request_count / aff fields optional).
+fn user_to_api_json(user: UserRecord) -> JsonValue {
+    let mut value = serde_json::to_value(&user).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.entry("request_count".to_string()).or_insert(json!(0));
+        obj.entry("aff_code".to_string()).or_insert(json!(""));
+        obj.entry("aff_count".to_string()).or_insert(json!(0));
+        obj.entry("aff_quota".to_string()).or_insert(json!(0));
+        obj.entry("aff_history_quota".to_string())
+            .or_insert(json!(0));
+        obj.entry("inviter_id".to_string()).or_insert(json!(0));
+        obj.entry("github_id".to_string()).or_insert(json!(""));
+        obj.entry("oidc_id".to_string()).or_insert(json!(""));
+        obj.entry("wechat_id".to_string()).or_insert(json!(""));
+        obj.entry("telegram_id".to_string()).or_insert(json!(""));
+        obj.entry("linux_do_id".to_string()).or_insert(json!(""));
+        obj.entry("DeletedAt".to_string())
+            .or_insert(JsonValue::Null);
+    }
+    value
 }
 
 pub(crate) fn checkin_award_quota(min_quota: i64, max_quota: i64) -> i64 {
