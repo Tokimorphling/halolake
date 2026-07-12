@@ -734,6 +734,13 @@ fn response_usage_from_json(value: &JsonValue) -> Option<ResponseUsage> {
     value
         .get("usage")
         .and_then(response_usage_from_usage_object)
+        // OpenAI Responses API SSE: {"type":"response.completed","response":{"usage":{...}}}
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("usage"))
+                .and_then(response_usage_from_usage_object)
+        })
         .or_else(|| {
             value
                 .get("usageMetadata")
@@ -967,5 +974,22 @@ mod tests {
             response_usage_from_json_bytes(br#"{"id":"chatcmpl"}"#),
             None
         );
+    }
+
+    #[test]
+    fn extracts_responses_api_nested_usage() {
+        let usage = response_usage_from_json_bytes(
+            br#"{"type":"response.completed","response":{"usage":{"input_tokens":21,"output_tokens":9,"total_tokens":30}}}"#,
+        )
+        .unwrap();
+        assert_eq!(usage, ResponseUsage {
+            prompt_tokens:         Some(21),
+            completion_tokens:     Some(9),
+            total_tokens:          Some(30),
+            cache_read_tokens:     None,
+            cache_creation_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
+        });
     }
 }

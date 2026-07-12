@@ -116,6 +116,12 @@ pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
         // Gemini native
         summary.message_count = contents.len();
         summary.has_images = contents.iter().any(message_has_image);
+    } else if let Some(input) = value.get("input").and_then(JsonValue::as_array) {
+        // OpenAI Responses API
+        summary.message_count = input.len();
+        summary.has_images = input.iter().any(message_has_image);
+    } else if value.get("input").and_then(JsonValue::as_str).is_some() {
+        summary.message_count = 1;
     }
     summary.max_tokens = value
         .get("max_tokens")
@@ -133,6 +139,30 @@ pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
         || value.get("tools").is_some() && value.get("tool_config").is_some();
     summary.preview = redact_json_preview(&value, 512);
     summary
+}
+
+/// Align with new-api `ForceStreamOption` / OpenAI adaptor:
+/// when `stream=true`, ensure `stream_options.include_usage=true` so upstream SSE
+/// includes a final usage chunk (chat completions and many OpenAI-compat APIs).
+pub(crate) fn ensure_openai_stream_include_usage(value: &mut JsonValue) {
+    let is_stream = value
+        .get("stream")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    if !is_stream {
+        return;
+    }
+    match value.get_mut("stream_options") {
+        Some(JsonValue::Object(map)) => {
+            map.insert("include_usage".to_string(), JsonValue::Bool(true));
+        }
+        Some(other) => {
+            *other = serde_json::json!({ "include_usage": true });
+        }
+        None => {
+            value["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+    }
 }
 
 fn extract_reasoning_effort(value: &JsonValue) -> Option<String> {
@@ -637,5 +667,51 @@ mod sse_buffer_tests {
         assert_eq!(buffer.push_with_done(b"data: [DONE]\n\n", true), vec![
             "[DONE]".to_string()
         ]);
+    }
+}
+
+#[cfg(test)]
+mod stream_options_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn forces_stream_options_include_usage() {
+        let mut value = json!({
+            "model": "gpt-4o",
+            "stream": true,
+            "messages": []
+        });
+        ensure_openai_stream_include_usage(&mut value);
+        assert_eq!(value["stream_options"]["include_usage"], json!(true));
+
+        let mut value = json!({
+            "model": "gpt-4o",
+            "stream": true,
+            "stream_options": { "include_usage": false, "foo": 1 }
+        });
+        ensure_openai_stream_include_usage(&mut value);
+        assert_eq!(value["stream_options"]["include_usage"], json!(true));
+        assert_eq!(value["stream_options"]["foo"], json!(1));
+
+        let mut value = json!({ "stream": false });
+        ensure_openai_stream_include_usage(&mut value);
+        assert!(value.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn counts_responses_api_input() {
+        let value = json!({
+            "model": "grok-4.5",
+            "stream": true,
+            "tools": [{"type": "function"}],
+            "input": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "yo"}
+            ]
+        });
+        let summary = request_body_summary(value.to_string().as_bytes());
+        assert_eq!(summary.message_count, 2);
+        assert!(summary.has_tools);
     }
 }

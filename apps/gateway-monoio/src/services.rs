@@ -542,6 +542,14 @@ where
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
         value["model"] = JsonValue::String(route.route.upstream_model.clone());
+        // new-api ForceStreamOption targets OpenAI chat/completions (and legacy
+        // completions). Responses API carries usage in `response.completed` instead.
+        let path_for_stream = req.path.split('?').next().unwrap_or(req.path.as_str());
+        if path_for_stream.ends_with("/chat/completions")
+            || path_for_stream.ends_with("/completions")
+        {
+            ensure_openai_stream_include_usage(&mut value);
+        }
         let body = match serde_json::to_vec(&value) {
             Ok(body) => Bytes::from(body),
             Err(err) => {

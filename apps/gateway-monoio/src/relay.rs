@@ -883,6 +883,26 @@ impl RelayService {
                 builder = builder.header("anthropic-beta", beta);
             }
         }
+        if let Some(user_agent) = downstream_headers.get(header::USER_AGENT) {
+            builder = builder.header(header::USER_AGENT, user_agent);
+        }
+        // Stainless / Claude CLI identity headers (allowlisted).
+        for name in [
+            "X-Stainless-Arch",
+            "X-Stainless-Lang",
+            "X-Stainless-Os",
+            "X-Stainless-Package-Version",
+            "X-Stainless-Retry-Count",
+            "X-Stainless-Runtime",
+            "X-Stainless-Runtime-Version",
+            "X-Stainless-Timeout",
+            "X-App",
+            "Anthropic-Dangerous-Direct-Browser-Access",
+        ] {
+            if let Some(value) = downstream_headers.get(name) {
+                builder = builder.header(name, value);
+            }
+        }
 
         let req = builder
             .body(HttpBody::fixed_body(Some(body)))
@@ -944,8 +964,26 @@ impl RelayService {
         if let Some(accept) = downstream_headers.get(header::ACCEPT) {
             builder = builder.header(header::ACCEPT, accept);
         }
+        // Preserve client identity headers. new-api does not rewrite User-Agent by
+        // default; affinity rules and Codex/Claude CLIs also rely on the original UA.
+        if let Some(user_agent) = downstream_headers.get(header::USER_AGENT) {
+            builder = builder.header(header::USER_AGENT, user_agent);
+        }
         if let Some(beta) = downstream_headers.get("OpenAI-Beta") {
             builder = builder.header("OpenAI-Beta", beta);
+        }
+        // Common Codex / OpenAI client headers (allowlisted; credentials never forwarded).
+        for name in [
+            "Originator",
+            "Session_id",
+            "X-Codex-Beta-Features",
+            "X-Codex-Turn-Metadata",
+            "OpenAI-Organization",
+            "OpenAI-Project",
+        ] {
+            if let Some(value) = downstream_headers.get(name) {
+                builder = builder.header(name, value);
+            }
         }
         let req = builder
             .body(HttpBody::fixed_body(Some(body)))
@@ -1010,6 +1048,9 @@ impl RelayService {
         if let Some(accept) = downstream_headers.get(header::ACCEPT) {
             builder = builder.header(header::ACCEPT, accept);
         }
+        if let Some(user_agent) = downstream_headers.get(header::USER_AGENT) {
+            builder = builder.header(header::USER_AGENT, user_agent);
+        }
         let req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Gemini upstream request")?;
@@ -1046,6 +1087,7 @@ fn rewrite_openai_chat_model_body(raw_body: &[u8], upstream_model: &str) -> Resu
     let mut value: JsonValue =
         serde_json::from_slice(raw_body).context("parse OpenAI chat request body")?;
     value["model"] = JsonValue::String(upstream_model.to_string());
+    ensure_openai_stream_include_usage(&mut value);
     Ok(Bytes::from(
         serde_json::to_vec(&value).context("serialize OpenAI chat request body")?,
     ))
