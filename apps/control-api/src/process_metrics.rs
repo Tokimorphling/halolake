@@ -107,13 +107,13 @@ fn host_memory() -> Option<(u64, u64, u64)> {
     #[cfg(target_os = "linux")]
     {
         let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-        let mut total_kb = None;
-        let mut available_kb = None;
+        let mut total_kb: Option<u64> = None;
+        let mut available_kb: Option<u64> = None;
         for line in meminfo.lines() {
             if let Some(rest) = line.strip_prefix("MemTotal:") {
-                total_kb = rest.split_whitespace().next()?.parse().ok();
+                total_kb = rest.split_whitespace().next()?.parse::<u64>().ok();
             } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
-                available_kb = rest.split_whitespace().next()?.parse().ok();
+                available_kb = rest.split_whitespace().next()?.parse::<u64>().ok();
             }
         }
         let total = total_kb? * 1024;
