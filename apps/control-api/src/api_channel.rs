@@ -1214,10 +1214,11 @@ pub(crate) async fn fetch_models_for_channel(
     let service = ChannelProbeService::new(state.management.clone());
     match service
         .call(FetchModelsRequest {
-            channel_id:   Some(id),
-            base_url:     String::new(),
-            channel_type: 1,
-            key:          String::new(),
+            channel_id:      Some(id),
+            base_url:        String::new(),
+            channel_type:    1,
+            key:             String::new(),
+            header_override: None,
         })
         .await
     {

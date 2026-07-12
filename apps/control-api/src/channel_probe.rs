@@ -12,13 +12,16 @@ const CHANNEL_TYPE_ZHIPU_V4: i32 = 26;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct FetchModelsRequest {
     #[serde(default)]
-    pub(crate) channel_id:   Option<u64>,
+    pub(crate) channel_id:      Option<u64>,
     #[serde(default)]
-    pub(crate) base_url:     String,
+    pub(crate) base_url:        String,
     #[serde(rename = "type", default = "default_channel_type")]
-    pub(crate) channel_type: i32,
+    pub(crate) channel_type:    i32,
     #[serde(default)]
-    pub(crate) key:          String,
+    pub(crate) key:             String,
+    /// Channel-level header overrides (e.g. xAI chat-proxy CLI identity).
+    #[serde(default)]
+    pub(crate) header_override: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,10 +53,11 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
                 .find(|channel| channel.id == channel_id)
                 .ok_or(ManagementError::NotFound)?;
             FetchModelsRequest {
-                channel_id:   Some(channel_id),
-                base_url:     channel.base_url.clone().unwrap_or_default(),
-                channel_type: channel.channel_type,
-                key:          channel.key.clone(),
+                channel_id:      Some(channel_id),
+                base_url:        channel.base_url.clone().unwrap_or_default(),
+                channel_type:    channel.channel_type,
+                key:             channel.key.clone(),
+                header_override: channel.header_override.clone(),
             }
         } else {
             req
@@ -61,11 +65,12 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
 
         let base_url = resolve_base_url(request.channel_type, &request.base_url)?;
         let key = first_key(&request.key);
+        let headers = parse_header_override_map(request.header_override.as_deref());
         let models = match request.channel_type {
-            CHANNEL_TYPE_OLLAMA => self.fetch_ollama_models(&base_url, &key).await,
-            CHANNEL_TYPE_GEMINI => self.fetch_gemini_models(&base_url, &key).await,
+            CHANNEL_TYPE_OLLAMA => self.fetch_ollama_models(&base_url, &key, &headers).await,
+            CHANNEL_TYPE_GEMINI => self.fetch_gemini_models(&base_url, &key, &headers).await,
             _ => {
-                self.fetch_openai_compatible_models(request.channel_type, &base_url, &key)
+                self.fetch_openai_compatible_models(request.channel_type, &base_url, &key, &headers)
                     .await
             }
         }?;
@@ -79,6 +84,7 @@ impl ChannelProbeService {
         channel_type: i32,
         base_url: &str,
         key: &str,
+        headers: &[(String, String)],
     ) -> Result<Vec<String>, ManagementError> {
         let url = openai_compatible_models_url(channel_type, base_url);
         let mut request = self.client.get(url);
@@ -91,6 +97,7 @@ impl ChannelProbeService {
                 request = request.bearer_auth(key);
             }
         }
+        request = apply_header_overrides(request, headers, key);
         let response = request.send().await.map_err(storage_err)?;
         if !response.status().is_success() {
             return Err(ManagementError::Storage(format!(
@@ -106,6 +113,7 @@ impl ChannelProbeService {
         &self,
         base_url: &str,
         key: &str,
+        headers: &[(String, String)],
     ) -> Result<Vec<String>, ManagementError> {
         let mut request = self
             .client
@@ -113,6 +121,7 @@ impl ChannelProbeService {
         if !key.is_empty() {
             request = request.bearer_auth(key);
         }
+        request = apply_header_overrides(request, headers, key);
         let response = request.send().await.map_err(storage_err)?;
         if !response.status().is_success() {
             return Err(ManagementError::Storage(format!(
@@ -128,13 +137,16 @@ impl ChannelProbeService {
         &self,
         base_url: &str,
         key: &str,
+        headers: &[(String, String)],
     ) -> Result<Vec<String>, ManagementError> {
         let mut url = format!("{}/v1beta/models", base_url.trim_end_matches('/'));
         if !key.is_empty() {
             url.push_str("?key=");
             url.push_str(key);
         }
-        let response = self.client.get(url).send().await.map_err(storage_err)?;
+        let mut request = self.client.get(url);
+        request = apply_header_overrides(request, headers, key);
+        let response = request.send().await.map_err(storage_err)?;
         if !response.status().is_success() {
             return Err(ManagementError::Storage(format!(
                 "failed to fetch Gemini models: {}",
@@ -222,6 +234,58 @@ fn normalize_model_names(models: Vec<String>) -> Vec<String> {
     models.sort();
     models.dedup();
     models
+}
+
+fn parse_header_override_map(raw: Option<&str>) -> Vec<(String, String)> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (key, entry) in object {
+        let key = key.trim();
+        if key.is_empty() || key == "*" {
+            continue;
+        }
+        let lower = key.to_ascii_lowercase();
+        if lower.starts_with("re:") || lower.starts_with("regex:") {
+            continue;
+        }
+        let Some(text) = entry.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        out.push((key.to_string(), text.to_string()));
+    }
+    out
+}
+
+fn resolve_header_template(template: &str, api_key: &str) -> Option<String> {
+    let value = template.replace("{api_key}", api_key);
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn apply_header_overrides(
+    mut request: reqwest::RequestBuilder,
+    headers: &[(String, String)],
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    for (name, template) in headers {
+        let Some(value) = resolve_header_template(template, api_key) else {
+            continue;
+        };
+        request = request.header(name.as_str(), value);
+    }
+    request
 }
 
 fn first_key(key: &str) -> String {

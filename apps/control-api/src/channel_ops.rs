@@ -4,7 +4,8 @@ use crate::{
 };
 use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
 use halolake_domain::{
-    CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, STATUS_ENABLED,
+    CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord,
+    STATUS_AUTO_DISABLED, STATUS_ENABLED,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -113,7 +114,8 @@ impl ChannelOpsService {
         channel.balance = balance;
         channel.balance_updated_time = now_unix();
         if disable_empty && balance <= 0.0 && channel.auto_ban.unwrap_or(1) != 0 {
-            channel.status = 0;
+            // Align with new-api auto-ban: status 3 = auto disabled (not 0).
+            channel.status = STATUS_AUTO_DISABLED;
         }
         self.update_channel(channel).await?;
         Ok(balance)
@@ -352,6 +354,10 @@ impl ChannelOpsService {
             }
             TestAuth::GeminiQuery => {}
         }
+        // Apply channel header_override last (xAI chat-proxy CLI identity, etc.).
+        for (name, value) in channel_header_overrides(channel, &key) {
+            request = request.header(name, value);
+        }
         let response = request.send().await.map_err(storage_err)?;
         let status = response.status();
         let bytes = response.bytes().await.map_err(storage_err)?;
@@ -383,10 +389,11 @@ impl ChannelOpsService {
         let mut settings = channel_settings(&channel);
         let upstream_models = ChannelProbeService::new(self.management.clone())
             .call(FetchModelsRequest {
-                channel_id:   Some(channel_id),
-                base_url:     String::new(),
-                channel_type: CHANNEL_TYPE_OPENAI,
-                key:          String::new(),
+                channel_id:      Some(channel_id),
+                base_url:        String::new(),
+                channel_type:    CHANNEL_TYPE_OPENAI,
+                key:             String::new(),
+                header_override: None,
             })
             .await?;
         let (pending_add, pending_remove) = collect_pending_upstream_model_changes(
@@ -1046,6 +1053,44 @@ fn normalize_channel_model_mapping_result(
                 .then(|| (source.to_string(), target.to_string()))
         })
         .collect())
+}
+
+fn channel_header_overrides(channel: &ChannelRecord, api_key: &str) -> Vec<(String, String)> {
+    let Some(raw) = channel
+        .header_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(raw) else {
+        return Vec::new();
+    };
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (name, entry) in object {
+        let name = name.trim();
+        if name.is_empty() || name == "*" {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if lower.starts_with("re:") || lower.starts_with("regex:") {
+            continue;
+        }
+        let Some(text) = entry.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let resolved = text.replace("{api_key}", api_key);
+        let resolved = resolved.trim();
+        if resolved.is_empty() {
+            continue;
+        }
+        out.push((name.to_string(), resolved.to_string()));
+    }
+    out
 }
 
 fn channel_settings(channel: &ChannelRecord) -> ChannelOtherSettings {

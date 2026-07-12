@@ -76,13 +76,22 @@ impl ChannelFeedbackService {
         &self,
         channel_id: &str,
     ) -> Result<Option<ChannelRecord>, ChannelFeedbackError> {
+        let channel_id = channel_id.trim();
+        if channel_id.is_empty() {
+            return Ok(None);
+        }
         let data = self.management.current_data().map_err(feedback_storage)?;
-        let numeric_id = channel_id.parse::<u64>().ok();
-        Ok(data.channels.into_iter().find(|channel| {
-            channel.snapshot_id.as_deref() == Some(channel_id)
-                || numeric_id.is_some_and(|id| channel.id == id)
-                || channel.id.to_string() == channel_id
-        }))
+        // Prefer exact numeric id when the gateway sends "123". Only fall back to
+        // snapshot_id for non-numeric ids (e.g. imported external ids). Never
+        // match empty / ambiguous ids — that previously risked disabling the
+        // wrong channel when feedback payloads were malformed.
+        if let Ok(id) = channel_id.parse::<u64>() {
+            return Ok(data.channels.into_iter().find(|channel| channel.id == id));
+        }
+        Ok(data
+            .channels
+            .into_iter()
+            .find(|channel| channel.snapshot_id.as_deref() == Some(channel_id)))
     }
 }
 

@@ -453,10 +453,11 @@ async fn best_effort_fetch_models(management: &ManagementStore, channel_id: u64)
     let probe = ChannelProbeService::new(management.clone());
     let models = probe
         .call(FetchModelsRequest {
-            channel_id:   Some(channel_id),
-            base_url:     String::new(),
-            channel_type: 1,
-            key:          String::new(),
+            channel_id:      Some(channel_id),
+            base_url:        String::new(),
+            channel_type:    1,
+            key:             String::new(),
+            header_override: None,
         })
         .await
         .ok()?;

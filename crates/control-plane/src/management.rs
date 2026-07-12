@@ -1440,6 +1440,22 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             if updated.proxy_id.is_none() {
                 updated.proxy_id = channel.proxy_id;
             }
+            // Empty Option/string fields from partial admin payloads (fetch-models
+            // then save, null-stripped JSON, serde defaults) must not wipe durable
+            // channel config. Intentional clear is rare; type defaults apply when
+            // both sides are empty.
+            preserve_nonempty_opt(&mut updated.base_url, channel.base_url.as_deref());
+            preserve_nonempty_opt(
+                &mut updated.header_override,
+                channel.header_override.as_deref(),
+            );
+            preserve_nonempty_opt(
+                &mut updated.param_override,
+                channel.param_override.as_deref(),
+            );
+            preserve_nonempty_opt(&mut updated.model_mapping, channel.model_mapping.as_deref());
+            preserve_nonempty_opt(&mut updated.remark, channel.remark.as_deref());
+            preserve_nonempty_opt(&mut updated.tag, channel.tag.as_deref());
             // Usage / probe counters are not part of the admin form payload (serde
             // defaults them to 0). Preserve like new-api GORM Updates that only
             // touch fields present on the model instance from DB + form.
@@ -1465,6 +1481,20 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             *channel = updated.clone();
             Ok(updated.masked())
         })
+    }
+}
+
+fn preserve_nonempty_opt(target: &mut Option<String>, existing: Option<&str>) {
+    let incoming_empty = target
+        .as_deref()
+        .map(str::trim)
+        .map(|s| s.is_empty())
+        .unwrap_or(true);
+    if !incoming_empty {
+        return;
+    }
+    if let Some(existing) = existing.map(str::trim).filter(|s| !s.is_empty()) {
+        *target = Some(existing.to_string());
     }
 }
 

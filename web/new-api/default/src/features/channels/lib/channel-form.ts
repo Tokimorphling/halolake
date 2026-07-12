@@ -705,21 +705,13 @@ export function transformFormDataToUpdatePayload(
     id: channelId,
     name: formData.name,
     type: formData.type,
-    base_url: normalizeBaseUrl(formData.base_url) || null,
-    openai_organization: formData.openai_organization || null,
     models: formData.models,
     group: formatGroups(formData.group),
-    model_mapping: formData.model_mapping || null,
     priority: formData.priority ?? 0,
     weight: formData.weight ?? 0,
-    test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
-    status_code_mapping: formData.status_code_mapping || null,
-    tag: formData.tag || null,
     remark: formData.remark || '',
     setting: buildSettingJSON(formData),
-    param_override: formData.param_override || null,
-    header_override: formData.header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
   }
@@ -741,16 +733,31 @@ export function transformFormDataToUpdatePayload(
     }
   })
 
-  // Send explicit empty strings for nullable fields so GORM updates can clear them.
-  payload.base_url = normalizeBaseUrl(formData.base_url) || ''
+  // Halolake: omit empty optional strings so the control-plane keeps existing
+  // values (base_url / header_override must survive "fetch models" then save).
+  // new-api used empty string to clear via GORM; we preserve instead.
+  const baseUrl = normalizeBaseUrl(formData.base_url)
+  if (baseUrl) {
+    payload.base_url = baseUrl
+  } else {
+    delete (payload as { base_url?: string | null }).base_url
+  }
   payload.openai_organization = formData.openai_organization || ''
   payload.test_model = formData.test_model || ''
   payload.tag = formData.tag || ''
   payload.remark = formData.remark || ''
   payload.model_mapping = formData.model_mapping || ''
   payload.status_code_mapping = formData.status_code_mapping || ''
-  payload.param_override = formData.param_override || ''
-  payload.header_override = formData.header_override || ''
+  if (formData.param_override?.trim()) {
+    payload.param_override = formData.param_override
+  } else {
+    delete (payload as { param_override?: string | null }).param_override
+  }
+  if (formData.header_override?.trim()) {
+    payload.header_override = formData.header_override
+  } else {
+    delete (payload as { header_override?: string | null }).header_override
+  }
 
   return payload
 }
