@@ -171,24 +171,24 @@ impl From<PageQuery> for PageRequest {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelListQuery {
     #[serde(default = "default_page", alias = "p")]
-    page:      usize,
+    page:         usize,
     #[serde(default = "default_page_size", alias = "size")]
-    page_size: usize,
+    page_size:    usize,
     #[serde(default)]
-    group:     String,
+    group:        String,
     /// `enabled` / `1`, `disabled` / `0`, empty = all.
     #[serde(default)]
-    status:    String,
+    status:       String,
     #[serde(default, rename = "type")]
     channel_type: Option<i32>,
     #[serde(default)]
-    sort_by:   String,
+    sort_by:      String,
     #[serde(default)]
-    sort_order: String,
+    sort_order:   String,
     #[serde(default)]
-    id_sort:   bool,
+    id_sort:      bool,
     #[serde(default)]
-    tag_mode:  bool,
+    tag_mode:     bool,
 }
 
 impl ChannelListQuery {
@@ -203,28 +203,28 @@ impl ChannelListQuery {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelSearchQuery {
     #[serde(default = "default_page", alias = "p")]
-    page:      usize,
+    page:         usize,
     #[serde(default = "default_page_size", alias = "size")]
-    page_size: usize,
+    page_size:    usize,
     #[serde(default)]
-    keyword:   String,
+    keyword:      String,
     #[serde(default)]
-    group:     String,
+    group:        String,
     #[serde(default)]
-    model:     String,
+    model:        String,
     /// `enabled` / `1`, `disabled` / `0`, empty = all.
     #[serde(default)]
-    status:    String,
+    status:       String,
     #[serde(default, rename = "type")]
     channel_type: Option<i32>,
     #[serde(default)]
-    sort_by:   String,
+    sort_by:      String,
     #[serde(default)]
-    sort_order: String,
+    sort_order:   String,
     #[serde(default)]
-    id_sort:   bool,
+    id_sort:      bool,
     #[serde(default)]
-    tag_mode:  bool,
+    tag_mode:     bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -624,9 +624,7 @@ impl ControlApi {
         let router = playground::mount(router);
         #[cfg(feature = "compat-stubs")]
         let router = compat::mount(router);
-        router
-            .fallback(web_fallback)
-            .with_state(self.state)
+        router.fallback(web_fallback).with_state(self.state)
     }
 }
 

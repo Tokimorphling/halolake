@@ -1378,7 +1378,10 @@ pub fn string_col(row: &sqlx::sqlite::SqliteRow, name: &str) -> Result<String, M
     row.try_get::<String, _>(name).map_err(storage_err)
 }
 
-pub fn string_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<String, ManagementError> {
+pub fn string_col_mysql(
+    row: &sqlx::mysql::MySqlRow,
+    name: &str,
+) -> Result<String, ManagementError> {
     row.try_get::<String, _>(name).map_err(storage_err)
 }
 
@@ -2039,7 +2042,10 @@ fn pg_opt_i32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<i32>
     row.try_get::<Option<i32>, _>(name).map_err(storage_err)
 }
 
-pub fn pg_opt_u32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<u32>, ManagementError> {
+pub fn pg_opt_u32_col(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+) -> Result<Option<u32>, ManagementError> {
     // weight is INTEGER (INT4); do not force INT8 decode.
     if let Ok(v) = row.try_get::<Option<i32>, _>(name) {
         return Ok(v.map(|value| value.max(0) as u32));
@@ -2052,7 +2058,10 @@ pub fn pg_opt_u32_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<
         .map_err(storage_err)
 }
 
-pub fn pg_opt_u64_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<u64>, ManagementError> {
+pub fn pg_opt_u64_col(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+) -> Result<Option<u64>, ManagementError> {
     if let Ok(v) = row.try_get::<Option<i64>, _>(name) {
         return Ok(v.map(|value| value.max(0) as u64));
     }

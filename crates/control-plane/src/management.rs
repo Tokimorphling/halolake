@@ -1310,12 +1310,7 @@ impl Service<ListChannelsRequest> for MemoryManagementStore {
         if let Some(channel_type) = req.channel_type {
             channels.retain(|channel| channel.channel_type == channel_type);
         }
-        sort_channels(
-            &mut channels,
-            &req.sort_by,
-            &req.sort_order,
-            req.id_sort,
-        );
+        sort_channels(&mut channels, &req.sort_by, &req.sort_order, req.id_sort);
         if req.tag_mode {
             return Ok(page_channels_by_tag(channels, req.page));
         }
@@ -1353,12 +1348,7 @@ impl Service<SearchChannelsRequest> for MemoryManagementStore {
         if let Some(channel_type) = req.channel_type {
             channels.retain(|channel| channel.channel_type == channel_type);
         }
-        sort_channels(
-            &mut channels,
-            &req.sort_by,
-            &req.sort_order,
-            req.id_sort,
-        );
+        sort_channels(&mut channels, &req.sort_by, &req.sort_order, req.id_sort);
         if req.tag_mode {
             return Ok(page_channels_by_tag(channels, req.search.page));
         }
@@ -1894,8 +1884,6 @@ fn can_manage_target_role(actor_role: i32, target_role: i32) -> bool {
     actor_role == ROLE_ROOT_USER || actor_role > target_role
 }
 
-
-
 /// Mirrors new-api ChannelSortOptions.
 fn sort_channels(channels: &mut [ChannelRecord], sort_by: &str, sort_order: &str, id_sort: bool) {
     let sort_by = sort_by.trim().to_ascii_lowercase();
@@ -1909,10 +1897,7 @@ fn sort_channels(channels: &mut [ChannelRecord], sort_by: &str, sort_order: &str
     channels.sort_by(|a, b| {
         let ord = match column.as_str() {
             "name" => a.name.cmp(&b.name),
-            "priority" => a
-                .priority
-                .unwrap_or(0)
-                .cmp(&b.priority.unwrap_or(0)),
+            "priority" => a.priority.unwrap_or(0).cmp(&b.priority.unwrap_or(0)),
             "balance" => a
                 .balance
                 .partial_cmp(&b.balance)
@@ -1921,11 +1906,7 @@ fn sort_channels(channels: &mut [ChannelRecord], sort_by: &str, sort_order: &str
             "test_time" => a.test_time.cmp(&b.test_time),
             _ => a.id.cmp(&b.id),
         };
-        if ascending {
-            ord
-        } else {
-            ord.reverse()
-        }
+        if ascending { ord } else { ord.reverse() }
     });
 }
 
@@ -3117,24 +3098,27 @@ mod tests {
 
             let page = store
                 .call(ListChannelsRequest {
-                    page: PageRequest {
-                        page: 1,
+                    page:         PageRequest {
+                        page:      1,
                         page_size: 50,
                     },
-                    group: "ttt".to_string(),
-                    status: None,
+                    group:        "ttt".to_string(),
+                    status:       None,
                     channel_type: None,
-                    sort_by: String::new(),
-                    sort_order: String::new(),
-                    id_sort: false,
-                    tag_mode: false,
+                    sort_by:      String::new(),
+                    sort_order:   String::new(),
+                    id_sort:      false,
+                    tag_mode:     false,
                 })
                 .await
                 .expect("list channels");
             let ids: Vec<u64> = page.items.iter().map(|c| c.id).collect();
             assert!(ids.contains(&2), "ttt-only should match: {ids:?}");
             assert!(ids.contains(&3), "multi-group should match: {ids:?}");
-            assert!(!ids.contains(&1), "default-only must be filtered out: {ids:?}");
+            assert!(
+                !ids.contains(&1),
+                "default-only must be filtered out: {ids:?}"
+            );
             assert_eq!(page.total, 2);
         });
     }
@@ -3154,22 +3138,21 @@ mod tests {
             ));
             let page = store
                 .call(ListChannelsRequest {
-                    page: PageRequest {
-                        page: 1,
+                    page:         PageRequest {
+                        page:      1,
                         page_size: 50,
                     },
-                    group: String::new(),
-                    status: None,
+                    group:        String::new(),
+                    status:       None,
                     channel_type: None,
-                    sort_by: String::new(),
-                    sort_order: String::new(),
-                    id_sort: false,
-                    tag_mode: false,
+                    sort_by:      String::new(),
+                    sort_order:   String::new(),
+                    id_sort:      false,
+                    tag_mode:     false,
                 })
                 .await
                 .expect("list channels");
             assert_eq!(page.total, 2);
         });
     }
-
 }

@@ -63,7 +63,6 @@ use service_async::Service;
 use std::collections::HashMap;
 use tracing::warn;
 
-
 fn normalize_group_filter(group: &str) -> Option<&str> {
     let group = group.trim();
     if group.is_empty() || group.eq_ignore_ascii_case("all") || group.eq_ignore_ascii_case("null") {
@@ -120,7 +119,6 @@ fn parse_channel_status_filter(status: &str) -> Option<i32> {
     }
 }
 
-
 pub(crate) async fn list_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -135,25 +133,23 @@ pub(crate) async fn list_channels(
     match state
         .management
         .call(ListChannelsRequest {
-            page:         query.page_request(),
-            group:        query.group,
+            page: query.page_request(),
+            group: query.group,
             status,
             channel_type: query.channel_type,
-            sort_by:      query.sort_by,
-            sort_order:   query.sort_order,
-            id_sort:      query.id_sort,
-            tag_mode:     query.tag_mode,
+            sort_by: query.sort_by,
+            sort_order: query.sort_order,
+            id_sort: query.id_sort,
+            tag_mode: query.tag_mode,
         })
         .await
     {
         Ok(page) => {
             let items: Vec<JsonValue> = page.items.iter().map(channel_to_api_json).collect();
             let type_counts = match state.management.current_data() {
-                Ok(data) => type_counts_for_filters(
-                    &data.channels,
-                    normalize_group_filter(&group),
-                    status,
-                ),
+                Ok(data) => {
+                    type_counts_for_filters(&data.channels, normalize_group_filter(&group), status)
+                }
                 Err(_) => channel_type_counts(&items),
             };
             api_success(json!({
@@ -189,25 +185,23 @@ pub(crate) async fn search_channels(
                 },
                 keyword: query.keyword,
             },
-            group:        query.group,
-            model:        query.model,
+            group: query.group,
+            model: query.model,
             status,
             channel_type: query.channel_type,
-            sort_by:      query.sort_by,
-            sort_order:   query.sort_order,
-            id_sort:      query.id_sort,
-            tag_mode:     query.tag_mode,
+            sort_by: query.sort_by,
+            sort_order: query.sort_order,
+            id_sort: query.id_sort,
+            tag_mode: query.tag_mode,
         })
         .await
     {
         Ok(page) => {
             let items: Vec<JsonValue> = page.items.iter().map(channel_to_api_json).collect();
             let type_counts = match state.management.current_data() {
-                Ok(data) => type_counts_for_filters(
-                    &data.channels,
-                    normalize_group_filter(&group),
-                    status,
-                ),
+                Ok(data) => {
+                    type_counts_for_filters(&data.channels, normalize_group_filter(&group), status)
+                }
                 Err(_) => channel_type_counts(&items),
             };
             api_success(json!({
@@ -449,14 +443,10 @@ fn channel_record_from_json(mut value: JsonValue) -> Result<ChannelRecord, Strin
     serde_json::from_value(value).map_err(|err| format!("invalid channel payload: {err}"))
 }
 
-
 fn channel_type_counts(items: &[JsonValue]) -> serde_json::Map<String, JsonValue> {
     let mut counts = serde_json::Map::new();
     for item in items {
-        let ty = item
-            .get("type")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let ty = item.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
         let key = ty.to_string();
         let entry = counts.entry(key).or_insert(json!(0));
         if let Some(n) = entry.as_i64() {

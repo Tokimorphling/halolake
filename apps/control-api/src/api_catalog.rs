@@ -1,5 +1,7 @@
 //! Catalog, redemption, top-up, and group HTTP handlers.
 
+#[cfg(feature = "admin-extras")]
+use crate::model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest};
 use crate::{
     AppState, ModelUpdateQuery, PageQuery,
     api_user::TokenSearchQuery,
@@ -20,10 +22,6 @@ use crate::{
     options_util::{
         collect_json_object_keys, option_f64, require_payment_compliance, topup_info_payload,
     },
-};
-#[cfg(feature = "admin-extras")]
-use crate::model_sync::{
-    ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest,
 };
 use axum::{
     Json,

@@ -1,5 +1,9 @@
 //! Options, pricing, rankings, and related helpers.
 
+#[cfg(feature = "admin-extras")]
+use crate::ratio_sync::{
+    FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService,
+};
 use crate::{
     AppState, DEFAULT_CHANNEL_AFFINITY_RULES_JSON, DEFAULT_MODEL_RATIO_JSON,
     api_user::CheckinSetting,
@@ -16,10 +20,6 @@ use crate::{
     },
     now_unix, publish_management_snapshot,
     storage::{ListOptionsRequest, UpdateOptionRequest},
-};
-#[cfg(feature = "admin-extras")]
-use crate::ratio_sync::{
-    FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService,
 };
 use axum::{
     Json,

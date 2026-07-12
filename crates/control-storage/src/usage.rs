@@ -63,10 +63,7 @@ impl UsageStore {
         }
     }
 
-    pub fn count_before_unix_seconds(
-        &self,
-        target_timestamp: i64,
-    ) -> Result<usize, UsageError> {
+    pub fn count_before_unix_seconds(&self, target_timestamp: i64) -> Result<usize, UsageError> {
         let target_ms = target_timestamp.saturating_mul(1000);
         Ok(self
             .events()?
