@@ -74,7 +74,15 @@ pub(crate) async fn list_channels(
         .call(ListChannelsRequest { page: query.into() })
         .await
     {
-        Ok(page) => api_success(page),
+        Ok(page) => {
+            let items: Vec<JsonValue> = page.items.iter().map(channel_to_api_json).collect();
+            api_success(json!({
+                "items": items,
+                "total": page.total,
+                "page": page.page,
+                "page_size": page.page_size,
+            }))
+        }
         Err(err) => management_error(err),
     }
 }
@@ -101,7 +109,15 @@ pub(crate) async fn search_channels(
         })
         .await
     {
-        Ok(page) => api_success(page),
+        Ok(page) => {
+            let items: Vec<JsonValue> = page.items.iter().map(channel_to_api_json).collect();
+            api_success(json!({
+                "items": items,
+                "total": page.total,
+                "page": page.page,
+                "page_size": page.page_size,
+            }))
+        }
         Err(err) => management_error(err),
     }
 }
@@ -116,7 +132,7 @@ pub(crate) async fn get_channel(
         Err(resp) => return resp,
     };
     match state.management.call(GetChannelRequest { id }).await {
-        Ok(channel) => api_success(channel),
+        Ok(channel) => api_success(channel_to_api_json(&channel)),
         Err(err) => management_error(err),
     }
 }
@@ -300,6 +316,13 @@ fn channel_record_from_json(mut value: JsonValue) -> Result<ChannelRecord, Strin
             "other_info",
             "channel_info",
             "keys",
+            "max_input_tokens",
+            "balance",
+            "balance_updated_time",
+            "used_quota",
+            "created_time",
+            "test_time",
+            "response_time",
         ] {
             obj.remove(drop_key);
         }
@@ -308,11 +331,75 @@ fn channel_record_from_json(mut value: JsonValue) -> Result<ChannelRecord, Strin
                 obj.insert("weight".into(), json!(f as u64));
             }
         }
+        // Map form setting.proxy (URL string) is already in setting JSON.
+        // If client sends numeric proxy pool id as "proxy", ignore (not on ChannelRecord).
+        obj.remove("proxy");
         if !obj.contains_key("key") {
             obj.insert("key".into(), json!(""));
         }
+        // id may arrive as number or string
+        if let Some(id) = obj.get("id").cloned() {
+            if let Some(s) = id.as_str() {
+                if let Ok(n) = s.parse::<u64>() {
+                    obj.insert("id".into(), json!(n));
+                }
+            }
+        }
     }
     serde_json::from_value(value).map_err(|err| format!("invalid channel payload: {err}"))
+}
+
+/// Enrich channel JSON for new-api web (requires channel_info.multi_key_mode etc.).
+fn channel_to_api_json(channel: &ChannelRecord) -> JsonValue {
+    let mut value = serde_json::to_value(channel).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        let info = channel_info_from_setting(channel.setting.as_deref(), &channel.key);
+        obj.insert("channel_info".into(), info);
+        // new-api list/detail often include these as empty strings
+        obj.entry("openai_organization".to_string())
+            .or_insert(json!(""));
+        obj.entry("test_model".to_string()).or_insert(json!(""));
+        obj.entry("status_code_mapping".to_string())
+            .or_insert(json!(""));
+        obj.entry("other".to_string()).or_insert(json!(""));
+        obj.entry("other_info".to_string()).or_insert(json!(""));
+        obj.entry("settings".to_string()).or_insert(json!("{}"));
+    }
+    value
+}
+
+fn channel_info_from_setting(setting: Option<&str>, key: &str) -> JsonValue {
+    let parsed = setting
+        .and_then(|s| serde_json::from_str::<JsonValue>(s).ok())
+        .unwrap_or_else(|| json!({}));
+    let key_lines = key.lines().map(str::trim).filter(|l| !l.is_empty()).count();
+    let is_multi = parsed
+        .get("is_multi_key")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(key_lines > 1);
+    let multi_key_size = parsed
+        .get("multi_key_size")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(if is_multi { key_lines } else { 0 });
+    let multi_key_mode = parsed
+        .get("multi_key_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("random");
+    let multi_key_mode = if multi_key_mode == "polling" {
+        "polling"
+    } else {
+        "random"
+    };
+    json!({
+        "is_multi_key": is_multi,
+        "multi_key_size": multi_key_size,
+        "multi_key_status_list": parsed.get("multi_key_status_list").cloned().unwrap_or(json!({})),
+        "multi_key_disabled_reason": parsed.get("multi_key_disabled_reason").cloned().unwrap_or(json!({})),
+        "multi_key_disabled_time": parsed.get("multi_key_disabled_time").cloned().unwrap_or(json!({})),
+        "multi_key_polling_index": parsed.get("multi_key_polling_index").and_then(|v| v.as_u64()).unwrap_or(0),
+        "multi_key_mode": multi_key_mode,
+    })
 }
 
 fn split_channel_keys(raw: &str) -> Vec<String> {
@@ -850,12 +937,20 @@ pub(crate) async fn import_sub2api_data(
 pub(crate) async fn update_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(channel): Json<ChannelRecord>,
+    Json(body): Json<JsonValue>,
 ) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    // new-api PUT body is a flat channel-like object with extra fields + nulls.
+    let channel = match channel_record_from_json(body) {
+        Ok(c) => c,
+        Err(msg) => return api_error_status(StatusCode::BAD_REQUEST, &msg),
+    };
+    if channel.id == 0 {
+        return api_error_status(StatusCode::BAD_REQUEST, "channel id is required");
+    }
     match state
         .management
         .call(UpdateChannelRequest { channel })

@@ -141,9 +141,9 @@ pub(crate) struct AppState {
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub(crate) struct PageQuery {
-    #[serde(default = "default_page")]
+    #[serde(default = "default_page", alias = "p")]
     page:      usize,
-    #[serde(default = "default_page_size")]
+    #[serde(default = "default_page_size", alias = "size")]
     page_size: usize,
 }
 
@@ -158,9 +158,9 @@ impl From<PageQuery> for PageRequest {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelSearchQuery {
-    #[serde(default = "default_page")]
+    #[serde(default = "default_page", alias = "p")]
     page:      usize,
-    #[serde(default = "default_page_size")]
+    #[serde(default = "default_page_size", alias = "size")]
     page_size: usize,
     #[serde(default)]
     keyword:   String,
@@ -508,6 +508,7 @@ impl ControlApi {
             .route("/api/token/batch", post(delete_token_batch))
             .route("/api/token/batch/keys", post(reveal_token_keys_batch))
             .route("/api/token/{id}", get(get_token).delete(delete_token))
+            .route("/api/token/{id}/", get(get_token).delete(delete_token))
             .route("/api/token/{id}/key", post(reveal_token_key))
             .route("/api/usage/token", get(get_token_usage))
             .route("/api/usage/token/", get(get_token_usage))

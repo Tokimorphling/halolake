@@ -462,7 +462,7 @@ export function transformChannelToFormDefaults(
     settings: channel.settings || '{}',
     other: channel.other || '',
     multi_key_mode: 'single',
-    multi_key_type: channel.channel_info.multi_key_mode || 'random',
+    multi_key_type: channel.channel_info?.multi_key_mode || 'random',
     batch_add_set_key_prefix_2_name: false,
     key_mode: 'append', // Default to append mode for editing multi-key channels
     // Channel extra settings
