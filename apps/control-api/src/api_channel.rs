@@ -1739,6 +1739,38 @@ pub(crate) async fn delete_proxy(
     }
 }
 
+/// Sub2API-style connectivity test: exit IP + latency via the proxy.
+pub(crate) async fn test_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match crate::proxy_probe::test_proxy(&state.proxies, id).await {
+        Ok(result) => api_success(result),
+        Err(err) => management_error(err),
+    }
+}
+
+/// Sub2API-style quality check: base connectivity + AI API reachability.
+pub(crate) async fn quality_check_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match crate::proxy_probe::check_proxy_quality(&state.proxies, id).await {
+        Ok(result) => api_success(result),
+        Err(err) => management_error(err),
+    }
+}
+
 pub(crate) fn channel_balance_price(state: &AppState) -> f64 {
     state
         .options

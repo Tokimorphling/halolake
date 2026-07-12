@@ -31,6 +31,7 @@ const CHANNEL_TYPE_SILICON_FLOW: i32 = 40;
 const CHANNEL_TYPE_DEEPSEEK: i32 = 43;
 const CHANNEL_TYPE_MOKA_AI: i32 = 44;
 const CHANNEL_TYPE_VOLC_ENGINE: i32 = 45;
+const CHANNEL_TYPE_XAI: i32 = 48;
 const CHANNEL_TYPE_KLING: i32 = 50;
 const CHANNEL_TYPE_JIMENG: i32 = 51;
 const CHANNEL_TYPE_VIDU: i32 = 52;
@@ -1282,6 +1283,7 @@ fn default_channel_base_url(channel_type: i32) -> &'static str {
         CHANNEL_TYPE_SILICON_FLOW => "https://api.siliconflow.cn",
         CHANNEL_TYPE_DEEPSEEK => "https://api.deepseek.com",
         CHANNEL_TYPE_VOLC_ENGINE => "https://ark.cn-beijing.volces.com",
+        CHANNEL_TYPE_XAI => "https://api.x.ai",
         CHANNEL_TYPE_CODEX | CHANNEL_TYPE_OPENAI => "https://api.openai.com",
         _ => "https://api.openai.com",
     }
@@ -1319,6 +1321,7 @@ fn snapshot_supported_channel_type(channel_type: i32) -> bool {
             | CHANNEL_TYPE_DEEPSEEK
             | CHANNEL_TYPE_MOKA_AI
             | CHANNEL_TYPE_VOLC_ENGINE
+            | CHANNEL_TYPE_XAI
             | CHANNEL_TYPE_CODEX
     )
 }

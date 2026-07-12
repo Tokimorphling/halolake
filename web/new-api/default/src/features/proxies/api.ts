@@ -48,3 +48,61 @@ export async function deleteProxy(id: number): Promise<ApiResponse> {
   const res = await api.delete(`/api/proxy/${id}`)
   return res.data
 }
+
+export type ProxyTestResult = {
+  success: boolean
+  message: string
+  latency_ms?: number
+  ip_address?: string
+  city?: string
+  region?: string
+  country?: string
+  country_code?: string
+}
+
+export type ProxyQualityCheckItem = {
+  target: string
+  status: string
+  http_status?: number
+  latency_ms?: number
+  message?: string
+  cf_ray?: string
+}
+
+export type ProxyQualityCheckResult = {
+  proxy_id: number
+  score: number
+  grade: string
+  summary: string
+  exit_ip?: string
+  country?: string
+  country_code?: string
+  base_latency_ms?: number
+  passed_count: number
+  warn_count: number
+  failed_count: number
+  challenge_count: number
+  checked_at: number
+  items: ProxyQualityCheckItem[]
+}
+
+/** Sub2API-style connectivity test (exit IP + latency). */
+export async function testProxy(
+  id: number
+): Promise<ApiResponse<ProxyTestResult>> {
+  const res = await api.post(`/api/proxy/${id}/test`, undefined, {
+    // probes can take a few seconds
+    timeout: 30000,
+  })
+  return res.data
+}
+
+/** Sub2API-style quality check against common AI API endpoints. */
+export async function qualityCheckProxy(
+  id: number
+): Promise<ApiResponse<ProxyQualityCheckResult>> {
+  const res = await api.post(`/api/proxy/${id}/quality-check`, undefined, {
+    timeout: 60000,
+  })
+  return res.data
+}

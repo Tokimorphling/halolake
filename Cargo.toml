@@ -39,7 +39,7 @@ futures-channel = "0.3"
 hmac = "0.12"
 http = "1"
 ipnet = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "socks", "json"] }
 regex = "1"
 monoio = { version = "0.2.4", features = ["sync"] }
 monoio-http = { version = "0.3.5", features = ["encoding"] }

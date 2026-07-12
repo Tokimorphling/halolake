@@ -48,6 +48,7 @@ mod options_util;
 mod playground;
 mod prefill;
 mod proxy;
+mod proxy_probe;
 mod ratio_sync;
 mod security;
 mod session;
@@ -553,6 +554,8 @@ impl ControlApi {
                 get(list_proxies).post(create_proxy).put(update_proxy),
             )
             .route("/api/proxy/{id}", get(get_proxy).delete(delete_proxy))
+            .route("/api/proxy/{id}/test", post(test_proxy))
+            .route("/api/proxy/{id}/quality-check", post(quality_check_proxy))
             .route(
                 "/api/channel",
                 get(list_channels).post(create_channel).put(update_channel),

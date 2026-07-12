@@ -4,7 +4,7 @@
 //!
 //! | Source | Typical input | Result |
 //! |--------|---------------|--------|
-//! | **CLIProxyAPI** | `{ "type":"codex"\|"claude"\|"gemini", "access_token", ... }.json` | type 57 / 14 / 24 channel |
+//! | **CLIProxyAPI** | `{ "type":"codex"\|"claude"\|"gemini"\|"xai", "access_token", ... }.json` | type 57 / 14 / 24 / 48 channel |
 //! | **sub2api Codex session** | nested `tokens.*` or raw JWT paste | type 57 Codex |
 //! | **sub2api-data export** | `{ "type":"sub2api-data", "proxies", "accounts" }` | proxies + channels |
 //!
@@ -31,6 +31,10 @@ use std::collections::HashMap;
 
 const CHANNEL_TYPE_ANTHROPIC: i32 = 14;
 const CHANNEL_TYPE_GEMINI: i32 = 24;
+const CHANNEL_TYPE_XAI: i32 = 48;
+const XAI_DEFAULT_API_BASE: &str = "https://api.x.ai";
+const XAI_DEFAULT_CLI_CHAT_BASE: &str = "https://cli-chat-proxy.grok.com";
+const XAI_DEFAULT_MODELS: &str = "grok-4,grok-4-latest,grok-3,grok-3-mini,grok-2,grok-2-latest";
 
 /// Auto-detecting import request (JSON body).
 #[derive(Debug, Clone, Deserialize)]
@@ -697,10 +701,347 @@ async fn import_cliproxy_file(
                 updated:    None,
             })
         }
+        "xai" | "x-ai" | "x.ai" | "grok" => {
+            import_cliproxy_xai(
+                management,
+                &meta,
+                file_name,
+                &label,
+                group,
+                models,
+                base_url,
+                proxy_id,
+                update_existing,
+                existing,
+                index,
+                aggregate,
+            )
+            .await
+        }
         other => Err(ManagementError::InvalidRequest(leak(format!(
-            "unsupported CLIProxyAPI auth type: {other} (supported: codex, claude, gemini)"
+            "unsupported CLIProxyAPI auth type: {other} (supported: codex, claude, gemini, xai)"
         )))),
     }
+}
+
+async fn import_cliproxy_xai(
+    management: &ManagementStore,
+    meta: &JsonMap<String, JsonValue>,
+    file_name: &str,
+    label: &str,
+    group: &str,
+    models: &str,
+    base_url: Option<&str>,
+    proxy_id: Option<u64>,
+    update_existing: bool,
+    existing: &[ChannelRecord],
+    index: &mut usize,
+    aggregate: &mut CodexAuthImportResult,
+) -> Result<AuthFileResult, ManagementError> {
+    let parsed = parse_cliproxy_xai_auth(meta)?;
+    let channel_name = if label.is_empty() {
+        file_name.trim_end_matches(".json").to_string()
+    } else {
+        label.to_string()
+    };
+    let models = if models.trim().is_empty() {
+        XAI_DEFAULT_MODELS.to_string()
+    } else {
+        models.to_string()
+    };
+    let resolved_base = base_url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(normalize_openai_compatible_base_url)
+        .or_else(|| parsed.base_url.clone());
+    let setting = build_xai_channel_setting(&parsed)?;
+    let header_override = parsed.headers.as_ref().and_then(|h| {
+        if h.is_empty() {
+            None
+        } else {
+            serde_json::to_string(h).ok()
+        }
+    });
+    let status = if meta
+        .get("disabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        // new-api convention: 2 = manually disabled
+        2
+    } else {
+        STATUS_ENABLED
+    };
+
+    if let Some(existing_id) = find_existing_xai_channel(existing, &parsed, &channel_name) {
+        if update_existing {
+            let mut channel = existing
+                .iter()
+                .find(|c| c.id == existing_id)
+                .cloned()
+                .ok_or(ManagementError::NotFound)?;
+            channel.key = parsed.access_token.clone();
+            channel.channel_type = CHANNEL_TYPE_XAI;
+            channel.name = channel_name.clone();
+            channel.status = status;
+            channel.models = models;
+            channel.base_url = resolved_base.clone();
+            channel.setting = Some(setting);
+            channel.header_override = header_override;
+            channel.remark = Some(format!("imported from CLIProxyAPI xai ({file_name})"));
+            if let Some(pid) = proxy_id {
+                channel.proxy_id = Some(pid);
+            }
+            let updated = management.call(UpdateChannelRequest { channel }).await?;
+            aggregate.updated = aggregate.updated.saturating_add(1);
+            aggregate.items.push(CodexAuthImportItem {
+                index:      *index,
+                name:       channel_name,
+                action:     "updated".into(),
+                channel_id: Some(updated.id),
+                message:    String::new(),
+            });
+            return Ok(AuthFileResult {
+                name:       file_name.into(),
+                format:     "cliproxy".into(),
+                ok:         true,
+                message:    "updated xai channel".into(),
+                channel_id: Some(updated.id),
+                created:    None,
+                updated:    Some(1),
+            });
+        }
+        aggregate.skipped = aggregate.skipped.saturating_add(1);
+        return Ok(AuthFileResult {
+            name:       file_name.into(),
+            format:     "cliproxy".into(),
+            ok:         true,
+            message:    "exists; update_existing=false".into(),
+            channel_id: Some(existing_id),
+            created:    None,
+            updated:    None,
+        });
+    }
+
+    let channel = ChannelRecord {
+        id: 0,
+        snapshot_id: None,
+        channel_type: CHANNEL_TYPE_XAI,
+        key: parsed.access_token,
+        status,
+        name: channel_name.clone(),
+        weight: Some(1),
+        created_time: now_unix(),
+        test_time: 0,
+        response_time: 0,
+        base_url: resolved_base,
+        balance: 0.0,
+        balance_updated_time: 0,
+        models,
+        group: group.to_string(),
+        used_quota: 0,
+        model_mapping: None,
+        priority: Some(0),
+        auto_ban: Some(1),
+        tag: None,
+        setting: Some(setting),
+        param_override: None,
+        header_override,
+        remark: Some(format!("imported from CLIProxyAPI xai ({file_name})")),
+        proxy_id,
+    };
+    let created = management.call(CreateChannelRequest { channel }).await?;
+    aggregate.created = aggregate.created.saturating_add(1);
+    aggregate.items.push(CodexAuthImportItem {
+        index:      *index,
+        name:       channel_name,
+        action:     "created".into(),
+        channel_id: Some(created.id),
+        message:    String::new(),
+    });
+    Ok(AuthFileResult {
+        name:       file_name.into(),
+        format:     "cliproxy".into(),
+        ok:         true,
+        message:    "created xai channel".into(),
+        channel_id: Some(created.id),
+        created:    Some(1),
+        updated:    None,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct ParsedXaiAuth {
+    access_token:   String,
+    refresh_token:  Option<String>,
+    email:          Option<String>,
+    subject:        Option<String>,
+    auth_kind:      String,
+    base_url:       Option<String>,
+    token_endpoint: Option<String>,
+    expired:        Option<String>,
+    last_refresh:   Option<String>,
+    using_api:      bool,
+    headers:        Option<JsonMap<String, JsonValue>>,
+}
+
+fn parse_cliproxy_xai_auth(
+    meta: &JsonMap<String, JsonValue>,
+) -> Result<ParsedXaiAuth, ManagementError> {
+    let access_token = str_field(meta, "access_token")
+        .or_else(|| str_field(meta, "api_key"))
+        .ok_or(ManagementError::InvalidRequest(
+            "xai auth file missing access_token/api_key",
+        ))?;
+    let auth_kind = str_field(meta, "auth_kind")
+        .unwrap_or_else(|| {
+            if str_field(meta, "refresh_token").is_some() {
+                "oauth".into()
+            } else {
+                "api_key".into()
+            }
+        })
+        .to_ascii_lowercase();
+    let using_api = bool_field(meta, "using_api").unwrap_or_else(|| auth_kind != "oauth");
+    let file_base = str_field(meta, "base_url").map(|u| normalize_openai_compatible_base_url(&u));
+    let base_url = file_base.or_else(|| {
+        Some(if using_api {
+            XAI_DEFAULT_API_BASE.to_string()
+        } else {
+            XAI_DEFAULT_CLI_CHAT_BASE.to_string()
+        })
+    });
+    let headers = meta.get("headers").and_then(|v| v.as_object()).cloned();
+    Ok(ParsedXaiAuth {
+        access_token,
+        refresh_token: str_field(meta, "refresh_token"),
+        email: str_field(meta, "email"),
+        subject: str_field(meta, "sub").or_else(|| str_field(meta, "subject")),
+        auth_kind,
+        base_url,
+        token_endpoint: str_field(meta, "token_endpoint"),
+        expired: str_field(meta, "expired").or_else(|| str_field(meta, "expire")),
+        last_refresh: str_field(meta, "last_refresh"),
+        using_api,
+        headers,
+    })
+}
+
+fn build_xai_channel_setting(parsed: &ParsedXaiAuth) -> Result<String, ManagementError> {
+    let mut map = JsonMap::new();
+    map.insert(
+        "import_source".into(),
+        JsonValue::String("cliproxyapi".into()),
+    );
+    map.insert("provider".into(), JsonValue::String("xai".into()));
+    map.insert(
+        "auth_kind".into(),
+        JsonValue::String(parsed.auth_kind.clone()),
+    );
+    map.insert("using_api".into(), JsonValue::Bool(parsed.using_api));
+    if let Some(email) = &parsed.email {
+        map.insert("email".into(), JsonValue::String(email.clone()));
+    }
+    if let Some(sub) = &parsed.subject {
+        map.insert("sub".into(), JsonValue::String(sub.clone()));
+    }
+    if let Some(refresh) = &parsed.refresh_token {
+        map.insert("refresh_token".into(), JsonValue::String(refresh.clone()));
+    }
+    if let Some(endpoint) = &parsed.token_endpoint {
+        map.insert("token_endpoint".into(), JsonValue::String(endpoint.clone()));
+    }
+    if let Some(expired) = &parsed.expired {
+        map.insert("expired".into(), JsonValue::String(expired.clone()));
+    }
+    if let Some(last_refresh) = &parsed.last_refresh {
+        map.insert(
+            "last_refresh".into(),
+            JsonValue::String(last_refresh.clone()),
+        );
+    }
+    serde_json::to_string(&JsonValue::Object(map))
+        .map_err(|_| ManagementError::InvalidRequest("failed to serialize xai channel setting"))
+}
+
+fn find_existing_xai_channel(
+    existing: &[ChannelRecord],
+    parsed: &ParsedXaiAuth,
+    channel_name: &str,
+) -> Option<u64> {
+    existing.iter().find_map(|channel| {
+        if channel.channel_type != CHANNEL_TYPE_XAI {
+            return None;
+        }
+        if channel.key.trim() == parsed.access_token {
+            return Some(channel.id);
+        }
+        if !channel_name.is_empty() && channel.name.eq_ignore_ascii_case(channel_name) {
+            return Some(channel.id);
+        }
+        let setting = channel.setting.as_deref().unwrap_or("");
+        if setting.is_empty() {
+            return None;
+        }
+        let Ok(value) = serde_json::from_str::<JsonValue>(setting) else {
+            return None;
+        };
+        if value
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .is_some_and(|p| !p.eq_ignore_ascii_case("xai"))
+        {
+            return None;
+        }
+        if let Some(email) = &parsed.email {
+            if value
+                .get("email")
+                .and_then(|v| v.as_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case(email))
+            {
+                return Some(channel.id);
+            }
+        }
+        if let Some(sub) = &parsed.subject {
+            if value
+                .get("sub")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == sub)
+            {
+                return Some(channel.id);
+            }
+        }
+        None
+    })
+}
+
+/// Gateway joins `{base_url}{path}` where path starts with `/v1/...`.
+/// CLIProxy stores bases with trailing `/v1`; strip it for OpenAI-compat channels.
+fn normalize_openai_compatible_base_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.ends_with("/v1") {
+        trimmed[..trimmed.len().saturating_sub(3)]
+            .trim_end_matches('/')
+            .to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn bool_field(map: &JsonMap<String, JsonValue>, key: &str) -> Option<bool> {
+    let value = map.get(key)?;
+    if let Some(b) = value.as_bool() {
+        return Some(b);
+    }
+    if let Some(s) = value.as_str() {
+        return match s.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        };
+    }
+    None
 }
 
 async fn import_codex_blob(
@@ -872,6 +1213,52 @@ mod tests {
     fn detects_cliproxy_codex_file() {
         let raw = r#"{"type":"codex","email":"a@b.com","access_token":"at","refresh_token":"rt","account_id":"acc"}"#;
         assert_eq!(detect_format(raw), DetectedFormat::CliProxy);
+    }
+
+    #[test]
+    fn detects_cliproxy_xai_file() {
+        let raw = r#"{"type":"xai","auth_kind":"oauth","access_token":"at","refresh_token":"rt","email":"u@x.ai"}"#;
+        assert_eq!(detect_format(raw), DetectedFormat::CliProxy);
+    }
+
+    #[test]
+    fn parses_cliproxy_xai_oauth_file() {
+        let raw = r#"{
+          "type":"xai",
+          "auth_kind":"oauth",
+          "access_token":"at-1",
+          "refresh_token":"rt-1",
+          "email":"z@example.com",
+          "sub":"sub-1",
+          "base_url":"https://cli-chat-proxy.grok.com/v1",
+          "token_endpoint":"https://auth.x.ai/oauth2/token",
+          "headers":{"User-Agent":"grok-shell/0.2.93"}
+        }"#;
+        let meta: JsonMap<String, JsonValue> = serde_json::from_str(raw).unwrap();
+        let parsed = parse_cliproxy_xai_auth(&meta).expect("parse xai");
+        assert_eq!(parsed.access_token, "at-1");
+        assert_eq!(parsed.refresh_token.as_deref(), Some("rt-1"));
+        assert_eq!(parsed.email.as_deref(), Some("z@example.com"));
+        assert_eq!(parsed.subject.as_deref(), Some("sub-1"));
+        assert_eq!(parsed.auth_kind, "oauth");
+        assert!(!parsed.using_api);
+        assert_eq!(
+            parsed.base_url.as_deref(),
+            Some("https://cli-chat-proxy.grok.com")
+        );
+        assert!(parsed.headers.is_some());
+    }
+
+    #[test]
+    fn normalizes_xai_base_url_trailing_v1() {
+        assert_eq!(
+            normalize_openai_compatible_base_url("https://api.x.ai/v1/"),
+            "https://api.x.ai"
+        );
+        assert_eq!(
+            normalize_openai_compatible_base_url("https://api.x.ai"),
+            "https://api.x.ai"
+        );
     }
 
     #[test]

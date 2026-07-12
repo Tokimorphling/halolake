@@ -5,9 +5,8 @@ use crate::{
     checkin::{CreateCheckinRequest, GetCheckinStatsRequest},
     checkin_setting, generate_default_token_enabled,
     http_auth::{
-        clear_session_cookie, current_user, login_payload, require_role,
-        require_secure_verification, self_payload, session_id_from_headers, set_session_cookie,
-        token_from_read_only_auth,
+        clear_session_cookie, current_user, login_payload, require_role, self_payload,
+        session_id_from_headers, set_session_cookie, token_from_read_only_auth,
     },
     http_response::{
         api_error_status, api_ok, api_ok_message, api_success, api_success_with_message,
