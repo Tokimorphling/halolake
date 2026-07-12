@@ -133,7 +133,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
       header: t('Status'),
       cell: ({ row }) => {
         const user = row.original
-        const requestCount = user.request_count
+        const requestCount = user.request_count ?? 0
 
         const statusConfig = isUserDeleted(user)
           ? USER_STATUSES[USER_STATUS.DELETED]
@@ -173,8 +173,8 @@ export function useUsersColumns(): ColumnDef<User>[] {
       header: t('Quota'),
       cell: ({ row }) => {
         const user = row.original
-        const used = user.used_quota
-        const remaining = user.quota
+        const used = user.used_quota ?? 0
+        const remaining = user.quota ?? 0
         const total = used + remaining
         const percentage = total > 0 ? (remaining / total) * 100 : 0
 
