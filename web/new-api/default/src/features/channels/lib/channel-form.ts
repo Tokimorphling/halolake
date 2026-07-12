@@ -489,7 +489,7 @@ export function transformChannelToFormDefaults(
 
 /**
  * Build the setting JSON string from form extra settings.
- * Merge onto existing channel.setting so multi_key_*/import_source/status_* are kept.
+ * Merge onto existing channel.setting so multi_key maps, import_source, and status_* are kept.
  */
 function buildSettingJSON(formData: ChannelFormValues): string {
   let settingObj: Record<string, unknown> = {}

@@ -1440,6 +1440,27 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             if updated.proxy_id.is_none() {
                 updated.proxy_id = channel.proxy_id;
             }
+            // Usage / probe counters are not part of the admin form payload (serde
+            // defaults them to 0). Preserve like new-api GORM Updates that only
+            // touch fields present on the model instance from DB + form.
+            if updated.used_quota == 0 && channel.used_quota != 0 {
+                updated.used_quota = channel.used_quota;
+            }
+            if updated.balance == 0.0 && channel.balance != 0.0 {
+                updated.balance = channel.balance;
+            }
+            if updated.balance_updated_time == 0 && channel.balance_updated_time != 0 {
+                updated.balance_updated_time = channel.balance_updated_time;
+            }
+            if updated.test_time == 0 && channel.test_time != 0 {
+                updated.test_time = channel.test_time;
+            }
+            if updated.response_time == 0 && channel.response_time != 0 {
+                updated.response_time = channel.response_time;
+            }
+            if updated.created_time == 0 && channel.created_time != 0 {
+                updated.created_time = channel.created_time;
+            }
             updated.snapshot_id.clone_from(&channel.snapshot_id);
             *channel = updated.clone();
             Ok(updated.masked())

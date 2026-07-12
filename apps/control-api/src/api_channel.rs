@@ -1055,12 +1055,25 @@ pub(crate) async fn update_channel(
         Err(resp) => return resp,
     };
     // new-api PUT body is a flat channel-like object with extra fields + nulls.
-    let channel = match channel_record_from_json(body) {
+    // Track which keys the client actually sent so serde defaults do not wipe
+    // status / counters that the admin form never includes.
+    let body_has_status = body
+        .as_object()
+        .is_some_and(|obj| obj.contains_key("status") && !obj["status"].is_null());
+    let mut channel = match channel_record_from_json(body) {
         Ok(c) => c,
         Err(msg) => return api_error_status(StatusCode::BAD_REQUEST, &msg),
     };
     if channel.id == 0 {
         return api_error_status(StatusCode::BAD_REQUEST, "channel id is required");
+    }
+    if !body_has_status {
+        // Frontend update payload omits status; keep existing enable/disable state.
+        if let Ok(data) = state.management.current_data() {
+            if let Some(existing) = data.channels.iter().find(|c| c.id == channel.id) {
+                channel.status = existing.status;
+            }
+        }
     }
     match state
         .management
