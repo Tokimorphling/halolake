@@ -729,6 +729,11 @@ export function transformFormDataToUpdatePayload(
     payload.key = formData.key
   }
 
+  // Never send blank name — backend and list UI would show a nameless channel.
+  if (!formData.name?.trim()) {
+    delete (payload as { name?: string }).name
+  }
+
   // Clean up empty strings to null for optional fields
   Object.keys(payload).forEach((key) => {
     if (payload[key as keyof typeof payload] === '') {

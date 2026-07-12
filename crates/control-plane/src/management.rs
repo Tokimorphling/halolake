@@ -1425,6 +1425,10 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             if updated.key.trim().is_empty() {
                 updated.key.clone_from(&channel.key);
             }
+            // Empty name must not wipe an existing channel name (partial / model-only saves).
+            if updated.name.trim().is_empty() {
+                updated.name.clone_from(&channel.name);
+            }
             // Empty group must not wipe an existing assignment (partial payloads).
             if updated.group.trim().is_empty() {
                 updated.group.clone_from(&channel.group);
