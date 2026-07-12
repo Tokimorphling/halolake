@@ -1,14 +1,15 @@
 use halolake_control_plane::{
-    AdjustUserQuotaRequest, BatchSetChannelTagRequest, BootstrapRootUserRequest,
-    ChannelStatusUpdateRequest, CreateChannelRequest, CreateTokenRequest, CreateUserRequest,
-    DeleteChannelRequest, DeleteDisabledChannelsRequest, DeleteTokenRequest, DeleteUserRequest,
-    GetChannelRequest, GetTokenRequest, GetUserRequest, ListChannelsRequest, ListTokensRequest,
-    ListUsersRequest, LoginUserRequest, ManageUserRequest, ManagementData, ManagementError,
-    MemoryManagementStore, PublishManagementSnapshotRequest, RegisterUserRequest, RegisteredUser,
-    RevealChannelKeyRequest, RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey,
-    SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageRequest,
-    SnapshotPublished, SnapshotPublisher, UpdateChannelRequest, UpdateChannelsByTagRequest,
-    UpdateTokenRequest, UpdateUserAccessTokenRequest, UpdateUserRequest, UsageSettlement,
+    AdjustUserQuotaRequest, AutoDisableChannelRequest, AutoDisableChannelResult,
+    BatchSetChannelTagRequest, BootstrapRootUserRequest, ChannelStatusUpdateRequest,
+    CreateChannelRequest, CreateTokenRequest, CreateUserRequest, DeleteChannelRequest,
+    DeleteDisabledChannelsRequest, DeleteTokenRequest, DeleteUserRequest, GetChannelRequest,
+    GetTokenRequest, GetUserRequest, ListChannelsRequest, ListTokensRequest, ListUsersRequest,
+    LoginUserRequest, ManageUserRequest, ManagementData, ManagementError, MemoryManagementStore,
+    PublishManagementSnapshotRequest, RegisterUserRequest, RegisteredUser, RevealChannelKeyRequest,
+    RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey, SearchChannelsRequest,
+    SearchTokensRequest, SearchUsersRequest, SettleUsageRequest, SnapshotPublished,
+    SnapshotPublisher, UpdateChannelRequest, UpdateChannelsByTagRequest, UpdateTokenRequest,
+    UpdateUserAccessTokenRequest, UpdateUserRequest, UsageSettlement,
     ValidateUserAccessTokenRequest,
 };
 use halolake_domain::{ChannelRecord, PageResult, TokenRecord, UserRecord};
@@ -256,6 +257,33 @@ impl_write_service!(CreateChannelRequest, ChannelRecord);
 impl_write_service!(UpdateChannelRequest, ChannelRecord);
 impl_write_service!(DeleteChannelRequest, ());
 impl_write_service!(ChannelStatusUpdateRequest, ChannelRecord);
+
+impl Service<AutoDisableChannelRequest> for ManagementStore {
+    type Response = AutoDisableChannelResult;
+    type Error = ManagementError;
+
+    async fn call(&self, req: AutoDisableChannelRequest) -> Result<Self::Response, Self::Error> {
+        match self {
+            Self::Memory(store) => store.call(req).await,
+            Self::Sqlite(store) => {
+                let resp = store.memory.call(req).await?;
+                store.persist().await?;
+                Ok(resp)
+            }
+            Self::MySql(store) => {
+                let resp = store.memory.call(req).await?;
+                store.persist().await?;
+                Ok(resp)
+            }
+            Self::Postgres(store) => {
+                let resp = store.memory.call(req).await?;
+                store.persist().await?;
+                Ok(resp)
+            }
+        }
+    }
+}
+
 impl_write_service!(DeleteDisabledChannelsRequest, usize);
 impl_write_service!(BatchSetChannelTagRequest, usize);
 impl_write_service!(UpdateChannelsByTagRequest, usize);

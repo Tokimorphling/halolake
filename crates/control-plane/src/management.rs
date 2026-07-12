@@ -2,8 +2,8 @@ use crate::{PublishSnapshotRequest, SnapshotError, SnapshotPublished, SnapshotPu
 use bcrypt::{DEFAULT_COST, hash, verify};
 use halolake_domain::{
     CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, PageRequest,
-    PageResult, ROLE_ADMIN_USER, ROLE_COMMON_USER, ROLE_ROOT_USER, STATUS_ENABLED, SearchRequest,
-    TokenRecord, UsageEvent, UsageStatus, UserRecord,
+    PageResult, ROLE_ADMIN_USER, ROLE_COMMON_USER, ROLE_ROOT_USER, STATUS_AUTO_DISABLED,
+    STATUS_ENABLED, SearchRequest, TokenRecord, UsageEvent, UsageStatus, UserRecord,
 };
 use halolake_router_core::{ChannelConfig, GatewaySnapshot, ModelMapping, Provider, TokenConfig};
 use serde_json::Value as JsonValue;
@@ -497,6 +497,23 @@ pub struct DeleteChannelRequest {
 pub struct ChannelStatusUpdateRequest {
     pub id:     u64,
     pub status: i32,
+}
+
+/// Auto-ban a single channel by numeric id only (gateway feedback).
+/// Applied inside `mutate` so other channels cannot be rewritten by a full UpdateChannel.
+#[derive(Debug, Clone)]
+pub struct AutoDisableChannelRequest {
+    pub id:                 u64,
+    pub reason:             String,
+    pub api_key_index:      Option<usize>,
+    pub created_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AutoDisableChannelResult {
+    pub changed:          bool,
+    pub channel_disabled: bool,
+    pub key_disabled:     bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1576,6 +1593,148 @@ impl Service<ChannelStatusUpdateRequest> for MemoryManagementStore {
             apply_channel_status_update(channel, req.status, "manual operation");
             Ok(channel.clone().masked())
         })
+    }
+}
+
+impl Service<AutoDisableChannelRequest> for MemoryManagementStore {
+    type Response = AutoDisableChannelResult;
+    type Error = ManagementError;
+
+    async fn call(&self, req: AutoDisableChannelRequest) -> Result<Self::Response, Self::Error> {
+        self.mutate(|data| {
+            let channel = data
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == req.id)
+                .ok_or(ManagementError::NotFound)?;
+            if channel.auto_ban.unwrap_or(1) == 0 {
+                return Ok(AutoDisableChannelResult::default());
+            }
+            Ok(auto_disable_channel_in_place(
+                channel,
+                req.reason.as_str(),
+                req.api_key_index,
+                req.created_at_unix_ms,
+            ))
+        })
+    }
+}
+
+/// Single-channel auto-ban used by control-api feedback (in-place, no full record replace).
+pub fn auto_disable_channel_in_place(
+    channel: &mut ChannelRecord,
+    reason: &str,
+    api_key_index: Option<usize>,
+    created_at_unix_ms: i64,
+) -> AutoDisableChannelResult {
+    let key_count = channel
+        .key
+        .lines()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .count()
+        .max(1);
+    // multi-key: disable one key when index is in range
+    if let Some(key_index) = api_key_index {
+        if key_index < key_count && key_count > 1 {
+            let mut setting = channel
+                .setting
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            if !setting.is_object() {
+                setting = serde_json::json!({});
+            }
+            let key = key_index.to_string();
+            let already = setting
+                .pointer(&format!("/multi_key_status_list/{key}"))
+                .and_then(|v| v.as_i64())
+                == Some(STATUS_AUTO_DISABLED as i64);
+
+            {
+                let object = setting.as_object_mut().expect("object");
+                let status_map = object
+                    .entry("multi_key_status_list")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = status_map.as_object_mut() {
+                    map.insert(key.clone(), serde_json::json!(STATUS_AUTO_DISABLED));
+                }
+            }
+            {
+                let object = setting.as_object_mut().expect("object");
+                let map = object
+                    .entry("multi_key_disabled_reason")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = map.as_object_mut() {
+                    map.insert(key.clone(), serde_json::Value::String(reason.to_string()));
+                }
+            }
+            {
+                let object = setting.as_object_mut().expect("object");
+                let map = object
+                    .entry("multi_key_disabled_time")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = map.as_object_mut() {
+                    map.insert(key, serde_json::json!(created_at_unix_ms / 1000));
+                }
+            }
+
+            let all_disabled = (0..key_count).all(|idx| {
+                setting
+                    .pointer(&format!("/multi_key_status_list/{idx}"))
+                    .and_then(|v| v.as_i64())
+                    == Some(STATUS_AUTO_DISABLED as i64)
+            });
+            let channel_was = channel.status == STATUS_AUTO_DISABLED;
+            if all_disabled {
+                channel.status = STATUS_AUTO_DISABLED;
+                if let Some(object) = setting.as_object_mut() {
+                    object.insert(
+                        "status_reason".into(),
+                        serde_json::Value::String(format!("All keys are disabled: {reason}")),
+                    );
+                    object.insert(
+                        "status_time".into(),
+                        serde_json::json!(created_at_unix_ms / 1000),
+                    );
+                }
+            }
+            channel.setting = serde_json::to_string(&setting).ok();
+            return AutoDisableChannelResult {
+                changed:          !already || (all_disabled && !channel_was),
+                channel_disabled: all_disabled && !channel_was,
+                key_disabled:     !already,
+            };
+        }
+    }
+
+    if channel.status == STATUS_AUTO_DISABLED {
+        return AutoDisableChannelResult::default();
+    }
+    channel.status = STATUS_AUTO_DISABLED;
+    let mut setting = channel
+        .setting
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !setting.is_object() {
+        setting = serde_json::json!({});
+    }
+    if let Some(object) = setting.as_object_mut() {
+        object.insert(
+            "status_reason".into(),
+            serde_json::Value::String(reason.to_string()),
+        );
+        object.insert(
+            "status_time".into(),
+            serde_json::json!(created_at_unix_ms / 1000),
+        );
+    }
+    channel.setting = serde_json::to_string(&setting).ok();
+    AutoDisableChannelResult {
+        changed:          true,
+        channel_disabled: true,
+        key_disabled:     false,
     }
 }
 

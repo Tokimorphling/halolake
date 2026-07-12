@@ -1,7 +1,7 @@
 use crate::storage::{ManagementStore, OptionStore};
 use halolake_control_plane::{
-    ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError, ChannelFeedbackEvent,
-    ChannelFeedbackReason, UpdateChannelRequest,
+    AutoDisableChannelRequest, ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError,
+    ChannelFeedbackEvent, ChannelFeedbackReason,
 };
 use halolake_domain::{ChannelRecord, STATUS_AUTO_DISABLED, STATUS_ENABLED};
 use serde_json::{Value as JsonValue, json};
@@ -45,29 +45,64 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
             if !policy.should_disable(&event) {
                 continue;
             }
-            let Some(mut channel) = self.find_channel(&event.channel_id)? else {
+            // Gateway always sends ChannelConfig.id = numeric channel.id as string.
+            // Never match snapshot aliases / empty ids — that was the cross-channel
+            // disable bug when feedback targeted the wrong record.
+            let Some(numeric_id) = parse_numeric_channel_id(&event.channel_id) else {
+                warn!(
+                    feedback_id = %event.channel_id,
+                    status_code = ?event.status_code,
+                    reason = %event.message,
+                    "skip auto-disable: non-numeric channel_id"
+                );
                 continue;
             };
-            if channel.auto_ban.unwrap_or(1) == 0 {
-                continue;
-            }
-            let result = apply_auto_disable(&mut channel, &event);
+            let reason = feedback_reason(&event);
+            let result = match self
+                .management
+                .call(AutoDisableChannelRequest {
+                    id:                 numeric_id,
+                    reason:             reason.clone(),
+                    api_key_index:      event.api_key_index,
+                    created_at_unix_ms: event.created_at_unix_ms,
+                })
+                .await
+            {
+                Ok(result) => result,
+                Err(err) => {
+                    warn!(
+                        channel_id = numeric_id,
+                        feedback_id = %event.channel_id,
+                        ?err,
+                        "auto-disable channel not found or failed"
+                    );
+                    continue;
+                }
+            };
             if !result.changed {
                 continue;
             }
+            // Best-effort name/group for logs (read-only after mutate).
+            let (name, group) = self
+                .management
+                .current_data()
+                .ok()
+                .and_then(|data| {
+                    data.channels
+                        .into_iter()
+                        .find(|c| c.id == numeric_id)
+                        .map(|c| (c.name, c.group))
+                })
+                .unwrap_or_else(|| (String::new(), String::new()));
             warn!(
-                channel_id = channel.id,
-                channel_name = %channel.name,
-                group = %channel.group,
+                channel_id = numeric_id,
+                channel_name = %name,
+                group = %group,
                 feedback_id = %event.channel_id,
                 status_code = ?event.status_code,
                 reason = %event.message,
                 "auto-disabling channel from gateway feedback"
             );
-            self.management
-                .call(UpdateChannelRequest { channel })
-                .await
-                .map_err(feedback_storage)?;
             ack.disabled_channels = ack
                 .disabled_channels
                 .saturating_add(usize::from(result.channel_disabled));
@@ -80,28 +115,17 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
     }
 }
 
-impl ChannelFeedbackService {
-    fn find_channel(
-        &self,
-        channel_id: &str,
-    ) -> Result<Option<ChannelRecord>, ChannelFeedbackError> {
-        let channel_id = channel_id.trim();
-        if channel_id.is_empty() {
-            return Ok(None);
-        }
-        let data = self.management.current_data().map_err(feedback_storage)?;
-        // Prefer exact numeric id when the gateway sends "123". Only fall back to
-        // snapshot_id for non-numeric ids (e.g. imported external ids). Never
-        // match empty / ambiguous ids — that previously risked disabling the
-        // wrong channel when feedback payloads were malformed.
-        if let Ok(id) = channel_id.parse::<u64>() {
-            return Ok(data.channels.into_iter().find(|channel| channel.id == id));
-        }
-        Ok(data
-            .channels
-            .into_iter()
-            .find(|channel| channel.snapshot_id.as_deref() == Some(channel_id)))
+fn parse_numeric_channel_id(channel_id: &str) -> Option<u64> {
+    let channel_id = channel_id.trim();
+    if channel_id.is_empty() {
+        return None;
     }
+    // Reject non-decimal ids (snapshot aliases, names, empty). Gateway snapshot
+    // uses channel.id.to_string() for ChannelConfig.id.
+    if !channel_id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    channel_id.parse().ok()
 }
 
 #[derive(Debug, Clone)]
