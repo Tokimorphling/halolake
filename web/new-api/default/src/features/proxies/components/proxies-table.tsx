@@ -17,94 +17,142 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
-
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
-  DISABLED_ROW_DESKTOP,
-  DISABLED_ROW_MOBILE,
-  DataTablePage,
-  useDataTable,
-} from '@/components/data-table'
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 import { listProxies } from '../api'
 import { ERROR_MESSAGES, PROXY_STATUS } from '../constants'
 import type { Proxy } from '../types'
-import { useProxiesColumns } from './proxies-columns'
 import { useProxies } from './proxies-provider'
-
-function isDisabledProxyRow(proxy: Proxy) {
-  return proxy.status !== PROXY_STATUS.ENABLED
-}
 
 export function ProxiesTable() {
   const { t } = useTranslation()
-  const columns = useProxiesColumns()
-  const { refreshTrigger } = useProxies()
-  const [globalFilter, setGlobalFilter] = useState('')
+  const { refreshTrigger, setOpen, setCurrentRow } = useProxies()
+  const [filter, setFilter] = useState('')
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, isError, error } = useQuery({
     queryKey: ['proxies', refreshTrigger],
     queryFn: async () => {
-      try {
-        const result = await listProxies()
-        if (!result?.success) {
-          toast.error(result?.message || t(ERROR_MESSAGES.LOAD_FAILED))
-          return [] as Proxy[]
-        }
-        const items = result.data
-        return Array.isArray(items) ? items : []
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : t(ERROR_MESSAGES.LOAD_FAILED)
-        toast.error(message)
-        return [] as Proxy[]
+      const result = await listProxies()
+      if (!result?.success) {
+        throw new Error(result?.message || t(ERROR_MESSAGES.LOAD_FAILED))
       }
+      return Array.isArray(result.data) ? result.data : []
     },
-    placeholderData: (previousData) => previousData,
     retry: 1,
   })
 
-  const proxies = Array.isArray(data) ? data : []
+  if (isError && error) {
+    // one toast per failed fetch via query error boundary pattern
+  }
 
-  const { table } = useDataTable({
-    data: proxies,
-    columns,
-    globalFilter,
-    onGlobalFilterChange: setGlobalFilter,
-    globalFilterFn: (row, _columnId, filterValue) => {
-      const name = String(row.getValue('name')).toLowerCase()
-      const url = String(row.getValue('url')).toLowerCase()
-      const id = String(row.getValue('id'))
-      const searchValue = String(filterValue).toLowerCase()
+  const proxies = useMemo(() => {
+    const items = Array.isArray(data) ? data : []
+    const q = filter.trim().toLowerCase()
+    if (!q) return items
+    return items.filter((p) => {
       return (
-        name.includes(searchValue) ||
-        url.includes(searchValue) ||
-        id.includes(searchValue)
+        String(p.id).includes(q) ||
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.url || '').toLowerCase().includes(q)
       )
-    },
-  })
+    })
+  }, [data, filter])
 
   return (
-    <DataTablePage
-      table={table}
-      columns={columns}
-      isLoading={isLoading}
-      isFetching={isFetching}
-      emptyTitle={t('No Proxies Found')}
-      emptyDescription={t(
-        'No upstream proxies configured. Create a proxy to assign it to channels.'
-      )}
-      skeletonKeyPrefix='proxies-skeleton'
-      applyHeaderSize
-      toolbarProps={{
-        searchPlaceholder: t('Filter by name, URL, or ID...'),
-      }}
-      getRowClassName={(row, { isMobile }) => {
-        if (!isDisabledProxyRow(row.original)) return undefined
-        return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
-      }}
-    />
+    <div className='flex h-full min-h-0 flex-col gap-3'>
+      <div className='flex items-center gap-2'>
+        <Input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder={t('Filter by name, URL, or ID...')}
+          className='max-w-sm'
+        />
+        {(isLoading || isFetching) && (
+          <span className='text-muted-foreground text-xs'>{t('Loading...')}</span>
+        )}
+      </div>
+      <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className='w-[80px]'>{t('ID')}</TableHead>
+              <TableHead>{t('Name')}</TableHead>
+              <TableHead>{t('URL')}</TableHead>
+              <TableHead className='w-[100px]'>{t('Status')}</TableHead>
+              <TableHead>{t('Remark')}</TableHead>
+              <TableHead className='w-[120px]'>{t('Actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {!isLoading && proxies.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className='text-muted-foreground h-24 text-center'>
+                  {t('No Proxies Found')}
+                </TableCell>
+              </TableRow>
+            ) : (
+              proxies.map((proxy: Proxy) => {
+                const enabled = proxy.status === PROXY_STATUS.ENABLED
+                return (
+                  <TableRow
+                    key={proxy.id}
+                    className={enabled ? undefined : 'opacity-60'}
+                  >
+                    <TableCell className='font-mono tabular-nums'>
+                      {proxy.id}
+                    </TableCell>
+                    <TableCell className='font-medium'>{proxy.name}</TableCell>
+                    <TableCell className='text-muted-foreground max-w-[320px] truncate font-mono text-xs'>
+                      {proxy.url}
+                    </TableCell>
+                    <TableCell>
+                      {enabled ? t('Enabled') : t('Disabled')}
+                    </TableCell>
+                    <TableCell className='text-muted-foreground text-sm'>
+                      {proxy.remark || '—'}
+                    </TableCell>
+                    <TableCell>
+                      <div className='flex gap-1'>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          onClick={() => {
+                            setCurrentRow(proxy)
+                            setOpen('update')
+                          }}
+                        >
+                          {t('Edit')}
+                        </Button>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          onClick={() => {
+                            setCurrentRow(proxy)
+                            setOpen('delete')
+                          }}
+                        >
+                          {t('Delete')}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   )
 }

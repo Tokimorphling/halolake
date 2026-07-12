@@ -1253,10 +1253,8 @@ pub(crate) async fn reveal_token_key(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    // Token material is as sensitive as channel keys; require the same step-up.
-    if let Err(resp) = require_secure_verification(&state, &headers) {
-        return resp;
-    }
+    // Match new-api GetTokenKey: session auth only (no step-up 2FA/passkey).
+    // Channel key reveal still uses require_secure_verification.
     match state
         .management
         .call(RevealTokenKeyRequest {
@@ -1279,9 +1277,7 @@ pub(crate) async fn reveal_token_keys_batch(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    if let Err(resp) = require_secure_verification(&state, &headers) {
-        return resp;
-    }
+    // Match new-api GetTokenKeysBatch: session auth only.
     if req.ids.len() > 100 {
         return api_error_status(StatusCode::OK, "too many ids (max 100)");
     }

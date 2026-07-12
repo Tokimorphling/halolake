@@ -23,15 +23,19 @@ import { useProxies } from './proxies-provider'
 export function ProxiesDialogs() {
   const { open, setOpen, currentRow } = useProxies()
   const isUpdate = open === 'update'
+  const showMutate = open === 'create' || isUpdate
+  const showDelete = open === 'delete'
 
   return (
     <>
-      <ProxiesMutateDrawer
-        open={open === 'create' || isUpdate}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
-        currentRow={isUpdate ? currentRow || undefined : undefined}
-      />
-      <ProxiesDeleteDialog />
+      {showMutate && (
+        <ProxiesMutateDrawer
+          open={showMutate}
+          onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+          currentRow={isUpdate ? currentRow || undefined : undefined}
+        />
+      )}
+      {showDelete && <ProxiesDeleteDialog />}
     </>
   )
 }

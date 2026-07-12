@@ -18,8 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useCallback, useMemo, useState } from 'react'
 
-import { useDialogState } from '@/hooks/use-dialog'
-
 import type { ProxiesDialogType, Proxy } from '../types'
 
 type ProxiesContextType = {
@@ -34,13 +32,9 @@ type ProxiesContextType = {
 const ProxiesContext = React.createContext<ProxiesContextType | null>(null)
 
 export function ProxiesProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpenState] = useDialogState<ProxiesDialogType>(null)
+  const [open, setOpen] = useState<ProxiesDialogType | null>(null)
   const [currentRow, setCurrentRow] = useState<Proxy | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
-
-  const setOpen = useCallback((value: ProxiesDialogType | null) => {
-    setOpenState(value)
-  }, [setOpenState])
 
   const triggerRefresh = useCallback(() => {
     setRefreshTrigger((prev) => prev + 1)
@@ -55,10 +49,12 @@ export function ProxiesProvider({ children }: { children: React.ReactNode }) {
       refreshTrigger,
       triggerRefresh,
     }),
-    [open, setOpen, currentRow, refreshTrigger, triggerRefresh]
+    [open, currentRow, refreshTrigger, triggerRefresh]
   )
 
-  return <ProxiesContext.Provider value={value}>{children}</ProxiesContext.Provider>
+  return (
+    <ProxiesContext.Provider value={value}>{children}</ProxiesContext.Provider>
+  )
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
