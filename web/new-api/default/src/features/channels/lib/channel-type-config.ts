@@ -113,6 +113,18 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'deepseek-chat,deepseek-coder',
     },
   },
+  48: {
+    id: 48,
+    name: CHANNEL_TYPES[48],
+    icon: 'xai',
+    defaultBaseUrl: 'https://api.x.ai',
+    hints: {
+      baseUrl:
+        'Official API: https://api.x.ai ; CLI OAuth chat-proxy: https://cli-chat-proxy.grok.com',
+      key: 'xAI OAuth access_token or API key',
+      models: 'grok-4,grok-3,grok-3-mini',
+    },
+  },
   20: {
     id: 20,
     name: CHANNEL_TYPES[20],

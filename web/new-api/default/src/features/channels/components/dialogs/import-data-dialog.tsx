@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 
 import { importAuthJson, importAuthUpload } from '../../api'
 import { channelsQueryKeys } from '../../lib'
@@ -45,24 +46,34 @@ type ImportDataDialogProps = {
 /** auto = detect; or force a family */
 type ImportMode = 'auto' | 'sub2api-data' | 'cliproxy' | 'codex-session'
 
-function fileHelpText(
-  mode: ImportMode,
-  t: (key: string) => string
-): string {
+function fileHelpText(mode: ImportMode, t: (key: string) => string): string {
   if (mode === 'sub2api-data') {
     return t('JSON (.json) — sub2api export (proxies + accounts)')
   }
   if (mode === 'cliproxy') {
     return t(
-      'One or more CLIProxyAPI *.json auth files (type: codex/claude/gemini)'
+      'One or more CLIProxyAPI *.json auth files (type: codex/claude/gemini/xai)'
     )
   }
   if (mode === 'codex-session') {
     return t('Codex / sub2api session auth JSON or access token')
   }
   return t(
-    'Auto: sub2api-data export, CLIProxyAPI auth files, or Codex session'
+    'Auto: sub2api-data export, CLIProxyAPI auth files (incl. xAI), or Codex session. Drag & drop JSON files here.'
   )
+}
+
+function collectJsonFiles(list: FileList | File[] | null): File[] {
+  if (!list) return []
+  return Array.from(list).filter((file) => {
+    const name = file.name.toLowerCase()
+    return (
+      name.endsWith('.json') ||
+      file.type === 'application/json' ||
+      file.type === 'text/plain' ||
+      file.type === ''
+    )
+  })
 }
 
 export function ImportDataDialog(props: ImportDataDialogProps) {
@@ -73,16 +84,21 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
   const [files, setFiles] = useState<File[]>([])
   const [group, setGroup] = useState('default')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
 
   const reset = () => {
     setFiles([])
     setGroup('default')
+    setIsDragging(false)
     if (fileRef.current) fileRef.current.value = ''
   }
 
-  const handleFiles = (list: FileList | null) => {
-    if (!list?.length) return
-    const next = Array.from(list)
+  const handleFiles = (list: FileList | File[] | null) => {
+    const next = collectJsonFiles(list)
+    if (!next.length) {
+      toast.error(t('Please drop or choose JSON auth files'))
+      return
+    }
     setFiles(next)
   }
 
@@ -136,9 +152,7 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
     }
     const bad = data.file_results?.filter((f) => !f.ok) ?? []
     if (bad.length) {
-      toast.message(
-        t('{{count}} file(s) had errors', { count: bad.length })
-      )
+      toast.message(t('{{count}} file(s) had errors', { count: bad.length }))
     }
   }
 
@@ -197,7 +211,7 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
           <DialogTitle>{t('Import credentials')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Import Sub2API exports, CLIProxyAPI auth JSON files, or Codex session tokens. Multiple files supported. Groups are not auto-bound — set a default group below if needed.'
+              'Import Sub2API exports, CLIProxyAPI auth JSON files (codex/claude/gemini/xai), or Codex session tokens. Drag multiple JSON files or choose them. Groups are not auto-bound — set a default group below if needed.'
             )}
           </DialogDescription>
         </DialogHeader>
@@ -232,23 +246,70 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
             <p className='text-muted-foreground text-xs'>
               {fileHelpText(mode, t)}
             </p>
-            <div className='flex items-center gap-2'>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                onClick={() => fileRef.current?.click()}
-              >
-                <Upload className='mr-2 h-4 w-4' />
-                {t('Choose file')}
-              </Button>
-              <span className='text-muted-foreground truncate text-sm'>
-                {files.length === 0
-                  ? t('No file selected')
-                  : files.length === 1
-                    ? files[0].name
-                    : t('{{count}} files selected', { count: files.length })}
-              </span>
+            <div
+              role='button'
+              tabIndex={0}
+              className={cn(
+                'border-muted-foreground/30 bg-muted/20 hover:bg-muted/30 focus-visible:ring-ring rounded-lg border border-dashed px-4 py-6 text-center transition-colors outline-none focus-visible:ring-2',
+                isDragging && 'border-primary bg-primary/5'
+              )}
+              onClick={() => fileRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  fileRef.current?.click()
+                }
+              }}
+              onDragEnter={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setIsDragging(true)
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setIsDragging(true)
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setIsDragging(false)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setIsDragging(false)
+                handleFiles(e.dataTransfer.files)
+              }}
+            >
+              <Upload className='text-muted-foreground mx-auto mb-2 h-6 w-6' />
+              <p className='text-sm font-medium'>
+                {t('Drop JSON files here, or click to choose')}
+              </p>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                {t('Supports multi-file CLIProxyAPI auth upload')}
+              </p>
+              <div className='mt-3 flex items-center justify-center gap-2'>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    fileRef.current?.click()
+                  }}
+                >
+                  <Upload className='mr-2 h-4 w-4' />
+                  {t('Choose file')}
+                </Button>
+                <span className='text-muted-foreground truncate text-sm'>
+                  {files.length === 0
+                    ? t('No file selected')
+                    : files.length === 1
+                      ? files[0].name
+                      : t('{{count}} files selected', { count: files.length })}
+                </span>
+              </div>
               <input
                 ref={fileRef}
                 type='file'

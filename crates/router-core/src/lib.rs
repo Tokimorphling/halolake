@@ -531,7 +531,18 @@ impl IndexedSnapshot {
     }
 
     pub fn authenticate(&self, bearer: &str) -> Result<AuthContext<'_>, RouteError> {
-        let token = self.tokens.get(bearer).ok_or(RouteError::Unauthorized)?;
+        // new-api stores the raw key without the UI `sk-` display prefix, but
+        // clients always copy `sk-...` from the dashboard. Accept both forms.
+        let token = self
+            .tokens
+            .get(bearer)
+            .or_else(|| {
+                bearer
+                    .strip_prefix("sk-")
+                    .filter(|raw| !raw.is_empty())
+                    .and_then(|raw| self.tokens.get(raw))
+            })
+            .ok_or(RouteError::Unauthorized)?;
         if !token.config.enabled {
             return Err(RouteError::Unauthorized);
         }
@@ -1594,6 +1605,35 @@ mod tests {
         assert!(matches!(
             indexed.authenticate("token-a"),
             Err(RouteError::GroupForbidden)
+        ));
+    }
+
+    #[test]
+    fn authenticate_accepts_new_api_sk_prefix() {
+        let snapshot = snapshot_with_channel(ChannelConfig {
+            id:              "channel-a".to_string(),
+            provider:        Provider::OpenAi,
+            base_url:        "https://example.com".to_string(),
+            api_key:         "key-a".to_string(),
+            api_keys:        Vec::new(),
+            api_key_indexes: Vec::new(),
+            api_key_env:     None,
+            enabled:         true,
+            weight:          1,
+            models:          vec!["gpt-4o".to_string()],
+            groups:          vec!["default".to_string()],
+            proxy:           None,
+        });
+        let indexed = snapshot.index().expect("snapshot should index");
+        indexed
+            .authenticate("token-a")
+            .expect("raw key should authenticate");
+        indexed
+            .authenticate("sk-token-a")
+            .expect("sk- prefixed key should authenticate");
+        assert!(matches!(
+            indexed.authenticate("sk-wrong"),
+            Err(RouteError::Unauthorized)
         ));
     }
 

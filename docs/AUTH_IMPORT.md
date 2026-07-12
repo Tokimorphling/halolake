@@ -7,7 +7,7 @@ Halolake can turn **third-party credential dumps** into control-plane channels (
 | Source | Input | Becomes |
 |--------|--------|---------|
 | **Sub2API data export** | `{ "type":"sub2api-data", "proxies":[], "accounts":[] }` | Proxy pool rows + channels |
-| **CLIProxyAPI auth files** | One or more `*.json` with `"type":"codex"\|"claude"\|"gemini"…` | Channels (Codex=57, Claude=14, Gemini=24) |
+| **CLIProxyAPI auth files** | One or more `*.json` with `"type":"codex"\|"claude"\|"gemini"\|"xai"…` | Channels (Codex=57, Claude=14, Gemini=24, xAI=48) |
 | **Codex / Sub2API session** | Nested `tokens.*`, flat OAuth JSON, raw access token / multi-line mix | Codex channels (type 57) |
 
 **Groups are not auto-bound** from Sub2API (same idea as Sub2API’s `skip_default_group_bind`). You can pass a default `group` for new channels; rebind in the UI as needed.
@@ -166,7 +166,34 @@ Saved under CLIProxyAPI’s `auths/` directory. Minimal shapes Halolake accepts:
 
 or `access_token` if present.
 
-Unsupported CLIProxy types (e.g. antigravity, kimi, xai) return a clear error for that file; other files in a batch still import.
+**xAI / Grok OAuth (CLIProxyAPI) → channel type 48**
+
+```json
+{
+  "type": "xai",
+  "auth_kind": "oauth",
+  "access_token": "...",
+  "refresh_token": "...",
+  "id_token": "...",
+  "email": "user@example.com",
+  "sub": "...",
+  "base_url": "https://cli-chat-proxy.grok.com/v1",
+  "token_endpoint": "https://auth.x.ai/oauth2/token",
+  "headers": {
+    "X-XAI-Token-Auth": "xai-grok-cli",
+    "User-Agent": "grok-shell/0.2.93 (linux; x86_64)"
+  }
+}
+```
+
+Notes:
+- Runtime key is `access_token` (Bearer). Optional `api_key` is accepted as a fallback field name.
+- OAuth defaults to Grok CLI chat-proxy base (`https://cli-chat-proxy.grok.com`); set `using_api: true` or omit oauth markers for official `https://api.x.ai`.
+- Trailing `/v1` on `base_url` is stripped so gateway path joining stays correct.
+- `refresh_token` / identity metadata are stored in channel `setting` for later refresh work.
+- Re-import with the same email/sub updates the existing xAI channel when `update_existing` is true.
+
+Unsupported CLIProxy types (e.g. antigravity, kimi) return a clear error for that file; other files in a batch still import.
 
 ### Sub2API Codex session
 
@@ -308,6 +335,6 @@ curl -sS -b cookies.txt -H 'Content-Type: application/json' \
 ## Limits / non-goals (current)
 
 - Not a full Sub2API account runtime (concurrency schedulers, Antigravity privacy hooks, etc.).  
-- CLIProxy types beyond codex/claude/gemini are rejected per file.  
+- CLIProxy types beyond codex/claude/gemini/xai are rejected per file.  
 - Gateway still uses channel keys as configured today; Codex OAuth refresh remains on control-api special routes.  
 - No server-side storage of original auth filenames beyond channel remark/setting metadata.

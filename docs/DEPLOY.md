@@ -191,7 +191,7 @@ volumes:
 支持：
 
 - **Sub2API** `sub2api-data` 导出（proxies + accounts）  
-- **CLIProxyAPI** `auths/*.json`（`type: codex|claude|gemini`）  
+- **CLIProxyAPI** `auths/*.json`（`type: codex|claude|gemini|xai`）  
 - **Codex / ChatGPT OAuth** session JSON 或 access token  
 
 详情：[AUTH_IMPORT.md](./AUTH_IMPORT.md)
