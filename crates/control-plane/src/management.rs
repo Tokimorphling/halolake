@@ -865,6 +865,8 @@ impl Service<UpdateUserRequest> for MemoryManagementStore {
             }
             let mut updated = req.user;
             validate_user_for_write(&updated)?;
+            // new-api: RoleGuestUser (0) means "not changing role" on PUT update.
+            // Frontend omits role on update; serde then defaults to 0 (not common=1).
             if updated.role != 0 && updated.role != user.role {
                 return Err(ManagementError::InvalidRequest(
                     "role changes must use manage",
@@ -881,7 +883,30 @@ impl Service<UpdateUserRequest> for MemoryManagementStore {
             if updated.group.is_empty() {
                 updated.group = "default".to_string();
             }
+            // Always preserve role on this path (promote/demote via manage only).
             updated.role = user.role;
+            // enable/disable via manage only — FE PUT omits status (defaults to enabled).
+            updated.status = user.status;
+            // Preserve quota/used_quota when client omits them (serde default 0).
+            // new-api FE adjusts quota via /api/user/manage, not PUT body.
+            if updated.quota == 0 && user.quota != 0 {
+                updated.quota = user.quota;
+            }
+            if updated.used_quota == 0 && user.used_quota != 0 {
+                updated.used_quota = user.used_quota;
+            }
+            if updated.created_at == 0 {
+                updated.created_at = user.created_at;
+            }
+            if updated.last_login_at == 0 {
+                updated.last_login_at = user.last_login_at;
+            }
+            if updated.email.is_empty() {
+                updated.email.clone_from(&user.email);
+            }
+            if updated.setting.is_empty() {
+                updated.setting.clone_from(&user.setting);
+            }
             if data
                 .users
                 .iter()

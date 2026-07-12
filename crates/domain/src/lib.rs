@@ -21,7 +21,7 @@ pub struct UserRecord {
     pub access_token:  Option<String>,
     #[serde(default)]
     pub display_name:  String,
-    #[serde(default = "default_common_role")]
+    #[serde(default)]
     pub role:          i32,
     #[serde(default = "default_enabled_status")]
     pub status:        i32,
@@ -307,10 +307,6 @@ pub fn mask_token_key(key: &str) -> String {
 
 fn default_enabled_status() -> i32 {
     STATUS_ENABLED
-}
-
-fn default_common_role() -> i32 {
-    ROLE_COMMON_USER
 }
 
 fn default_openai_channel_type() -> i32 {
