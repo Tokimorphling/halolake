@@ -120,12 +120,13 @@ fn install_otlp(
 ) -> Result<(SdkTracerProvider, SdkLoggerProvider, SdkMeterProvider)> {
     let use_http = protocol.contains("http");
 
-    // HTTP path uses reqwest-blocking-client (workspace feature). Do not inject
-    // async reqwest::Client: batch exporter threads are not on a Tokio runtime.
+    // HTTP: do NOT call with_endpoint(base). Programmatic endpoint is used as-is
+    // (no /v1/{traces,logs,metrics} append) → Grafana Cloud returns 404 on /otlp.
+    // Leave endpoint unset so the OTLP crate reads OTEL_EXPORTER_OTLP_ENDPOINT and
+    // appends signal paths (spec). gRPC still needs with_endpoint(host).
     let span_exporter = if use_http {
         SpanExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
             .build()
             .context("build OTLP HTTP span exporter")?
     } else {
@@ -139,7 +140,6 @@ fn install_otlp(
     let log_exporter = if use_http {
         LogExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
             .build()
             .context("build OTLP HTTP log exporter")?
     } else {
@@ -153,7 +153,6 @@ fn install_otlp(
     let metric_exporter = if use_http {
         MetricExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
             .build()
             .context("build OTLP HTTP metric exporter")?
     } else {

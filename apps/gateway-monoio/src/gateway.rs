@@ -126,10 +126,7 @@ pub fn run_from_config_file(path: &str) -> Result<()> {
     info!(
         %listen,
         worker_count,
-        token_count = config.tokens.len(),
-        channel_count = config.channels.len(),
-        mapping_count = config.model_mappings.len(),
-        "starting halolake monoio gateway (thread-per-core)"
+        "starting halolake monoio gateway (thread-per-core); snapshot loads per worker"
     );
 
     let mut handles = Vec::with_capacity(worker_count);
@@ -211,9 +208,11 @@ async fn run_worker_async(
                 .await
             {
                 Ok(SnapshotResponse::Updated { snapshot }) => {
-                    debug!(
+                    info!(
                         worker_id,
                         snapshot_version = snapshot.version,
+                        token_count = snapshot.tokens.len(),
+                        channel_count = snapshot.channels.len(),
                         attempt,
                         "loaded gateway snapshot from control api"
                     );
