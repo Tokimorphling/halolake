@@ -16,80 +16,37 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { zodResolver } from '@hookform/resolvers/zod'
 import { type FormEvent, useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { z } from 'zod'
 
-import {
-  SideDrawerSection,
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-} from '@/components/drawer-layout'
 import { Button } from '@/components/ui/button'
 import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import {
-  Sheet,
-  SheetClose,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
+import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
-import { createProxy, getProxy, updateProxy } from '../api'
+import { createProxy, updateProxy } from '../api'
 import { ERROR_MESSAGES, PROXY_STATUS, SUCCESS_MESSAGES } from '../constants'
 import type { Proxy } from '../types'
 import { useProxies } from './proxies-provider'
 
-const proxyFormSchema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  url: z
-    .string()
-    .min(1, 'URL is required')
-    .refine(
-      (value) => {
-        try {
-          const parsed = new URL(value)
-          return ['http:', 'https:', 'socks5:', 'socks5h:'].includes(
-            parsed.protocol
-          )
-        } catch {
-          return false
-        }
-      },
-      {
-        message:
-          'Invalid proxy URL (allowed: http, https, socks5, socks5h)',
-      }
-    ),
-  status: z.boolean(),
-  remark: z.string(),
-})
-
-type ProxyFormValues = z.infer<typeof proxyFormSchema>
-
-const DEFAULT_VALUES: ProxyFormValues = {
-  name: '',
-  url: '',
-  status: true,
-  remark: '',
+function isValidProxyUrl(value: string): boolean {
+  const v = value.trim().toLowerCase()
+  return (
+    v.startsWith('http://') ||
+    v.startsWith('https://') ||
+    v.startsWith('socks5://') ||
+    v.startsWith('socks5h://')
+  )
 }
 
 type ProxiesMutateDrawerProps = {
@@ -107,41 +64,47 @@ export function ProxiesMutateDrawer({
   const isUpdate = !!currentRow
   const { triggerRefresh } = useProxies()
   const [isSubmitting, setIsSubmitting] = useState(false)
-
-  const form = useForm<ProxyFormValues>({
-    resolver: zodResolver(proxyFormSchema),
-    defaultValues: DEFAULT_VALUES,
-  })
+  const [name, setName] = useState('')
+  const [url, setUrl] = useState('')
+  const [enabled, setEnabled] = useState(true)
+  const [remark, setRemark] = useState('')
 
   useEffect(() => {
-    if (open && isUpdate && currentRow) {
-      void getProxy(currentRow.id)
-        .then((result) => {
-          if (result.success && result.data) {
-            form.reset({
-              name: result.data.name,
-              url: result.data.url,
-              status: result.data.status === PROXY_STATUS.ENABLED,
-              remark: result.data.remark || '',
-            })
-          }
-        })
-        .catch(() => {
-          /* best-effort form hydrate */
-        })
-    } else if (open && !isUpdate) {
-      form.reset(DEFAULT_VALUES)
+    if (!open) return
+    if (isUpdate && currentRow) {
+      setName(currentRow.name || '')
+      setUrl(currentRow.url || '')
+      setEnabled(currentRow.status === PROXY_STATUS.ENABLED)
+      setRemark(currentRow.remark || '')
+    } else {
+      setName('')
+      setUrl('')
+      setEnabled(true)
+      setRemark('')
     }
-  }, [open, isUpdate, currentRow, form])
+  }, [open, isUpdate, currentRow])
 
-  const onSubmit = async (data: ProxyFormValues) => {
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault()
+    const trimmedName = name.trim()
+    const trimmedUrl = url.trim()
+    if (!trimmedName || !trimmedUrl) {
+      toast.error(t('Name and URL are required'))
+      return
+    }
+    if (!isValidProxyUrl(trimmedUrl)) {
+      toast.error(
+        t('Invalid proxy URL (allowed: http, https, socks5, socks5h)')
+      )
+      return
+    }
     setIsSubmitting(true)
     try {
       const payload = {
-        name: data.name.trim(),
-        url: data.url.trim(),
-        status: data.status ? PROXY_STATUS.ENABLED : PROXY_STATUS.DISABLED,
-        remark: data.remark.trim(),
+        name: trimmedName,
+        url: trimmedUrl,
+        status: enabled ? PROXY_STATUS.ENABLED : PROXY_STATUS.DISABLED,
+        remark: remark.trim(),
       }
       const result =
         isUpdate && currentRow
@@ -160,126 +123,92 @@ export function ProxiesMutateDrawer({
       } else {
         toast.error(result.message || t(ERROR_MESSAGES.SAVE_FAILED))
       }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t(ERROR_MESSAGES.SAVE_FAILED)
+      )
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    void form.handleSubmit(onSubmit)(event)
-  }
-
   return (
-    <Sheet
-      open={open}
-      onOpenChange={(v) => {
-        onOpenChange(v)
-        if (!v) form.reset()
-      }}
-    >
-      <SheetContent className={sideDrawerContentClassName('sm:max-w-[520px]')}>
-        <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='sm:max-w-lg'>
+        <DialogHeader>
+          <DialogTitle>
             {isUpdate ? t('Update Proxy') : t('Add Proxy')}
-          </SheetTitle>
-          <SheetDescription>
+          </DialogTitle>
+          <DialogDescription>
             {t(
               'Upstream egress proxy for channels. socks5 is upgraded to socks5h (remote DNS).'
             )}
-          </SheetDescription>
-        </SheetHeader>
-        <Form {...form}>
-          <form
-            id='proxy-form'
-            onSubmit={handleSubmit}
-            className={sideDrawerFormClassName()}
+          </DialogDescription>
+        </DialogHeader>
+        <form id='proxy-form' onSubmit={(e) => void onSubmit(e)} className='space-y-4'>
+          <div className='space-y-2'>
+            <Label htmlFor='proxy-name'>{t('Name')}</Label>
+            <Input
+              id='proxy-name'
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('us-east')}
+              autoComplete='off'
+            />
+          </div>
+          <div className='space-y-2'>
+            <Label htmlFor='proxy-url'>{t('URL')}</Label>
+            <Input
+              id='proxy-url'
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder='socks5h://warp-socks:9091'
+              autoComplete='off'
+            />
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'http, https, socks5, or socks5h. Prefer socks5h for remote DNS. No auth example: socks5h://warp-socks:9091'
+              )}
+            </p>
+          </div>
+          <div className='flex items-center justify-between gap-4'>
+            <div className='space-y-0.5'>
+              <Label htmlFor='proxy-enabled'>{t('Enabled')}</Label>
+              <p className='text-muted-foreground text-xs'>
+                {t('Disabled proxies are not resolved for channel traffic.')}
+              </p>
+            </div>
+            <Switch
+              id='proxy-enabled'
+              checked={enabled}
+              onCheckedChange={setEnabled}
+            />
+          </div>
+          <div className='space-y-2'>
+            <Label htmlFor='proxy-remark'>{t('Remark')}</Label>
+            <Textarea
+              id='proxy-remark'
+              rows={2}
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+              placeholder={t('Optional notes')}
+            />
+          </div>
+        </form>
+        <DialogFooter>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={() => onOpenChange(false)}
+            disabled={isSubmitting}
           >
-            <SideDrawerSection>
-              <FormField
-                control={form.control}
-                name='name'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Name')}</FormLabel>
-                    <FormControl>
-                      <Input placeholder={t('us-east')} {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='url'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('URL')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder='socks5://user:pass@127.0.0.1:1080'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'http, https, socks5, or socks5h. socks5 becomes socks5h on save.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='status'
-                render={({ field }) => (
-                  <FormItem className='flex items-center justify-between'>
-                    <div className='space-y-0.5'>
-                      <FormLabel>{t('Enabled')}</FormLabel>
-                      <FormDescription>
-                        {t(
-                          'Disabled proxies are not resolved for channel traffic.'
-                        )}
-                      </FormDescription>
-                    </div>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='remark'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Remark')}</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        rows={2}
-                        placeholder={t('Optional notes')}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </SideDrawerSection>
-          </form>
-        </Form>
-        <SheetFooter className={sideDrawerFooterClassName()}>
-          <SheetClose render={<Button variant='outline' />}>
             {t('Cancel')}
-          </SheetClose>
+          </Button>
           <Button type='submit' form='proxy-form' disabled={isSubmitting}>
             {isSubmitting ? t('Saving...') : t('Save')}
           </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
