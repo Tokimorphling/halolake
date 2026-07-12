@@ -55,6 +55,7 @@ mod options_util;
 #[cfg(feature = "admin-extras")]
 mod playground;
 mod prefill;
+mod process_metrics;
 mod proxy;
 #[cfg(feature = "admin-extras")]
 mod proxy_probe;
@@ -617,6 +618,10 @@ impl ControlApi {
             .route(
                 "/internal/gateway/channel-feedback",
                 post(gateway_channel_feedback),
+            )
+            .route(
+                "/internal/gateway/system-instance",
+                post(gateway_system_instance),
             );
         #[cfg(feature = "admin-extras")]
         let router = admin_extras::mount(router);

@@ -494,3 +494,216 @@ impl ChannelFeedbackReporter {
         self.sink.is_some()
     }
 }
+
+/// Report gateway process heartbeats to control-api System Info.
+#[derive(Clone)]
+pub(crate) struct SystemInstanceReporter {
+    url:             Arc<str>,
+    internal_key:    Option<Arc<str>>,
+    connect_timeout: Option<Duration>,
+    http:            HttpUpstream,
+    https:           HttpsUpstream,
+    started_at:      i64,
+}
+
+impl SystemInstanceReporter {
+    pub(crate) fn from_config(config: &ControlPlaneConfig) -> Result<Option<Self>> {
+        let Some(url) = &config.system_instance_url else {
+            return Ok(None);
+        };
+        let uri: Uri = url
+            .parse()
+            .with_context(|| format!("parse control system instance url {url}"))?;
+        if uri.host().is_none() {
+            anyhow::bail!("control system instance url must include host");
+        }
+        let read_timeout = config.read_timeout_ms.map(Duration::from_millis);
+        let mut http = HttpUpstream::build_tcp_http1_only();
+        http.set_read_timeout(read_timeout);
+        let mut https = HttpsUpstream::default();
+        https.set_read_timeout(read_timeout);
+        Ok(Some(Self {
+            url: Arc::from(url.as_str()),
+            internal_key: config.internal_key.as_deref().map(Arc::<str>::from),
+            connect_timeout: config.connect_timeout_ms.map(Duration::from_millis),
+            http,
+            https,
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        }))
+    }
+
+    async fn send(&self, uri: Uri, req: Request<HttpBody>) -> Result<Response<HttpBody>> {
+        if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
+            let key: TcpTlsAddr = uri
+                .clone()
+                .try_into()
+                .context("invalid https system instance uri")?;
+            let connect = self.https.connect(key);
+            let mut conn = timeout_opt(self.connect_timeout, connect)
+                .await
+                .context("control system instance connect timeout")?
+                .context("connect https control system instance sink")?;
+            let (resp, _) = conn.send_request(req).await;
+            resp.context("send https control system instance request")
+        } else {
+            let host = uri
+                .host()
+                .context("control system instance uri missing host")?;
+            let port = uri.port_u16().unwrap_or(80);
+            let addr = format!("{host}:{port}")
+                .to_socket_addrs()
+                .with_context(|| format!("resolve control system instance sink {host}:{port}"))?
+                .next()
+                .context("control system instance sink resolved no addresses")?;
+            let connect = self.http.connect(addr);
+            let mut conn = timeout_opt(self.connect_timeout, connect)
+                .await
+                .context("control system instance connect timeout")?
+                .context("connect http control system instance sink")?;
+            let (resp, _) = conn.send_request(req).await;
+            resp.context("send http control system instance request")
+        }
+    }
+
+    pub(crate) async fn report_once(&self) {
+        let host = gateway_host_key();
+        let node_name = format!("{host}/gateway");
+        let rss = gateway_process_rss_bytes();
+        let info = serde_json::json!({
+            "schema_version": 1,
+            "node": {
+                "name": node_name,
+                "source": "gateway",
+                "manually_configured": std::env::var("HALOLAKE_NODE_NAME").is_ok()
+                    || std::env::var("NODE_NAME").is_ok(),
+                "should_configure_manually": std::env::var("HALOLAKE_NODE_NAME").is_err()
+                    && std::env::var("NODE_NAME").is_err(),
+                "process": "gateway",
+                "host_key": host,
+            },
+            "role": {
+                "is_master": false,
+                "process": "gateway",
+            },
+            "runtime": {
+                "version": env!("CARGO_PKG_VERSION"),
+                "goos": std::env::consts::OS,
+                "goarch": std::env::consts::ARCH,
+                "started_at": self.started_at,
+            },
+            "host": {
+                "hostname": host,
+            },
+            "resources": {
+                "process": "gateway",
+                "cpu": { "usage_percent": null, "scope": "host" },
+                "memory": {
+                    "usage_percent": null,
+                    "used_bytes": rss,
+                    "process_rss_bytes": rss,
+                    "scope": "process",
+                },
+                "storage": {
+                    "total_bytes": null,
+                    "used_bytes": null,
+                    "free_bytes": null,
+                    "used_percent": null,
+                    "scope": "host",
+                }
+            }
+        });
+        let body = match serde_json::to_vec(&serde_json::json!({
+            "node_name": node_name,
+            "info": info,
+            "started_at": self.started_at,
+        })) {
+            Ok(bytes) => Bytes::from(bytes),
+            Err(err) => {
+                warn!(?err, "serialize system instance report");
+                return;
+            }
+        };
+        let uri: Uri = match self.url.parse() {
+            Ok(uri) => uri,
+            Err(err) => {
+                warn!(?err, "invalid system instance url");
+                return;
+            }
+        };
+        let path = uri
+            .path_and_query()
+            .map_or(uri.path(), |pq| pq.as_str())
+            .to_string();
+        let host_hdr = match authority(&uri) {
+            Ok(a) => a,
+            Err(err) => {
+                warn!(?err, "system instance authority");
+                return;
+            }
+        };
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri(path.as_str())
+            .header(header::HOST, host_hdr)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json");
+        if let Some(internal_key) = &self.internal_key {
+            builder = builder.header(INTERNAL_KEY_HEADER, internal_key.as_ref());
+        }
+        let req = match builder.body(HttpBody::fixed_body(Some(body))) {
+            Ok(req) => req,
+            Err(err) => {
+                warn!(?err, "build system instance request");
+                return;
+            }
+        };
+        match self.send(uri, req).await {
+            Ok(resp) if resp.status().is_success() => {}
+            Ok(resp) => warn!(status = %resp.status(), "system instance report rejected"),
+            Err(err) => warn!(?err, "system instance report failed"),
+        }
+    }
+}
+
+pub(crate) fn spawn_system_instance_reporter(reporter: SystemInstanceReporter) {
+    monoio::spawn(async move {
+        reporter.report_once().await;
+        loop {
+            monoio::time::sleep(Duration::from_secs(30)).await;
+            reporter.report_once().await;
+        }
+    });
+}
+
+fn gateway_host_key() -> String {
+    for key in ["HALOLAKE_NODE_NAME", "NODE_NAME", "HOSTNAME"] {
+        if let Ok(name) = std::env::var(key) {
+            let name = name.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    "halolake".to_string()
+}
+
+fn gateway_process_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+                return Some(kb.saturating_mul(1024));
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}

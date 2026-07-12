@@ -327,3 +327,44 @@ pub(crate) async fn update_setup_option(
 pub(crate) fn bool_option_value(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct GatewaySystemInstancePayload {
+    #[serde(default)]
+    pub(crate) node_name:  String,
+    #[serde(default)]
+    pub(crate) info:       serde_json::Value,
+    #[serde(default)]
+    pub(crate) started_at: i64,
+}
+
+/// Gateway heartbeat for the System Info instances table (process role = gateway).
+pub(crate) async fn gateway_system_instance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GatewaySystemInstancePayload>,
+) -> Response {
+    if !state.authorized(&headers) {
+        return api_error_status(StatusCode::UNAUTHORIZED, "invalid internal key");
+    }
+    let node_name = payload.node_name.trim().to_string();
+    if node_name.is_empty() {
+        return api_error_status(StatusCode::BAD_REQUEST, "node_name is required");
+    }
+    let now = crate::now_unix();
+    let started_at = if payload.started_at > 0 {
+        payload.started_at
+    } else {
+        now
+    };
+    let req = crate::system_instance::UpsertSystemInstanceRequest {
+        node_name,
+        info: payload.info,
+        started_at,
+        last_seen_at: now,
+    };
+    match state.system_instances.call(req).await {
+        Ok(()) => api_success(json!({ "ok": true })),
+        Err(err) => management_error(err),
+    }
+}

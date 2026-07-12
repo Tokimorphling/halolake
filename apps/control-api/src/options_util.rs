@@ -1149,7 +1149,7 @@ pub(crate) fn default_options(config: &ControlApiConfig) -> BTreeMap<String, Str
     );
     option!("ExposeRatioEnabled", "false");
     option!("AutomaticDisableKeywords", "");
-    option!("AutomaticDisableStatusCodes", "");
+    // Keep the earlier default "401" (new-api); do not overwrite with empty.
     option!("AutomaticRetryStatusCodes", "");
     option!("SensitiveWords", "");
     option!("CheckSensitiveEnabled", "false");
@@ -1519,8 +1519,23 @@ pub(crate) fn option_str<'a>(
 pub(crate) fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
     options
         .get(key)
-        .and_then(|value| value.parse().ok())
+        .map(|value| parse_option_bool(value).unwrap_or(default))
         .unwrap_or(default)
+}
+
+fn parse_option_bool(value: &str) -> Option<bool> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = value.parse::<bool>() {
+        return Some(parsed);
+    }
+    match value {
+        "1" | "yes" | "on" | "Y" | "y" => Some(true),
+        "0" | "no" | "off" | "N" | "n" => Some(false),
+        _ => None,
+    }
 }
 
 pub(crate) fn passkey_option_alias(key: &str) -> Option<&'static str> {

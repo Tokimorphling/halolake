@@ -41,10 +41,10 @@ pub(crate) struct SystemInstanceResponse {
 
 #[derive(Debug, Clone)]
 pub(crate) struct UpsertSystemInstanceRequest {
-    node_name:    String,
-    info:         JsonValue,
-    started_at:   i64,
-    last_seen_at: i64,
+    pub(crate) node_name:    String,
+    pub(crate) info:         JsonValue,
+    pub(crate) started_at:   i64,
+    pub(crate) last_seen_at: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -554,18 +554,24 @@ pub(crate) fn spawn_system_instance_reporter(store: SystemInstanceStore, started
 async fn report_current_instance(store: &SystemInstanceStore, started_at: i64) {
     let node = current_node_identity();
     let now = now_unix();
+    // Two-process deployment: control-api reports as `<host>/control-api`.
+    let node_name = format!("{}/control-api", node.name);
+    let metrics = crate::process_metrics::ProcessMetrics::collect();
     let req = UpsertSystemInstanceRequest {
-        node_name: node.name.clone(),
+        node_name: node_name.clone(),
         info: json!({
             "schema_version": 1,
             "node": {
-                "name": node.name,
+                "name": node_name,
                 "source": node.source,
                 "manually_configured": node.manually_configured,
                 "should_configure_manually": node.should_configure_manually,
+                "process": "control-api",
+                "host_key": node.name,
             },
             "role": {
                 "is_master": true,
+                "process": "control-api",
             },
             "runtime": {
                 "version": env!("CARGO_PKG_VERSION"),
@@ -574,14 +580,24 @@ async fn report_current_instance(store: &SystemInstanceStore, started_at: i64) {
                 "started_at": started_at,
             },
             "host": {
-                "hostname": host_name(),
+                "hostname": host_name_or(&node.name),
             },
+            "resources": metrics.to_resources_json("control-api"),
         }),
         started_at,
         last_seen_at: now,
     };
     if let Err(err) = store.call(req).await {
         warn!(?err, "system instance report failed");
+    }
+}
+
+fn host_name_or(fallback: &str) -> String {
+    let hostname = host_name();
+    if hostname.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        hostname
     }
 }
 

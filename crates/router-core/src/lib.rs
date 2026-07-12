@@ -145,6 +145,11 @@ pub struct ChannelConfig {
     pub groups:          Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy:           Option<String>,
+    /// Channel-level request header overrides (new-api `header_override` JSON map).
+    /// Keys are header names; values support `{api_key}` and `{client_header:Name}`.
+    /// Passthrough rules (`*`, `re:…`) are ignored until gateway implements them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub header_override: std::collections::BTreeMap<String, String>,
 }
 
 impl ChannelConfig {
@@ -1097,6 +1102,7 @@ mod tests {
             models:          vec!["gpt-4o".to_string()],
             groups:          Vec::new(),
             proxy:           None,
+            header_override: Default::default(),
         });
 
         let indexed = snapshot.index().expect("snapshot should index");
@@ -1127,6 +1133,7 @@ mod tests {
             models:          vec!["gpt-4o".to_string()],
             groups:          Vec::new(),
             proxy:           None,
+            header_override: Default::default(),
         });
 
         let indexed = snapshot.index().expect("snapshot should index");
@@ -1173,6 +1180,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          Vec::new(),
                     proxy:           None,
+                    header_override: Default::default(),
                 },
                 ChannelConfig {
                     id:              "channel-b".to_string(),
@@ -1187,6 +1195,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          Vec::new(),
                     proxy:           None,
+                    header_override: Default::default(),
                 },
             ],
             model_mappings:   vec![
@@ -1270,6 +1279,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          Vec::new(),
                     proxy:           None,
+                    header_override: Default::default(),
                 },
                 ChannelConfig {
                     id:              "channel-b".to_string(),
@@ -1284,6 +1294,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          Vec::new(),
                     proxy:           None,
+                    header_override: Default::default(),
                 },
             ],
             model_mappings:   vec![
@@ -1391,6 +1402,7 @@ mod tests {
             models:          vec!["gpt-4o".to_string()],
             groups:          Vec::new(),
             proxy:           None,
+            header_override: Default::default(),
         });
         snapshot.tokens[0].allowed_ips =
             vec!["203.0.113.7".to_string(), "2001:db8::/32".to_string()];
@@ -1424,6 +1436,7 @@ mod tests {
             models:          vec!["gpt-4o".to_string()],
             groups:          Vec::new(),
             proxy:           None,
+            header_override: Default::default(),
         });
         snapshot.tokens[0].allowed_ips = vec!["not-an-ip".to_string()];
 
@@ -1464,6 +1477,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          vec!["default".to_string()],
                     proxy:           None,
+                    header_override: Default::default(),
                 },
                 ChannelConfig {
                     id:              "paid-channel".to_string(),
@@ -1478,6 +1492,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          vec!["paid".to_string()],
                     proxy:           None,
+                    header_override: Default::default(),
                 },
             ],
             model_mappings:   Vec::new(),
@@ -1529,6 +1544,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          vec!["default".to_string()],
                     proxy:           None,
+                    header_override: Default::default(),
                 },
                 ChannelConfig {
                     id:              "paid-channel".to_string(),
@@ -1543,6 +1559,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          vec!["paid".to_string()],
                     proxy:           None,
+                    header_override: Default::default(),
                 },
             ],
             model_mappings:   Vec::new(),
@@ -1591,6 +1608,7 @@ mod tests {
             models:          vec!["gpt-4o".to_string()],
             groups:          vec!["paid".to_string()],
             proxy:           None,
+            header_override: Default::default(),
         });
         snapshot.tokens[0].user_group = "default".to_string();
         snapshot.tokens[0].token_group = "paid".to_string();
@@ -1623,6 +1641,7 @@ mod tests {
             models:          vec!["gpt-4o".to_string()],
             groups:          vec!["default".to_string()],
             proxy:           None,
+            header_override: Default::default(),
         });
         let indexed = snapshot.index().expect("snapshot should index");
         indexed

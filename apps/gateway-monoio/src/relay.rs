@@ -910,9 +910,10 @@ impl RelayService {
             }
         }
 
-        let req = builder
+        let mut req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Claude upstream request")?;
+        apply_channel_header_override(req.headers_mut(), route, downstream_headers);
         self.send_upstream(uri, req, route.proxy.as_deref()).await
     }
 
@@ -991,9 +992,10 @@ impl RelayService {
                 builder = builder.header(name, value);
             }
         }
-        let req = builder
+        let mut req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build OpenAI upstream request")?;
+        apply_channel_header_override(req.headers_mut(), route, downstream_headers);
         self.send_upstream(uri, req, route.proxy.as_deref()).await
     }
 
@@ -1057,9 +1059,10 @@ impl RelayService {
         if let Some(user_agent) = downstream_headers.get(header::USER_AGENT) {
             builder = builder.header(header::USER_AGENT, user_agent);
         }
-        let req = builder
+        let mut req = builder
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Gemini upstream request")?;
+        apply_channel_header_override(req.headers_mut(), route, downstream_headers);
         self.send_upstream(uri, req, route.proxy.as_deref()).await
     }
 
@@ -1097,4 +1100,61 @@ fn rewrite_openai_chat_model_body(raw_body: &[u8], upstream_model: &str) -> Resu
     Ok(Bytes::from(
         serde_json::to_vec(&value).context("serialize OpenAI chat request body")?,
     ))
+}
+
+/// Apply channel `header_override` last so it wins over default/auth headers.
+/// Supports `{api_key}` and `{client_header:Name}` (new-api compatible).
+fn apply_channel_header_override(
+    headers: &mut HeaderMap,
+    route: &RouteContext,
+    downstream_headers: &HeaderMap,
+) {
+    if route.header_override.is_empty() {
+        return;
+    }
+    for (name, template) in &route.header_override {
+        let Some(value) =
+            resolve_header_override_value(template, &route.api_key, downstream_headers)
+        else {
+            continue;
+        };
+        let Ok(header_name) = HeaderName::try_from(name.as_str()) else {
+            continue;
+        };
+        let Ok(header_value) = HeaderValue::try_from(value.as_str()) else {
+            continue;
+        };
+        headers.insert(header_name, header_value);
+    }
+}
+
+fn resolve_header_override_value(
+    template: &str,
+    api_key: &str,
+    downstream_headers: &HeaderMap,
+) -> Option<String> {
+    let trimmed = template.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    const CLIENT_HEADER_PREFIX: &str = "{client_header:";
+    if let Some(rest) = trimmed.strip_prefix(CLIENT_HEADER_PREFIX) {
+        let name = rest.strip_suffix('}')?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        return downstream_headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
+    let value = trimmed.replace("{api_key}", api_key);
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }

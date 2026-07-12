@@ -84,16 +84,65 @@ const STATUS_DOT_CLASS_NAME: Record<SystemInstanceStatus, string> = {
   stale: 'bg-amber-500',
 }
 
+function processRole(instance: SystemInstance) {
+  const process =
+    instance.info?.role?.process ||
+    instance.info?.node?.process ||
+    instance.info?.resources?.process
+  if (typeof process === 'string' && process.trim()) return process.trim()
+  return null
+}
+
 function roleLabel(instance: SystemInstance) {
+  const process = processRole(instance)
+  if (process === 'control-api') return 'control-api'
+  if (process === 'gateway') return 'gateway'
   if (instance.info?.role?.is_master) return 'master'
   return 'worker'
 }
 
 function roleDescriptionKey(instance: SystemInstance) {
+  const process = processRole(instance)
+  if (process === 'control-api') {
+    return 'Control API process: admin UI, management data, and internal control plane.'
+  }
+  if (process === 'gateway') {
+    return 'Gateway process: public inference proxy (separate from control-api).'
+  }
   if (instance.info?.role?.is_master) {
     return 'Master instances run scheduled background tasks.'
   }
   return 'Worker instances do not run master-only background tasks.'
+}
+
+function hostKey(instance: SystemInstance) {
+  const key = instance.info?.node?.host_key
+  if (typeof key === 'string' && key.trim()) return key.trim()
+  const name = instance.node_name || ''
+  const idx = name.lastIndexOf('/')
+  if (idx > 0) return name.slice(0, idx)
+  return instance.info?.host?.hostname || name || 'unknown'
+}
+
+function memoryRssBytes(instance: SystemInstance): number | undefined {
+  const mem = instance.info?.resources?.memory
+  const value = mem?.process_rss_bytes ?? mem?.used_bytes
+  return typeof value === 'number' && !Number.isNaN(value) ? value : undefined
+}
+
+function formatSplitTotal(
+  a?: number,
+  b?: number,
+  format: (n?: number) => string = formatBytes
+) {
+  if (typeof a !== 'number' && typeof b !== 'number') return null
+  const left = typeof a === 'number' ? format(a) : '-'
+  const right = typeof b === 'number' ? format(b) : '-'
+  const total =
+    typeof a === 'number' || typeof b === 'number'
+      ? format((a ?? 0) + (b ?? 0))
+      : '-'
+  return `${left} + ${right} = ${total}`
 }
 
 function runtimeLabel(instance: SystemInstance) {
@@ -194,6 +243,7 @@ function RingProgress(props: RingProgressProps) {
 
 type ResourceCellProps = {
   value?: number
+  label?: string
   tooltip?: ReactNode
 }
 
@@ -206,7 +256,7 @@ function ResourceCell(props: ResourceCellProps) {
     <div className='flex items-center gap-2'>
       <RingProgress percent={percent} />
       <span className='font-mono text-[11px] tabular-nums'>
-        {formatPercent(props.value)}
+        {props.label ?? formatPercent(props.value)}
       </span>
     </div>
   )
@@ -222,6 +272,59 @@ function ResourceCell(props: ResourceCellProps) {
         <TooltipContent className='max-w-80'>{props.tooltip}</TooltipContent>
       </Tooltip>
     </TooltipProvider>
+  )
+}
+
+type ProcessMemoryCellProps = {
+  instance: SystemInstance
+  peer?: SystemInstance
+}
+
+function ProcessMemoryCell(props: ProcessMemoryCellProps) {
+  const { t } = useTranslation()
+  const selfRss = memoryRssBytes(props.instance)
+  const peerRss = props.peer ? memoryRssBytes(props.peer) : undefined
+  const selfProcess = processRole(props.instance) || 'self'
+  const peerProcess = props.peer ? processRole(props.peer) || 'peer' : null
+  const percent = props.instance.info?.resources?.memory?.usage_percent
+  const split =
+    props.peer && (typeof selfRss === 'number' || typeof peerRss === 'number')
+      ? formatSplitTotal(selfRss, peerRss)
+      : null
+  const label = split
+    ? split
+    : typeof selfRss === 'number'
+      ? formatBytes(selfRss)
+      : formatPercent(percent)
+
+  const tooltip = (
+    <div className='space-y-1 text-xs'>
+      <div className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-1'>
+        <span className='text-muted-foreground'>{selfProcess}</span>
+        <span className='font-mono'>{formatBytes(selfRss)}</span>
+        {peerProcess && (
+          <>
+            <span className='text-muted-foreground'>{peerProcess}</span>
+            <span className='font-mono'>{formatBytes(peerRss)}</span>
+            <span className='text-muted-foreground'>{t('Total')}</span>
+            <span className='font-mono'>
+              {formatBytes((selfRss ?? 0) + (peerRss ?? 0))}
+            </span>
+          </>
+        )}
+      </div>
+      <p className='text-muted-foreground'>
+        {t('Process RSS (control-api + gateway = total on this host).')}
+      </p>
+    </div>
+  )
+
+  return (
+    <ResourceCell
+      value={typeof percent === 'number' ? percent : undefined}
+      label={label}
+      tooltip={tooltip}
+    />
   )
 }
 
@@ -277,6 +380,13 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
               instance.info?.node?.should_configure_manually === true
             const resources = instance.info?.resources
             const storage = resources?.storage
+            const peer = props.instances.find(
+              (other) =>
+                other.node_name !== instance.node_name &&
+                hostKey(other) === hostKey(instance) &&
+                processRole(other) &&
+                processRole(other) !== processRole(instance)
+            )
             const isDeletingThisInstance =
               props.isDeletingInstance &&
               props.deletingNodeName === instance.node_name
@@ -385,7 +495,7 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                   <ResourceCell value={resources?.cpu?.usage_percent} />
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>
-                  <ResourceCell value={resources?.memory?.usage_percent} />
+                  <ProcessMemoryCell instance={instance} peer={peer} />
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>
                   <ResourceCell
@@ -419,8 +529,15 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                   />
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>
-                  <div className='truncate font-mono text-xs'>
-                    {instance.info?.runtime?.version || '-'}
+                  <div className='min-w-0'>
+                    <div className='truncate font-mono text-xs'>
+                      {instance.info?.runtime?.version || '-'}
+                    </div>
+                    {processRole(instance) && (
+                      <div className='text-muted-foreground truncate text-[11px]'>
+                        {processRole(instance)}
+                      </div>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>

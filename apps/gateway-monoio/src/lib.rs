@@ -22,7 +22,9 @@ use halolake_router_core::{
     ChannelAffinityCache, ChannelAffinityCandidate, ChannelConfig, GatewaySnapshot,
     IndexedSnapshot, Provider, RouteError,
 };
-use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, header};
+use http::{
+    HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, header,
+};
 use monoio::{
     io::{AsyncReadRent, AsyncWriteRent, sink::SinkExt, stream::Stream},
     net::{ListenerOpts, TcpListener, TcpStream},

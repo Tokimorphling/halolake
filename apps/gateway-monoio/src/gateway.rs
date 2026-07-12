@@ -249,11 +249,17 @@ async fn run_worker_async(
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(5));
     let listen = config.server.listen;
+    let system_instance_reporter = SystemInstanceReporter::from_config(&config.control)?;
     let gateway = Gateway::try_from_config(config, affinity_cache)?;
     if let Some(source) = snapshot_source
         && !snapshot_poll_interval.is_zero()
     {
         spawn_snapshot_polling(source, gateway.snapshots.clone(), snapshot_poll_interval);
+    }
+    if worker_id == 0
+        && let Some(reporter) = system_instance_reporter
+    {
+        spawn_system_instance_reporter(reporter);
     }
     debug!(
         worker_id,

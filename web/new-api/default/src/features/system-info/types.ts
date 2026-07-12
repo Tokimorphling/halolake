@@ -25,10 +25,13 @@ export type SystemInstanceInfo = {
     source?: string
     manually_configured?: boolean
     should_configure_manually?: boolean
+    process?: string
+    host_key?: string
     [key: string]: unknown
   }
   role?: {
     is_master?: boolean
+    process?: string
     [key: string]: unknown
   }
   runtime?: {
@@ -47,8 +50,14 @@ export type SystemInstanceInfo = {
       usage_percent?: number
       [key: string]: unknown
     }
+    process?: string
     memory?: {
       usage_percent?: number
+      used_bytes?: number
+      process_rss_bytes?: number
+      host_total_bytes?: number
+      host_used_bytes?: number
+      scope?: string
       [key: string]: unknown
     }
     storage?: {

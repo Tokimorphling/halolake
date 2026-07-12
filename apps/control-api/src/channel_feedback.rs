@@ -122,11 +122,11 @@ impl DisablePolicy {
         }
     }
 
+    /// Align with new-api `ShouldDisableChannel`: status-code ranges + keyword
+    /// match on the error body. Transient transport failures (timeouts, reset,
+    /// TLS) alone do **not** disable a channel — that was over-aggressive and
+    /// caused healthy channels to flip to status=3 after flaky network blips.
     fn should_disable(&self, event: &ChannelFeedbackEvent) -> bool {
-        match event.reason {
-            ChannelFeedbackReason::Transport => return true,
-            ChannelFeedbackReason::UpstreamStatus => {}
-        }
         if let Some(status_code) = event.status_code
             && self
                 .status_ranges
@@ -518,5 +518,43 @@ mod tests {
         assert_eq!(channel.status, STATUS_AUTO_DISABLED);
         let state = multi_key_state(&channel);
         assert_eq!(state.status.get(&1), Some(&STATUS_AUTO_DISABLED));
+    }
+
+    #[test]
+    fn transport_alone_does_not_disable_like_new_api() {
+        let policy = DisablePolicy {
+            enabled:       true,
+            status_ranges: parse_status_code_ranges("401").unwrap(),
+            keywords:      vec!["invalid_api_key".into()],
+        };
+        let transport = ChannelFeedbackEvent {
+            request_id:         "req".into(),
+            channel_id:         "1".into(),
+            api_key_index:      None,
+            status_code:        None,
+            reason:             ChannelFeedbackReason::Transport,
+            message:            "connection reset by peer".into(),
+            created_at_unix_ms: 0,
+        };
+        assert!(
+            !policy.should_disable(&transport),
+            "transient transport must not auto-ban"
+        );
+
+        let unauthorized = ChannelFeedbackEvent {
+            status_code: Some(401),
+            reason: ChannelFeedbackReason::UpstreamStatus,
+            message: "unauthorized".into(),
+            ..transport.clone()
+        };
+        assert!(policy.should_disable(&unauthorized));
+
+        let keyword = ChannelFeedbackEvent {
+            status_code: Some(400),
+            reason: ChannelFeedbackReason::UpstreamStatus,
+            message: "Error: invalid_api_key for account".into(),
+            ..transport
+        };
+        assert!(policy.should_disable(&keyword));
     }
 }

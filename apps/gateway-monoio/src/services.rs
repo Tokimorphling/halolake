@@ -657,6 +657,7 @@ impl Service<RouteLookup> for AuthRouteService {
                 requested_model: route.requested_model.to_string(),
                 upstream_model: route.upstream_model.to_string(),
                 proxy: route.channel.proxy.clone(),
+                header_override: route.channel.header_override.clone(),
             },
             affinity: affinity.map(route_affinity_context),
         })

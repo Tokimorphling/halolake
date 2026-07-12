@@ -1592,7 +1592,47 @@ fn channel_config(channel: &ChannelRecord) -> Result<Option<ChannelConfig>, Mana
         models: channel.model_list(),
         groups: channel.group_list(),
         proxy: channel_setting_proxy(channel),
+        header_override: parse_channel_header_override(channel.header_override.as_deref()),
     }))
+}
+
+/// Parse new-api style channel `header_override` JSON into explicit header→value map.
+/// Non-string values and passthrough rule keys (`*`, `re:…`, `regex:…`) are skipped.
+fn parse_channel_header_override(raw: Option<&str>) -> std::collections::BTreeMap<String, String> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return std::collections::BTreeMap::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return std::collections::BTreeMap::new();
+    };
+    let Some(object) = value.as_object() else {
+        return std::collections::BTreeMap::new();
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for (key, entry) in object {
+        let key = key.trim();
+        if key.is_empty() || is_header_passthrough_rule_key(key) {
+            continue;
+        }
+        let Some(text) = entry.as_str() else {
+            continue;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        out.insert(key.to_string(), text.to_string());
+    }
+    out
+}
+
+fn is_header_passthrough_rule_key(key: &str) -> bool {
+    let key = key.trim();
+    if key == "*" {
+        return true;
+    }
+    let lower = key.to_ascii_lowercase();
+    lower.starts_with("re:") || lower.starts_with("regex:")
 }
 
 fn channel_setting_proxy(channel: &ChannelRecord) -> Option<String> {
@@ -2315,6 +2355,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          Vec::new(),
                     proxy:           None,
+                    header_override: Default::default(),
                 }],
                 model_mappings:   vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
@@ -2509,6 +2550,7 @@ mod tests {
                     models:          vec!["gpt-4o".to_string()],
                     groups:          Vec::new(),
                     proxy:           None,
+                    header_override: Default::default(),
                 }],
                 model_mappings:   vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
@@ -2800,6 +2842,7 @@ mod tests {
                 models:          vec!["upstream".to_string()],
                 groups:          Vec::new(),
                 proxy:           None,
+                header_override: Default::default(),
             }],
             model_mappings:   vec![ModelMapping {
                 requested_model: "requested".to_string(),
@@ -2846,6 +2889,7 @@ mod tests {
                 models:          vec!["deepseek-v4-pro".to_string()],
                 groups:          Vec::new(),
                 proxy:           None,
+                header_override: Default::default(),
             }],
             model_mappings:   vec![ModelMapping {
                 requested_model: "deepseek-v4-pro".to_string(),
@@ -3154,5 +3198,41 @@ mod tests {
                 .expect("list channels");
             assert_eq!(page.total, 2);
         });
+    }
+
+    #[test]
+    fn parses_channel_header_override_map() {
+        let map = parse_channel_header_override(Some(
+            r#"{"User-Agent":"codex-cli/1.0","*":true,"re:^X-":true,"X-Api-Extra":"Bearer {api_key}","X-Client":"{client_header:User-Agent}"}"#,
+        ));
+        assert_eq!(
+            map.get("User-Agent").map(String::as_str),
+            Some("codex-cli/1.0")
+        );
+        assert_eq!(
+            map.get("X-Api-Extra").map(String::as_str),
+            Some("Bearer {api_key}")
+        );
+        assert_eq!(
+            map.get("X-Client").map(String::as_str),
+            Some("{client_header:User-Agent}")
+        );
+        assert!(!map.contains_key("*"));
+        assert!(!map.keys().any(|k| k.starts_with("re:")));
+    }
+
+    #[test]
+    fn build_snapshot_publishes_header_override() {
+        let mut channel = sample_channel(9, "with-ua", "default");
+        channel.header_override = Some(r#"{"User-Agent":"forced-ua"}"#.to_string());
+        let data = ManagementData::new(1, Vec::new(), Vec::new(), vec![channel], Vec::new());
+        let snapshot = data.build_snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.channels[0]
+                .header_override
+                .get("User-Agent")
+                .map(String::as_str),
+            Some("forced-ua")
+        );
     }
 }

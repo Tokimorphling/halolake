@@ -23,7 +23,7 @@ use crate::{
     sub2api_data_import::{self, DataImportResult, Sub2apiDataImportRequest},
 };
 use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
-use halolake_domain::{ChannelRecord, STATUS_ENABLED};
+use halolake_domain::{ChannelRecord, STATUS_AUTO_DISABLED, STATUS_ENABLED};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use service_async::Service;
@@ -35,6 +35,11 @@ const CHANNEL_TYPE_XAI: i32 = 48;
 const XAI_DEFAULT_API_BASE: &str = "https://api.x.ai";
 const XAI_DEFAULT_CLI_CHAT_BASE: &str = "https://cli-chat-proxy.grok.com";
 const XAI_DEFAULT_MODELS: &str = "grok-4,grok-4-latest,grok-3,grok-3-mini,grok-2,grok-2-latest";
+/// Keep in sync with CLIProxyAPI `xaiClientVersionValue` / chat-proxy identity headers.
+const XAI_TOKEN_AUTH_HEADER: &str = "X-XAI-Token-Auth";
+const XAI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
+const XAI_CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
+const XAI_CLIENT_VERSION_VALUE: &str = "0.2.93";
 
 /// Auto-detecting import request (JSON body).
 #[derive(Debug, Clone, Deserialize)]
@@ -755,13 +760,7 @@ async fn import_cliproxy_xai(
         .map(normalize_openai_compatible_base_url)
         .or_else(|| parsed.base_url.clone());
     let setting = build_xai_channel_setting(&parsed)?;
-    let header_override = parsed.headers.as_ref().and_then(|h| {
-        if h.is_empty() {
-            None
-        } else {
-            serde_json::to_string(h).ok()
-        }
-    });
+    let header_override = build_xai_header_override(&parsed, resolved_base.as_deref())?;
     let status = if meta
         .get("disabled")
         .and_then(|v| v.as_bool())
@@ -783,9 +782,18 @@ async fn import_cliproxy_xai(
             channel.key = parsed.access_token.clone();
             channel.channel_type = CHANNEL_TYPE_XAI;
             channel.name = channel_name.clone();
-            channel.status = status;
+            // Re-import recovers auto-disabled channels so users need not delete/recreate
+            // after fixing headers or tokens. Keep manual disable (status 2).
+            if status == STATUS_ENABLED {
+                if channel.status == STATUS_AUTO_DISABLED || channel.status == STATUS_ENABLED {
+                    channel.status = STATUS_ENABLED;
+                }
+            } else {
+                channel.status = status;
+            }
             channel.models = models;
             channel.base_url = resolved_base.clone();
+            // Rebuild setting drops auto-ban status_reason/status_time.
             channel.setting = Some(setting);
             channel.header_override = header_override;
             channel.remark = Some(format!("imported from CLIProxyAPI xai ({file_name})"));
@@ -962,6 +970,68 @@ fn build_xai_channel_setting(parsed: &ParsedXaiAuth) -> Result<String, Managemen
     }
     serde_json::to_string(&JsonValue::Object(map))
         .map_err(|_| ManagementError::InvalidRequest("failed to serialize xai channel setting"))
+}
+
+/// Match CLIProxyAPI `applyXAIChatHeaders`: for OAuth/chat-proxy channels inject
+/// identity headers; auth-file `headers` override defaults (same order as
+/// applyXAICustomHeaders after defaults).
+fn build_xai_header_override(
+    parsed: &ParsedXaiAuth,
+    resolved_base: Option<&str>,
+) -> Result<Option<String>, ManagementError> {
+    let mut map = JsonMap::new();
+    let base = resolved_base
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(parsed
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()));
+    if !parsed.using_api && base.is_some_and(is_xai_cli_chat_proxy_base) {
+        map.insert(
+            XAI_TOKEN_AUTH_HEADER.into(),
+            JsonValue::String(XAI_TOKEN_AUTH_VALUE.into()),
+        );
+        map.insert(
+            XAI_CLIENT_VERSION_HEADER.into(),
+            JsonValue::String(XAI_CLIENT_VERSION_VALUE.into()),
+        );
+    }
+    if let Some(headers) = &parsed.headers {
+        for (key, value) in headers {
+            let key = key.trim();
+            if key.is_empty() {
+                continue;
+            }
+            match value {
+                JsonValue::String(s) if !s.trim().is_empty() => {
+                    map.insert(key.to_string(), JsonValue::String(s.trim().to_string()));
+                }
+                JsonValue::Number(n) => {
+                    map.insert(key.to_string(), JsonValue::String(n.to_string()));
+                }
+                JsonValue::Bool(b) => {
+                    map.insert(key.to_string(), JsonValue::String(b.to_string()));
+                }
+                _ => {}
+            }
+        }
+    }
+    if map.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(&JsonValue::Object(map))
+        .map(Some)
+        .map_err(|_| ManagementError::InvalidRequest("failed to serialize xai header_override"))
+}
+
+fn is_xai_cli_chat_proxy_base(base_url: &str) -> bool {
+    let normalized = normalize_openai_compatible_base_url(base_url).to_ascii_lowercase();
+    normalized == XAI_DEFAULT_CLI_CHAT_BASE
+        || normalized
+            .trim_end_matches('/')
+            .ends_with("cli-chat-proxy.grok.com")
 }
 
 fn find_existing_xai_channel(
@@ -1247,6 +1317,49 @@ mod tests {
             Some("https://cli-chat-proxy.grok.com")
         );
         assert!(parsed.headers.is_some());
+        let override_json = build_xai_header_override(&parsed, parsed.base_url.as_deref())
+            .expect("headers")
+            .expect("some");
+        let map: JsonMap<String, JsonValue> = serde_json::from_str(&override_json).unwrap();
+        assert_eq!(
+            map.get(XAI_TOKEN_AUTH_HEADER).and_then(|v| v.as_str()),
+            Some(XAI_TOKEN_AUTH_VALUE)
+        );
+        assert_eq!(
+            map.get(XAI_CLIENT_VERSION_HEADER).and_then(|v| v.as_str()),
+            Some(XAI_CLIENT_VERSION_VALUE)
+        );
+        assert_eq!(
+            map.get("User-Agent").and_then(|v| v.as_str()),
+            Some("grok-shell/0.2.93")
+        );
+    }
+
+    #[test]
+    fn xai_api_key_path_skips_cli_identity_headers() {
+        let raw = r#"{"type":"xai","auth_kind":"api_key","access_token":"sk","using_api":true}"#;
+        let meta: JsonMap<String, JsonValue> = serde_json::from_str(raw).unwrap();
+        let parsed = parse_cliproxy_xai_auth(&meta).expect("parse");
+        assert!(parsed.using_api);
+        let override_json =
+            build_xai_header_override(&parsed, Some(XAI_DEFAULT_API_BASE)).expect("ok");
+        assert!(override_json.is_none());
+    }
+
+    #[test]
+    fn xai_cli_headers_without_file_headers() {
+        let raw = r#"{"type":"xai","auth_kind":"oauth","access_token":"at","refresh_token":"rt"}"#;
+        let meta: JsonMap<String, JsonValue> = serde_json::from_str(raw).unwrap();
+        let parsed = parse_cliproxy_xai_auth(&meta).expect("parse");
+        let override_json = build_xai_header_override(&parsed, parsed.base_url.as_deref())
+            .expect("ok")
+            .expect("cli headers");
+        let map: JsonMap<String, JsonValue> = serde_json::from_str(&override_json).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get(XAI_CLIENT_VERSION_HEADER).and_then(|v| v.as_str()),
+            Some(XAI_CLIENT_VERSION_VALUE)
+        );
     }
 
     #[test]

@@ -46,4 +46,6 @@ pub struct RouteContext {
     pub requested_model: String,
     pub upstream_model:  String,
     pub proxy:           Option<String>,
+    /// Explicit channel header overrides (after default/auth headers).
+    pub header_override: std::collections::BTreeMap<String, String>,
 }

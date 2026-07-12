@@ -95,6 +95,8 @@ pub struct ControlPlaneConfig {
     #[serde(default)]
     pub channel_feedback_url:      Option<String>,
     #[serde(default)]
+    pub system_instance_url:       Option<String>,
+    #[serde(default)]
     pub internal_key:              Option<String>,
     #[serde(default)]
     pub connect_timeout_ms:        Option<u64>,
