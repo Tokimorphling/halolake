@@ -498,6 +498,22 @@ fn channel_info_from_setting(setting: Option<&str>, key: &str) -> JsonValue {
     } else {
         "random"
     };
+    let import_source = parsed
+        .get("import_source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let auth_kind = parsed
+        .get("auth_kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let using_api = parsed
+        .get("using_api")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let provider = parsed
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     json!({
         "is_multi_key": is_multi,
         "multi_key_size": multi_key_size,
@@ -506,6 +522,10 @@ fn channel_info_from_setting(setting: Option<&str>, key: &str) -> JsonValue {
         "multi_key_disabled_time": parsed.get("multi_key_disabled_time").cloned().unwrap_or(json!({})),
         "multi_key_polling_index": parsed.get("multi_key_polling_index").and_then(|v| v.as_u64()).unwrap_or(0),
         "multi_key_mode": multi_key_mode,
+        "import_source": import_source,
+        "auth_kind": auth_kind,
+        "using_api": using_api,
+        "provider": provider,
     })
 }
 

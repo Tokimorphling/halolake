@@ -41,6 +41,44 @@ export function getChannelTypeLabel(type: number): string {
 }
 
 /**
+ * Extra badge for OAuth / CLIProxy imports (xAI chat-proxy, Codex, etc.).
+ */
+export function getChannelAuthBadge(channel: {
+  type?: number
+  channel_info?: {
+    import_source?: string
+    auth_kind?: string
+    using_api?: boolean
+    provider?: string
+  }
+  base_url?: string | null
+}): string | null {
+  const info = channel.channel_info
+  const importSource = info?.import_source || ''
+  const authKind = (info?.auth_kind || '').toLowerCase()
+  const usingApi = info?.using_api === true
+  const base = (channel.base_url || '').toLowerCase()
+  if (channel.type === 48 || info?.provider === 'xai') {
+    if (
+      importSource === 'cliproxyapi' ||
+      authKind === 'oauth' ||
+      base.includes('cli-chat-proxy')
+    ) {
+      if (!usingApi) return 'xAI OAuth (chat-proxy)'
+      return 'xAI API'
+    }
+  }
+  if (channel.type === 57) {
+    return 'Codex OAuth'
+  }
+  if (importSource === 'cliproxyapi') {
+    return 'CLIProxy import'
+  }
+  return null
+}
+
+
+/**
  * Get channel type icon name for getLobeIcon
  * Maps channel types to Lobe icon names using type number (language-independent)
  */

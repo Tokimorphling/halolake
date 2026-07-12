@@ -1433,6 +1433,20 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             if updated.group.trim().is_empty() {
                 updated.group.clone_from(&channel.group);
             }
+            // Protect special providers from being rewritten to generic OpenAI (1)
+            // by partial admin saves / "fetch models then save". Explicit changes
+            // to another non-default type are still allowed.
+            if updated.channel_type == CHANNEL_TYPE_OPENAI
+                && matches!(
+                    channel.channel_type,
+                    CHANNEL_TYPE_XAI
+                        | CHANNEL_TYPE_CODEX
+                        | CHANNEL_TYPE_ANTHROPIC
+                        | CHANNEL_TYPE_GEMINI
+                )
+            {
+                updated.channel_type = channel.channel_type;
+            }
             // Merge setting JSON so sparse admin saves do not drop multi_key_* /
             // import_source / status_reason written by runtime or import.
             updated.setting =

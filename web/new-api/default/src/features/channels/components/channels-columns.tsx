@@ -62,6 +62,7 @@ import {
   formatResponseTime,
   getBalanceVariant,
   getChannelTypeIcon,
+  getChannelAuthBadge,
   getChannelTypeLabel,
   getResponseTimeConfig,
   isMultiKeyChannel,
@@ -767,6 +768,15 @@ export function useChannelsColumns(
                   <TooltipContent side='top'>{typeName}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+              {getChannelAuthBadge(channel) && (
+                <StatusBadge
+                  label={t(getChannelAuthBadge(channel) || '')}
+                  variant='purple'
+                  size='sm'
+                  copyable={false}
+                  className='shrink-0'
+                />
+              )}
               {isIonet && (
                 <TooltipProvider delay={100}>
                   <Tooltip>

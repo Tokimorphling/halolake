@@ -30,6 +30,10 @@ export const channelInfoSchema = z.object({
   multi_key_disabled_time: z.record(z.string(), z.number()).optional(),
   multi_key_polling_index: z.number().default(0),
   multi_key_mode: z.enum(['random', 'polling']).default('random'),
+  import_source: z.string().optional(),
+  auth_kind: z.string().optional(),
+  using_api: z.boolean().optional(),
+  provider: z.string().optional(),
 })
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
