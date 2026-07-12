@@ -958,16 +958,32 @@ pub(crate) async fn delete_self(State(state): State<AppState>, headers: HeaderMa
 }
 
 pub(crate) async fn user_groups(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let group = current_user(&state, &headers)
-        .await
-        .map(|user| user.group)
-        .unwrap_or_else(|_| "default".to_string());
-    api_success(json!({
-        group.clone(): {
-            "ratio": 1,
-            "desc": group,
-        }
-    }))
+    let user = match current_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    let options = state.options.values().unwrap_or_default();
+    let usable = usable_groups_for_user(&options, &user.group, user.role);
+    let group_ratio = parse_group_ratio_map(options.get("GroupRatio"));
+    let group_group_ratio = parse_group_group_ratio(options.get("GroupGroupRatio"));
+
+    let mut out = serde_json::Map::new();
+    for (name, desc) in usable {
+        let ratio = user_group_ratio(&group_group_ratio, &group_ratio, &user.group, &name);
+        let ratio_val = if name == "auto" {
+            json!("自动")
+        } else {
+            json!(ratio)
+        };
+        out.insert(
+            name.clone(),
+            json!({
+                "ratio": ratio_val,
+                "desc": desc,
+            }),
+        );
+    }
+    api_success(JsonValue::Object(out))
 }
 
 pub(crate) async fn user_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1344,7 +1360,16 @@ pub(crate) async fn create_token(
     };
     // Self-service tokens are rebuilt server-side. Never trust ownership,
     // used_quota, or an attacker-chosen key material from the client.
+    let requested_group = token.group.clone();
+    let requested_cross = token.cross_group_retry;
     sanitize_self_service_token_create(&mut token, user.id);
+    apply_token_group_for_user(
+        &mut token,
+        &user,
+        &state.options.values().unwrap_or_default(),
+        &requested_group,
+        requested_cross,
+    );
     fill_new_token_defaults(&mut token, user.id);
     match state.management.call(CreateTokenRequest { token }).await {
         Ok(_) => match publish_management_snapshot(&state).await {
@@ -1400,9 +1425,14 @@ pub(crate) async fn update_token(
         if patch.status == 0 || patch.status == STATUS_ENABLED {
             token.status = patch.status;
         }
-        // group / cross_group_retry stay server-owned (inherit user group).
-        token.group.clear();
-        token.cross_group_retry = false;
+        // Allow selecting a billing/routing group the user is permitted to use.
+        apply_token_group_for_user(
+            &mut token,
+            &user,
+            &state.options.values().unwrap_or_default(),
+            &patch.group,
+            patch.cross_group_retry,
+        );
     }
     match state
         .management
@@ -1637,11 +1667,255 @@ pub(crate) fn sanitize_self_service_token_create(token: &mut TokenRecord, user_i
         model_limits,
         allow_ips,
         used_quota: 0,
-        // Empty inherits the user's group in the published snapshot. Self-service
-        // callers must not invent a privileged token_group override.
+        // Group applied separately via apply_token_group_for_user.
         group: String::new(),
         cross_group_retry: false,
     };
+}
+
+/// Apply token group from client if permitted (new-api UserUsableGroups + GroupRatio).
+fn apply_token_group_for_user(
+    token: &mut TokenRecord,
+    user: &UserRecord,
+    options: &std::collections::BTreeMap<String, String>,
+    requested_group: &str,
+    cross_group_retry: bool,
+) {
+    let requested = requested_group.trim();
+    let usable = usable_groups_for_user(options, &user.group, user.role);
+    if requested.is_empty() {
+        // Empty = inherit user group in snapshot publish path.
+        token.group.clear();
+        token.cross_group_retry = false;
+        return;
+    }
+    if usable.contains_key(requested) {
+        token.group = requested.to_string();
+        token.cross_group_retry = requested == "auto" && cross_group_retry;
+    } else {
+        // Fall back to inherit rather than inventing a privileged group.
+        token.group.clear();
+        token.cross_group_retry = false;
+    }
+}
+
+/// Groups the user may select for API keys (aligned with new-api GetUserGroups).
+///
+/// new-api:
+/// 1. start from option `UserUsableGroups` (name → description)
+/// 2. apply `GroupSpecialUsableGroup` for the user's group (+/- overrides)
+/// 3. ensure the user's own group is present
+/// 4. list only names that also exist in `GroupRatio` (pricing), plus `auto` when enabled
+///
+/// Halolake self-host addition: root/admin always see every `GroupRatio` key so a
+/// newly priced group can be selected without editing UserUsableGroups first.
+fn usable_groups_for_user(
+    options: &std::collections::BTreeMap<String, String>,
+    user_group: &str,
+    role: i32,
+) -> std::collections::BTreeMap<String, String> {
+    let mut groups = parse_string_map_opt(options.get("UserUsableGroups"));
+    if groups.is_empty() {
+        // new-api default seed
+        groups.insert("default".into(), "默认分组".into());
+        groups.insert("vip".into(), "vip分组".into());
+    }
+
+    let ug = user_group.trim();
+    apply_group_special_usable(&mut groups, options.get("GroupSpecialUsableGroup"), ug);
+
+    if !ug.is_empty() {
+        groups
+            .entry(ug.to_string())
+            .or_insert_with(|| "用户分组".into());
+    }
+
+    let ratios = parse_group_ratio_map(options.get("GroupRatio"));
+
+    // new-api GetUserGroups only exposes groups that appear in GroupRatio.
+    let mut filtered = std::collections::BTreeMap::new();
+    for (name, desc) in &groups {
+        if ratios.contains_key(name) || name == "auto" {
+            filtered.insert(name.clone(), desc.clone());
+        }
+    }
+    // Ensure every GroupRatio key is selectable for admin/root (and present with a desc).
+    if role >= ROLE_ADMIN_USER {
+        for name in ratios.keys() {
+            filtered.entry(name.clone()).or_insert_with(|| name.clone());
+        }
+    } else {
+        // Common users: still surface GroupRatio keys that are already in usable map;
+        // also allow their own group even if ratio missing (new-api adds user group).
+        for name in ratios.keys() {
+            if groups.contains_key(name) {
+                filtered.entry(name.clone()).or_insert_with(|| name.clone());
+            }
+        }
+    }
+
+    if option_bool(options, "DefaultUseAutoGroup", false)
+        || groups.contains_key("auto")
+        || filtered.contains_key("auto")
+    {
+        filtered
+            .entry("auto".into())
+            .or_insert_with(|| "自动选择分组".into());
+    }
+
+    // Never return empty — FE needs at least default.
+    if filtered.is_empty() {
+        filtered.insert("default".into(), "默认分组".into());
+    }
+    filtered
+}
+
+/// new-api GroupSpecialUsableGroup: map userGroup → { "+:g": desc, "-:g": "", "g": desc }
+fn apply_group_special_usable(
+    groups: &mut std::collections::BTreeMap<String, String>,
+    raw: Option<&String>,
+    user_group: &str,
+) {
+    if user_group.is_empty() {
+        return;
+    }
+    let Some(raw) = raw
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(raw) else {
+        return;
+    };
+    let Some(special) = value.get(user_group).and_then(|v| v.as_object()) else {
+        return;
+    };
+    for (key, desc_v) in special {
+        let desc = desc_v
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| key.clone());
+        if let Some(rest) = key.strip_prefix("-:") {
+            groups.remove(rest);
+        } else if let Some(rest) = key.strip_prefix("+:") {
+            groups.insert(rest.to_string(), desc);
+        } else {
+            groups.insert(key.clone(), desc);
+        }
+    }
+}
+
+fn parse_string_map_opt(raw: Option<&String>) -> std::collections::BTreeMap<String, String> {
+    let Some(raw) = raw
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Default::default();
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(raw) else {
+        return Default::default();
+    };
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            let key = k.trim();
+            if key.is_empty() {
+                continue;
+            }
+            let desc = v
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| key.to_string());
+            out.insert(key.to_string(), desc);
+        }
+    }
+    out
+}
+
+fn parse_group_ratio_map(raw: Option<&String>) -> std::collections::BTreeMap<String, f64> {
+    let Some(raw) = raw
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return std::collections::BTreeMap::from([("default".into(), 1.0)]);
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(raw) else {
+        return std::collections::BTreeMap::from([("default".into(), 1.0)]);
+    };
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            let key = k.trim();
+            if key.is_empty() {
+                continue;
+            }
+            if let Some(n) = v.as_f64() {
+                out.insert(key.to_string(), n);
+            } else if let Some(s) = v.as_str() {
+                if let Ok(n) = s.parse::<f64>() {
+                    out.insert(key.to_string(), n);
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out.insert("default".into(), 1.0);
+    }
+    out
+}
+
+fn parse_group_group_ratio(
+    raw: Option<&String>,
+) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>> {
+    let Some(raw) = raw
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Default::default();
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(raw) else {
+        return Default::default();
+    };
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(obj) = value.as_object() {
+        for (user_g, inner) in obj {
+            let mut m = std::collections::BTreeMap::new();
+            if let Some(inner_obj) = inner.as_object() {
+                for (g, v) in inner_obj {
+                    if let Some(n) = v.as_f64() {
+                        m.insert(g.clone(), n);
+                    } else if let Some(s) = v.as_str() {
+                        if let Ok(n) = s.parse::<f64>() {
+                            m.insert(g.clone(), n);
+                        }
+                    }
+                }
+            }
+            if !m.is_empty() {
+                out.insert(user_g.clone(), m);
+            }
+        }
+    }
+    out
+}
+
+fn user_group_ratio(
+    group_group: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    group_ratio: &std::collections::BTreeMap<String, f64>,
+    user_group: &str,
+    group: &str,
+) -> f64 {
+    if let Some(inner) = group_group.get(user_group.trim()) {
+        if let Some(r) = inner.get(group) {
+            return *r;
+        }
+    }
+    group_ratio.get(group).copied().unwrap_or(1.0)
 }
 
 pub(crate) fn fill_new_user_defaults(user: &mut UserRecord) {
