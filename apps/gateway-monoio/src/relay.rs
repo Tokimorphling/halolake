@@ -258,11 +258,12 @@ where
 }
 
 pub(crate) struct OpenAiChatRelayRequest<CX> {
-    pub(crate) request:  openai::ChatCompletionRequest,
+    pub(crate) request:            openai::ChatCompletionRequest,
     /// Original downstream body; used for redacted structured logs and
     /// OpenAI passthrough so unknown fields (e.g. reasoning_effort) survive.
-    pub(crate) raw_body: Bytes,
-    pub(crate) cx:       CX,
+    pub(crate) raw_body:           Bytes,
+    pub(crate) downstream_headers: HeaderMap,
+    pub(crate) cx:                 CX,
 }
 
 impl<CX> Service<OpenAiChatRelayRequest<CX>> for RelayService
@@ -294,7 +295,7 @@ where
                         }
                     };
                 let upstream = match self
-                    .send_claude_json(&route, &HeaderMap::new(), &claude_req, "/v1/messages")
+                    .send_claude_json(&route, &req.downstream_headers, &claude_req, "/v1/messages")
                     .await
                 {
                     Ok(resp) => resp,
@@ -330,8 +331,13 @@ where
                             ));
                         }
                     };
-                self.openai_passthrough(route, "/v1/chat/completions", body, &HeaderMap::new())
-                    .await
+                self.openai_passthrough(
+                    route,
+                    "/v1/chat/completions",
+                    body,
+                    &req.downstream_headers,
+                )
+                .await
             }
             Provider::Gemini => {
                 let gemini_req = match openai_chat_to_gemini_request(&req.request) {
@@ -347,7 +353,7 @@ where
                 let upstream_path = self
                     .gemini_generate_content_path(&route.upstream_model, req.request.is_stream());
                 let upstream = match self
-                    .send_gemini_json(&route, &HeaderMap::new(), &gemini_req, &upstream_path)
+                    .send_gemini_json(&route, &req.downstream_headers, &gemini_req, &upstream_path)
                     .await
                 {
                     Ok(resp) => resp,
@@ -460,7 +466,7 @@ where
                 let upstream = match self
                     .send_openai_json(
                         &route,
-                        &HeaderMap::new(),
+                        &req.downstream_headers,
                         &openai_req,
                         "/v1/chat/completions",
                     )
@@ -524,7 +530,7 @@ where
                 let upstream_path = self
                     .gemini_generate_content_path(&route.upstream_model, openai_req.is_stream());
                 let upstream = match self
-                    .send_gemini_json(&route, &HeaderMap::new(), &gemini_req, &upstream_path)
+                    .send_gemini_json(&route, &req.downstream_headers, &gemini_req, &upstream_path)
                     .await
                 {
                     Ok(resp) => resp,
@@ -679,7 +685,7 @@ where
                     };
                 let upstream_path = self.gemini_imagen_predict_path(&route.upstream_model);
                 let upstream = match self
-                    .send_gemini_json(&route, &HeaderMap::new(), &gemini_req, &upstream_path)
+                    .send_gemini_json(&route, &req.downstream_headers, &gemini_req, &upstream_path)
                     .await
                 {
                     Ok(resp) => resp,
@@ -798,7 +804,7 @@ where
                 let upstream = match self
                     .send_openai_json(
                         &route,
-                        &HeaderMap::new(),
+                        &req.downstream_headers,
                         &openai_req,
                         "/v1/chat/completions",
                     )

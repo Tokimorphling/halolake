@@ -134,6 +134,7 @@ where
             .call(OpenAiChatRelayRequest {
                 request: openai_req,
                 raw_body: req.body,
+                downstream_headers: req.headers,
                 cx,
             })
             .await?;
