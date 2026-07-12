@@ -38,6 +38,11 @@ services:
       HALOLAKE_GATEWAY_CONFIG: /app/config/gateway.toml
       # Prefer SQL_DSN (wins over docker default sqlite when set)
       SQL_DSN: postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@${POSTGRES_HOST:-sub2api-postgres}:5432/${POSTGRES_DB:-halolake}
+      # Optional OTEL (Grafana Cloud OTLP: protocol=http/protobuf + Authorization header)
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-halolake}
     volumes:
       - ./data:/data
     networks:

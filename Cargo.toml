@@ -60,7 +60,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = "0.31"
 opentelemetry = { version = "0.30", features = ["logs", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "logs", "metrics", "trace"] }
-opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "http-proto", "logs", "metrics", "trace", "reqwest-client"] }
+# default-features off: default enables reqwest-blocking-client; with reqwest-client both
+# active, OTLP 0.30 picks no HTTP client ("no http client specified").
+opentelemetry-otlp = { version = "0.30", default-features = false, features = [
+  "grpc-tonic",
+  "http-proto",
+  "logs",
+  "metrics",
+  "trace",
+  "reqwest-client",
+  "reqwest-rustls",
+  "internal-logs",
+] }
 opentelemetry-appender-tracing = "0.30"
 opentelemetry-semantic-conventions = "0.30"
 uuid = { version = "1", features = ["v4", "fast-rng"] }

@@ -145,9 +145,10 @@ cat data/halolake-credentials.txt
 | `HALOLAKE_CONTROL_CONFIG` | `/app/config/control-api.toml` | control 配置 |
 | `HALOLAKE_GATEWAY_CONFIG` | `/app/config/gateway.toml` | gateway 配置 |
 | `RUST_LOG` | `info` | 日志级别；请求体预览需 `debug` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 设置后导出 OTLP（如 `http://127.0.0.1:4317`） |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 设置后导出 OTLP（本地 `http://…:4317` 或 Grafana Cloud `https://otlp-gateway-….grafana.net/otlp`） |
 | `OTEL_SERVICE_NAME` | 进程名 | OTEL service name |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | 或 `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | Grafana Cloud 用 `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | 未设置 | Cloud 鉴权，如 `Authorization=Basic%20<base64(instanceId:token)>`（compose 需显式映射进容器） |
 
 覆盖配置（不重建镜像）：
 

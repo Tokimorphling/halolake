@@ -25,9 +25,11 @@ services:
       HALOLAKE_CREDENTIALS_FILE: /data/halolake-credentials.txt
       HALOLAKE_CONTROL_CONFIG: /app/config/control-api.toml
       HALOLAKE_GATEWAY_CONFIG: /app/config/gateway.toml
-      # Optional OTEL:
-      # OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4317
-      # OTEL_SERVICE_NAME: halolake
+      # Optional OTEL (set in .env; empty disables export):
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-halolake}
     volumes:
       - ./data:/data
     restart: unless-stopped
