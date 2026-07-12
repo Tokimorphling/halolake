@@ -302,7 +302,14 @@ impl ControlApi {
             );
         }
         let session_signer = SessionSigner::new(session_secret);
+        // Config snapshot is only a seed for empty DB. Memory bus must start at
+        // version 0 so the first publish of DB-backed management always applies
+        // (otherwise gateway can boot empty: /v1/models=[], unauthorized tokens).
+        snapshot.version = 0;
         let snapshots = MemorySnapshotBus::new(snapshot);
+        publish_enriched_management_snapshot(&management, &options, &snapshots, &proxies)
+            .await
+            .context("publish initial management snapshot to gateway bus")?;
         spawn_system_instance_reporter(system_instances.clone(), start_time_unix);
         if config.system.task_scheduler_enabled {
             spawn_channel_task_scheduler(

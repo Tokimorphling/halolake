@@ -10,9 +10,7 @@
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{
-    LogExporter, MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig,
-};
+use opentelemetry_otlp::{LogExporter, MetricExporter, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::{
     Resource, logs::SdkLoggerProvider, metrics::SdkMeterProvider,
     propagation::TraceContextPropagator, trace::SdkTracerProvider,
@@ -121,19 +119,12 @@ fn install_otlp(
     resource: Resource,
 ) -> Result<(SdkTracerProvider, SdkLoggerProvider, SdkMeterProvider)> {
     let use_http = protocol.contains("http");
-    // Explicit client: feature-flag mutual exclusion in otlp 0.30 can yield
-    // "no http client specified" when both reqwest-client and blocking are on.
-    let http_client = || {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    };
 
+    // HTTP path uses reqwest-blocking-client (workspace feature). Do not inject
+    // async reqwest::Client: batch exporter threads are not on a Tokio runtime.
     let span_exporter = if use_http {
         SpanExporter::builder()
             .with_http()
-            .with_http_client(http_client())
             .with_endpoint(endpoint)
             .build()
             .context("build OTLP HTTP span exporter")?
@@ -148,7 +139,6 @@ fn install_otlp(
     let log_exporter = if use_http {
         LogExporter::builder()
             .with_http()
-            .with_http_client(http_client())
             .with_endpoint(endpoint)
             .build()
             .context("build OTLP HTTP log exporter")?
@@ -163,7 +153,6 @@ fn install_otlp(
     let metric_exporter = if use_http {
         MetricExporter::builder()
             .with_http()
-            .with_http_client(http_client())
             .with_endpoint(endpoint)
             .build()
             .context("build OTLP HTTP metric exporter")?
