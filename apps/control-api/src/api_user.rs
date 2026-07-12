@@ -805,6 +805,7 @@ pub(crate) async fn get_self(State(state): State<AppState>, headers: HeaderMap) 
     api_success(self_payload(&user))
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_checkin_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -844,6 +845,7 @@ pub(crate) async fn get_checkin_status(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn do_checkin(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match current_user(&state, &headers).await {
         Ok(user) => user,

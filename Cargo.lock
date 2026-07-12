@@ -1375,6 +1375,7 @@ dependencies = [
  "futures-util",
  "halolake-api-contract",
  "halolake-control-plane",
+ "halolake-control-storage",
  "halolake-domain",
  "halolake-router-core",
  "halolake-telemetry",
@@ -1407,6 +1408,18 @@ dependencies = [
  "serde_json",
  "service-async",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "halolake-control-storage"
+version = "0.1.0"
+dependencies = [
+ "halolake-control-plane",
+ "halolake-domain",
+ "halolake-router-core",
+ "serde",
+ "service-async",
+ "sqlx",
 ]
 
 [[package]]

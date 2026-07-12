@@ -17,10 +17,13 @@ use crate::{
     },
     http_auth::{current_user, require_role},
     http_response::{api_error_status, api_ok, api_success, json_error, management_error},
-    model_sync::{ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest},
     options_util::{
         collect_json_object_keys, option_f64, require_payment_compliance, topup_info_payload,
     },
+};
+#[cfg(feature = "admin-extras")]
+use crate::model_sync::{
+    ModelSyncService, SyncUpstreamModelsRequest, SyncUpstreamPreviewRequest,
 };
 use axum::{
     Json,
@@ -74,6 +77,7 @@ pub(crate) struct CompleteTopUpPayload {
     pub(crate) trade_no: String,
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn api_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = current_user(&state, &headers).await {
         return resp;
@@ -402,6 +406,7 @@ pub(crate) async fn complete_topup(
     api_success(JsonValue::Null)
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn list_vendors(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -421,6 +426,7 @@ pub(crate) async fn list_vendors(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn search_vendors(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -448,6 +454,7 @@ pub(crate) async fn search_vendors(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_vendor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -463,6 +470,7 @@ pub(crate) async fn get_vendor(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn create_vendor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -478,6 +486,7 @@ pub(crate) async fn create_vendor(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn update_vendor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -493,6 +502,7 @@ pub(crate) async fn update_vendor(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn delete_vendor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -508,6 +518,7 @@ pub(crate) async fn delete_vendor(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn list_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -541,6 +552,7 @@ pub(crate) async fn list_model_meta(
     }))
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn search_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -573,6 +585,7 @@ pub(crate) async fn search_model_meta(
     api_success(page)
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -592,6 +605,7 @@ pub(crate) async fn get_model_meta(
     api_success(model)
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn create_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -607,6 +621,7 @@ pub(crate) async fn create_model_meta(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn update_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -630,6 +645,7 @@ pub(crate) async fn update_model_meta(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn delete_model_meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -645,6 +661,7 @@ pub(crate) async fn delete_model_meta(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_missing_models(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -664,6 +681,7 @@ pub(crate) async fn get_missing_models(
     api_success(missing_models(&management, &catalog))
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn sync_upstream_preview(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -680,6 +698,7 @@ pub(crate) async fn sync_upstream_preview(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn sync_upstream_models(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -15,8 +15,11 @@ use crate::{
         usage_error,
     },
     now_unix, publish_management_snapshot,
-    ratio_sync::{FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService},
     storage::{ListOptionsRequest, UpdateOptionRequest},
+};
+#[cfg(feature = "admin-extras")]
+use crate::ratio_sync::{
+    FetchUpstreamRatiosRequest, ListSyncableChannelsRequest, RatioSyncService,
 };
 use axum::{
     Json,
@@ -74,6 +77,7 @@ pub(crate) struct PerfMetricsQuery {
     hours: i64,
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn api_pricing(
     State(state): State<AppState>,
     Query(query): Query<PricingQuery>,
@@ -115,6 +119,7 @@ pub(crate) async fn api_pricing(
     }))
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn api_rankings(
     State(state): State<AppState>,
     Query(query): Query<RankingsQuery>,
@@ -134,6 +139,7 @@ pub(crate) async fn api_rankings(
     api_success(rankings_snapshot(&events, &catalog, config))
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn api_perf_metrics(
     State(state): State<AppState>,
     Query(query): Query<PerfMetricsQuery>,
@@ -148,6 +154,7 @@ pub(crate) async fn api_perf_metrics(
     api_success(perf_metrics_for_model(&events, &query))
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn api_perf_metrics_summary(
     State(state): State<AppState>,
     Query(query): Query<PerfMetricsQuery>,
@@ -250,6 +257,7 @@ pub(crate) async fn reset_model_ratio(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_syncable_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -265,6 +273,7 @@ pub(crate) async fn get_syncable_channels(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn fetch_upstream_ratios(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -282,6 +291,7 @@ pub(crate) async fn fetch_upstream_ratios(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_channel_affinity_cache_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -297,6 +307,7 @@ pub(crate) async fn get_channel_affinity_cache_stats(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn clear_channel_affinity_cache(
     State(state): State<AppState>,
     headers: HeaderMap,

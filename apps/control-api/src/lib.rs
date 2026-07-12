@@ -21,12 +21,15 @@ use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+#[cfg(feature = "admin-extras")]
+mod admin_extras;
 mod api_catalog;
 mod api_channel;
 mod api_system;
 mod api_usage;
 mod api_user;
 mod api_web;
+#[cfg(feature = "admin-extras")]
 mod auth_import;
 mod billing;
 mod bootstrap_credentials;
@@ -35,26 +38,34 @@ mod channel_affinity;
 mod channel_feedback;
 mod channel_ops;
 mod channel_probe;
+#[cfg(feature = "admin-extras")]
 mod channel_special;
 mod channel_task;
 mod checkin;
+#[cfg(feature = "admin-extras")]
 mod codex_auth_import;
+#[cfg(feature = "compat-stubs")]
 mod compat;
 mod config;
 mod http_auth;
 mod http_response;
+#[cfg(feature = "admin-extras")]
 mod model_sync;
 mod options_util;
+#[cfg(feature = "admin-extras")]
 mod playground;
 mod prefill;
 mod proxy;
+#[cfg(feature = "admin-extras")]
 mod proxy_probe;
+#[cfg(feature = "admin-extras")]
 mod ratio_sync;
 mod security;
 mod session;
 mod snapshot_publish;
 mod storage;
 mod store_open;
+#[cfg(feature = "admin-extras")]
 mod sub2api_data_import;
 mod system_instance;
 mod system_task;
@@ -156,6 +167,39 @@ impl From<PageQuery> for PageRequest {
     }
 }
 
+/// List channels query, compatible with new-api web `/api/channel`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ChannelListQuery {
+    #[serde(default = "default_page", alias = "p")]
+    page:      usize,
+    #[serde(default = "default_page_size", alias = "size")]
+    page_size: usize,
+    #[serde(default)]
+    group:     String,
+    /// `enabled` / `1`, `disabled` / `0`, empty = all.
+    #[serde(default)]
+    status:    String,
+    #[serde(default, rename = "type")]
+    channel_type: Option<i32>,
+    #[serde(default)]
+    sort_by:   String,
+    #[serde(default)]
+    sort_order: String,
+    #[serde(default)]
+    id_sort:   bool,
+    #[serde(default)]
+    tag_mode:  bool,
+}
+
+impl ChannelListQuery {
+    pub(crate) fn page_request(&self) -> PageRequest {
+        PageRequest {
+            page:      self.page,
+            page_size: self.page_size,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ChannelSearchQuery {
     #[serde(default = "default_page", alias = "p")]
@@ -164,6 +208,23 @@ pub(crate) struct ChannelSearchQuery {
     page_size: usize,
     #[serde(default)]
     keyword:   String,
+    #[serde(default)]
+    group:     String,
+    #[serde(default)]
+    model:     String,
+    /// `enabled` / `1`, `disabled` / `0`, empty = all.
+    #[serde(default)]
+    status:    String,
+    #[serde(default, rename = "type")]
+    channel_type: Option<i32>,
+    #[serde(default)]
+    sort_by:   String,
+    #[serde(default)]
+    sort_order: String,
+    #[serde(default)]
+    id_sort:   bool,
+    #[serde(default)]
+    tag_mode:  bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -361,56 +422,13 @@ impl ControlApi {
             .route("/api/setup", get(api_setup).post(post_setup))
             .route("/api/setup/", get(api_setup).post(post_setup))
             .route("/api/status", get(api_status))
-            .route("/api/pricing", get(api_pricing))
-            .route("/api/rankings", get(api_rankings))
-            .route("/api/perf-metrics", get(api_perf_metrics))
-            .route("/api/perf-metrics/summary", get(api_perf_metrics_summary))
             .route("/api/option", get(get_options).put(update_option))
             .route("/api/option/", get(get_options).put(update_option))
             .route(
                 "/api/option/payment_compliance",
                 post(confirm_payment_compliance),
             )
-            .route(
-                "/api/option/channel_affinity_cache",
-                get(get_channel_affinity_cache_stats).delete(clear_channel_affinity_cache),
-            )
             .route("/api/option/rest_model_ratio", post(reset_model_ratio))
-            .route("/api/ratio_sync/channels", get(get_syncable_channels))
-            .route("/api/ratio_sync/fetch", post(fetch_upstream_ratios))
-            .route(
-                "/api/models",
-                get(api_models)
-                    .post(create_model_meta)
-                    .put(update_model_meta),
-            )
-            .route(
-                "/api/models/",
-                get(list_model_meta)
-                    .post(create_model_meta)
-                    .put(update_model_meta),
-            )
-            .route("/api/models/search", get(search_model_meta))
-            .route("/api/models/missing", get(get_missing_models))
-            .route(
-                "/api/models/sync_upstream/preview",
-                get(sync_upstream_preview),
-            )
-            .route("/api/models/sync_upstream", post(sync_upstream_models))
-            .route(
-                "/api/models/{id}",
-                get(get_model_meta).delete(delete_model_meta),
-            )
-            .route(
-                "/api/vendors",
-                get(list_vendors).post(create_vendor).put(update_vendor),
-            )
-            .route(
-                "/api/vendors/",
-                get(list_vendors).post(create_vendor).put(update_vendor),
-            )
-            .route("/api/vendors/search", get(search_vendors))
-            .route("/api/vendors/{id}", get(get_vendor).delete(delete_vendor))
             .route(
                 "/api/redemption",
                 get(list_redemptions)
@@ -473,10 +491,6 @@ impl ControlApi {
                 "/api/user/self",
                 get(get_self).put(update_self).delete(delete_self),
             )
-            .route(
-                "/api/user/checkin",
-                get(get_checkin_status).post(do_checkin),
-            )
             .route("/api/user/topup/info", get(topup_info))
             .route("/api/user/topup/self", get(list_self_topups))
             .route("/api/user/topup/complete", post(complete_topup))
@@ -528,10 +542,6 @@ impl ControlApi {
             .route("/api/log/stat", get(log_stats))
             .route("/api/log/self/stat", get(self_log_stats))
             .route(
-                "/api/log/channel_affinity_usage_cache",
-                get(get_channel_affinity_usage_cache_stats),
-            )
-            .route(
                 "/api/system-task/log-cleanup",
                 post(create_log_cleanup_system_task),
             )
@@ -554,43 +564,12 @@ impl ControlApi {
             .route("/api/data/flow", get(data_all_flow))
             .route("/api/data/flow/self", get(data_self_flow))
             .route(
-                "/api/proxy",
-                get(list_proxies).post(create_proxy).put(update_proxy),
-            )
-            .route(
-                "/api/proxy/",
-                get(list_proxies).post(create_proxy).put(update_proxy),
-            )
-            .route("/api/proxy/{id}", get(get_proxy).delete(delete_proxy))
-            .route("/api/proxy/{id}/test", post(test_proxy))
-            .route("/api/proxy/{id}/quality-check", post(quality_check_proxy))
-            .route(
                 "/api/channel",
                 get(list_channels).post(create_channel).put(update_channel),
             )
             .route(
                 "/api/channel/",
                 get(list_channels).post(create_channel).put(update_channel),
-            )
-            .route("/api/channel/import/auth", post(import_auth_json))
-            .route("/api/channel/import/auth/", post(import_auth_json))
-            .route(
-                "/api/channel/import/auth/upload",
-                post(import_auth_multipart),
-            )
-            .route(
-                "/api/channel/import/auth/upload/",
-                post(import_auth_multipart),
-            )
-            .route("/api/channel/import/codex-auth", post(import_codex_auth))
-            .route("/api/channel/import/codex-auth/", post(import_codex_auth))
-            .route(
-                "/api/channel/import/sub2api-data",
-                post(import_sub2api_data),
-            )
-            .route(
-                "/api/channel/import/sub2api-data/",
-                post(import_sub2api_data),
             )
             .route("/api/channel/search", get(search_channels))
             .route("/api/channel/models", get(channel_models))
@@ -630,65 +609,22 @@ impl ControlApi {
             .route("/api/channel/batch", post(delete_channel_batch))
             .route("/api/channel/batch/tag", post(batch_set_channel_tag))
             .route("/api/channel/copy/{id}", post(copy_channel))
-            .route("/api/channel/multi_key/manage", post(manage_multi_keys))
-            .route("/api/channel/ollama/pull", post(ollama_pull_model))
-            .route(
-                "/api/channel/ollama/pull/stream",
-                post(ollama_pull_model_stream),
-            )
-            .route(
-                "/api/channel/ollama/delete",
-                axum::routing::delete(ollama_delete_model),
-            )
-            .route("/api/channel/ollama/version/{id}", get(ollama_version))
-            .route(
-                "/api/channel/upstream_updates/apply",
-                post(apply_channel_upstream_model_updates),
-            )
-            .route(
-                "/api/channel/upstream_updates/apply_all",
-                post(apply_all_channel_upstream_model_updates),
-            )
-            .route(
-                "/api/channel/upstream_updates/detect",
-                post(detect_channel_upstream_model_updates),
-            )
-            .route(
-                "/api/channel/upstream_updates/detect_all",
-                post(detect_all_channel_upstream_model_updates),
-            )
-            .route(
-                "/api/channel/{id}/codex/refresh",
-                post(refresh_codex_channel_credential),
-            )
-            .route(
-                "/api/channel/{id}/codex/usage",
-                get(get_codex_channel_usage),
-            )
-            .route(
-                "/api/channel/{id}/codex/usage/reset-credits",
-                get(get_codex_channel_rate_limit_reset_credits),
-            )
-            .route(
-                "/api/channel/{id}/codex/usage/reset",
-                post(reset_codex_channel_usage),
-            )
             .route("/api/channel/{id}", get(get_channel).delete(delete_channel))
             .route("/api/channel/{id}/key", post(reveal_channel_key))
             .route("/api/channel/{id}/status", post(update_channel_status))
-            .route("/api/notice", get(api_empty_string))
-            .route("/api/user-agreement", get(api_empty_string))
-            .route("/api/privacy-policy", get(api_empty_string))
-            .route("/api/about", get(api_empty_string))
-            .route("/api/home_page_content", get(api_empty_string))
             .route("/internal/gateway/snapshot", get(gateway_snapshot))
             .route("/internal/gateway/usage", post(gateway_usage))
             .route(
                 "/internal/gateway/channel-feedback",
                 post(gateway_channel_feedback),
             );
+        #[cfg(feature = "admin-extras")]
+        let router = admin_extras::mount(router);
+        #[cfg(feature = "admin-extras")]
         let router = playground::mount(router);
-        compat::mount(router)
+        #[cfg(feature = "compat-stubs")]
+        let router = compat::mount(router);
+        router
             .fallback(web_fallback)
             .with_state(self.state)
     }

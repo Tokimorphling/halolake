@@ -113,6 +113,11 @@ struct PerformanceLogsQuery {
 
 pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
     router
+        .route("/api/notice", get(api_empty_string))
+        .route("/api/user-agreement", get(api_empty_string))
+        .route("/api/privacy-policy", get(api_empty_string))
+        .route("/api/about", get(api_empty_string))
+        .route("/api/home_page_content", get(api_empty_string))
         .route("/api/uptime/status", get(uptime_status))
         .route("/api/verification", get(send_verification))
         .route("/api/reset_password", get(send_reset_password))

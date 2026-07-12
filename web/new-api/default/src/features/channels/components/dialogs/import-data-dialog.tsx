@@ -16,9 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileJson, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -31,11 +31,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
-import { importAuthJson, importAuthUpload } from '../../api'
+import { getGroups, importAuthJson, importAuthUpload } from '../../api'
 import { channelsQueryKeys } from '../../lib'
 
 type ImportDataDialogProps = {
@@ -85,6 +92,22 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
   const [group, setGroup] = useState('default')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+
+  const { data: groupsData } = useQuery({
+    queryKey: ['groups'],
+    queryFn: getGroups,
+    staleTime: 5 * 60 * 1000,
+    enabled: props.open,
+  })
+
+  const groupOptions = useMemo(() => {
+    const names = new Set<string>(['default'])
+    for (const name of groupsData?.data ?? []) {
+      if (name) names.add(name)
+    }
+    if (group) names.add(group)
+    return Array.from(names)
+  }, [groupsData, group])
 
   const reset = () => {
     setFiles([])
@@ -337,12 +360,29 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
 
           <div className='space-y-2'>
             <Label htmlFor='import-group'>{t('Default group')}</Label>
-            <Input
-              id='import-group'
+            <Select
+              items={groupOptions.map((name) => ({
+                value: name,
+                label: name,
+              }))}
               value={group}
-              onChange={(e) => setGroup(e.target.value)}
-              placeholder='default'
-            />
+              onValueChange={(value) => {
+                if (value) setGroup(value)
+              }}
+            >
+              <SelectTrigger id='import-group' className='w-full'>
+                <SelectValue placeholder={t('Select a group')} />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {groupOptions.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             <p className='text-muted-foreground text-xs'>
               {t(
                 'Applied to new channels. Rebind groups in channel settings if needed.'

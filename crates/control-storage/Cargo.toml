@@ -1,0 +1,16 @@
+[package]
+name = "halolake-control-storage"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+halolake-control-plane = { workspace = true }
+halolake-domain = { workspace = true }
+halolake-router-core = { workspace = true }
+
+serde = { workspace = true }
+service-async = { workspace = true }
+sqlx = { workspace = true }

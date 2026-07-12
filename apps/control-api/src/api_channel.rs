@@ -1,9 +1,8 @@
 //! Channel and proxy management HTTP handlers.
 
 use crate::{
-    AppState, BatchIds, ChannelBatchTagPayload, ChannelSearchQuery, ChannelTagPayload, PageQuery,
-    StatusUpdate,
-    auth_import::{self, AuthImportRequest},
+    AppState, BatchIds, ChannelBatchTagPayload, ChannelListQuery, ChannelSearchQuery,
+    ChannelTagPayload, StatusUpdate,
     channel_ops::{
         ApplyAllChannelUpstreamModelUpdatesRequest, ApplyChannelUpstreamModelUpdatesRequest,
         ChannelOpsService, ChannelTestAllQuery, ChannelTestQuery, CopyChannelQuery,
@@ -11,18 +10,9 @@ use crate::{
         TestChannelRequest, UpdateAllChannelBalancesRequest, UpdateChannelBalanceRequest,
     },
     channel_probe::{ChannelProbeService, FetchModelsRequest},
-    channel_special::{
-        ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
-        MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
-        OllamaPullModelRequest, OllamaVersionRequest,
-    },
     channel_task::{
         ChannelTestTaskPayload, ModelUpdateTaskPayload, SystemTaskProgressState,
         spawn_channel_test_task, spawn_model_update_task,
-    },
-    codex_auth_import::{
-        CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
-        CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
     },
     http_auth::{require_role, require_secure_verification},
     http_response::{
@@ -35,10 +25,23 @@ use crate::{
         UpdateProxyRequest,
     },
     publish_management_snapshot,
-    sub2api_data_import::{self, Sub2apiDataImportRequest},
     system_task::{
         EnqueueSystemTaskRequest, SYSTEM_TASK_TYPE_CHANNEL_TEST, SYSTEM_TASK_TYPE_MODEL_UPDATE,
     },
+};
+#[cfg(feature = "admin-extras")]
+use crate::{
+    auth_import::{self, AuthImportRequest},
+    channel_special::{
+        ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
+        MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
+        OllamaPullModelRequest, OllamaVersionRequest,
+    },
+    codex_auth_import::{
+        CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
+        CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
+    },
+    sub2api_data_import::{self, Sub2apiDataImportRequest},
 };
 use axum::{
     Json,
@@ -60,27 +63,105 @@ use service_async::Service;
 use std::collections::HashMap;
 use tracing::warn;
 
+
+fn normalize_group_filter(group: &str) -> Option<&str> {
+    let group = group.trim();
+    if group.is_empty() || group.eq_ignore_ascii_case("all") || group.eq_ignore_ascii_case("null") {
+        None
+    } else {
+        Some(group)
+    }
+}
+
+fn channel_in_group(channel: &ChannelRecord, group: &str) -> bool {
+    channel.group_list().iter().any(|item| item == group)
+}
+
+fn channel_matches_status(channel: &ChannelRecord, status: Option<i32>) -> bool {
+    match status {
+        Some(status) if status == STATUS_ENABLED => channel.status == STATUS_ENABLED,
+        Some(0) => channel.status != STATUS_ENABLED,
+        Some(status) => channel.status == status,
+        None => true,
+    }
+}
+
+/// new-api type_counts: counts by type under group+status filters (type filter excluded).
+fn type_counts_for_filters(
+    channels: &[ChannelRecord],
+    group: Option<&str>,
+    status: Option<i32>,
+) -> serde_json::Map<String, JsonValue> {
+    let mut counts = serde_json::Map::new();
+    for channel in channels {
+        if let Some(group) = group {
+            if !channel_in_group(channel, group) {
+                continue;
+            }
+        }
+        if !channel_matches_status(channel, status) {
+            continue;
+        }
+        let key = channel.channel_type.to_string();
+        let entry = counts.entry(key).or_insert(json!(0));
+        if let Some(n) = entry.as_i64() {
+            *entry = json!(n + 1);
+        }
+    }
+    counts
+}
+
+/// Parse new-api status filter query: enabled/1, disabled/0, else all.
+fn parse_channel_status_filter(status: &str) -> Option<i32> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "enabled" | "1" => Some(STATUS_ENABLED),
+        "disabled" | "0" => Some(0),
+        _ => None,
+    }
+}
+
+
 pub(crate) async fn list_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<PageQuery>,
+    Query(query): Query<ChannelListQuery>,
 ) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    let group = query.group.clone();
+    let status = parse_channel_status_filter(&query.status);
     match state
         .management
-        .call(ListChannelsRequest { page: query.into() })
+        .call(ListChannelsRequest {
+            page:         query.page_request(),
+            group:        query.group,
+            status,
+            channel_type: query.channel_type,
+            sort_by:      query.sort_by,
+            sort_order:   query.sort_order,
+            id_sort:      query.id_sort,
+            tag_mode:     query.tag_mode,
+        })
         .await
     {
         Ok(page) => {
             let items: Vec<JsonValue> = page.items.iter().map(channel_to_api_json).collect();
+            let type_counts = match state.management.current_data() {
+                Ok(data) => type_counts_for_filters(
+                    &data.channels,
+                    normalize_group_filter(&group),
+                    status,
+                ),
+                Err(_) => channel_type_counts(&items),
+            };
             api_success(json!({
                 "items": items,
                 "total": page.total,
                 "page": page.page,
                 "page_size": page.page_size,
+                "type_counts": type_counts,
             }))
         }
         Err(err) => management_error(err),
@@ -96,6 +177,8 @@ pub(crate) async fn search_channels(
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    let group = query.group.clone();
+    let status = parse_channel_status_filter(&query.status);
     match state
         .management
         .call(SearchChannelsRequest {
@@ -106,16 +189,33 @@ pub(crate) async fn search_channels(
                 },
                 keyword: query.keyword,
             },
+            group:        query.group,
+            model:        query.model,
+            status,
+            channel_type: query.channel_type,
+            sort_by:      query.sort_by,
+            sort_order:   query.sort_order,
+            id_sort:      query.id_sort,
+            tag_mode:     query.tag_mode,
         })
         .await
     {
         Ok(page) => {
             let items: Vec<JsonValue> = page.items.iter().map(channel_to_api_json).collect();
+            let type_counts = match state.management.current_data() {
+                Ok(data) => type_counts_for_filters(
+                    &data.channels,
+                    normalize_group_filter(&group),
+                    status,
+                ),
+                Err(_) => channel_type_counts(&items),
+            };
             api_success(json!({
                 "items": items,
                 "total": page.total,
                 "page": page.page,
                 "page_size": page.page_size,
+                "type_counts": type_counts,
             }))
         }
         Err(err) => management_error(err),
@@ -349,6 +449,23 @@ fn channel_record_from_json(mut value: JsonValue) -> Result<ChannelRecord, Strin
     serde_json::from_value(value).map_err(|err| format!("invalid channel payload: {err}"))
 }
 
+
+fn channel_type_counts(items: &[JsonValue]) -> serde_json::Map<String, JsonValue> {
+    let mut counts = serde_json::Map::new();
+    for item in items {
+        let ty = item
+            .get("type")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let key = ty.to_string();
+        let entry = counts.entry(key).or_insert(json!(0));
+        if let Some(n) = entry.as_i64() {
+            *entry = json!(n + 1);
+        }
+    }
+    counts
+}
+
 /// Enrich channel JSON for new-api web (requires channel_info.multi_key_mode etc.).
 fn channel_to_api_json(channel: &ChannelRecord) -> JsonValue {
     let mut value = serde_json::to_value(channel).unwrap_or_else(|_| json!({}));
@@ -496,6 +613,7 @@ mod create_channel_tests {
 ///
 /// Body: `{ "content": "<file or paste>", "contents": ["..."], "name", "group",
 /// "models", "base_url", "proxy_id", "update_existing": true }`
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn import_codex_auth(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -764,6 +882,7 @@ pub(crate) async fn import_codex_auth(
 /// Unified auth import: CLIProxyAPI auth JSON, Codex session, or sub2api-data.
 ///
 /// JSON body: `{ "format":"auto", "content"|"contents[]", "filenames[]", "group", ... }`
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn import_auth_json(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -799,6 +918,7 @@ pub(crate) async fn import_auth_json(
 /// - `file` / `files` / any file parts: one or more `.json` auth files
 /// - `format` (optional): `auto` | `cliproxy` | `codex-session` | `sub2api-data`
 /// - `group`, `models`, `name`, `update_existing` (optional)
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn import_auth_multipart(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -912,6 +1032,7 @@ pub(crate) async fn import_auth_multipart(
 ///
 /// Body accepts either `{ "data": { ...export... } }` or `{ "content": "<file text>" }`.
 /// Groups are not auto-bound; set `group` to apply a default channel group.
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn import_sub2api_data(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1285,6 +1406,7 @@ pub(crate) async fn fix_channel_abilities(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn detect_channel_upstream_model_updates(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1304,6 +1426,7 @@ pub(crate) async fn detect_channel_upstream_model_updates(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn detect_all_channel_upstream_model_updates(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1344,6 +1467,7 @@ pub(crate) async fn detect_all_channel_upstream_model_updates(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn apply_channel_upstream_model_updates(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1363,6 +1487,7 @@ pub(crate) async fn apply_channel_upstream_model_updates(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn apply_all_channel_upstream_model_updates(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1384,6 +1509,7 @@ pub(crate) async fn apply_all_channel_upstream_model_updates(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn manage_multi_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1403,6 +1529,7 @@ pub(crate) async fn manage_multi_keys(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn ollama_pull_model(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1426,6 +1553,7 @@ pub(crate) async fn ollama_pull_model(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn ollama_pull_model_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1465,6 +1593,7 @@ pub(crate) async fn ollama_pull_model_stream(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn ollama_delete_model(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1487,6 +1616,7 @@ pub(crate) async fn ollama_delete_model(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn ollama_version(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1503,6 +1633,7 @@ pub(crate) async fn ollama_version(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn refresh_codex_channel_credential(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1525,6 +1656,7 @@ pub(crate) async fn refresh_codex_channel_credential(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_codex_channel_usage(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1533,6 +1665,7 @@ pub(crate) async fn get_codex_channel_usage(
     codex_wham_response(&state, &headers, id, CodexWhamKind::Usage).await
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_codex_channel_rate_limit_reset_credits(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1541,6 +1674,7 @@ pub(crate) async fn get_codex_channel_rate_limit_reset_credits(
     codex_wham_response(&state, &headers, id, CodexWhamKind::ResetCredits).await
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn reset_codex_channel_usage(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1549,6 +1683,7 @@ pub(crate) async fn reset_codex_channel_usage(
     codex_wham_response(&state, &headers, id, CodexWhamKind::ConsumeResetCredit).await
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn codex_wham_response(
     state: &AppState,
     headers: &HeaderMap,
@@ -1748,6 +1883,7 @@ pub(crate) fn validate_json_override(label: &str, value: Option<&str>) -> Result
     Ok(())
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn list_proxies(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
@@ -1759,6 +1895,7 @@ pub(crate) async fn list_proxies(State(state): State<AppState>, headers: HeaderM
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn get_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1774,6 +1911,7 @@ pub(crate) async fn get_proxy(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn create_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1794,6 +1932,7 @@ pub(crate) async fn create_proxy(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn update_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1814,6 +1953,7 @@ pub(crate) async fn update_proxy(
     }
 }
 
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn delete_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1835,6 +1975,7 @@ pub(crate) async fn delete_proxy(
 }
 
 /// Sub2API-style connectivity test: exit IP + latency via the proxy.
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn test_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1851,6 +1992,7 @@ pub(crate) async fn test_proxy(
 }
 
 /// Sub2API-style quality check: base connectivity + AI API reachability.
+#[cfg(feature = "admin-extras")]
 pub(crate) async fn quality_check_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -438,14 +438,29 @@ pub struct DeleteTokenRequest {
     pub user_id: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ListChannelsRequest {
-    pub page: PageRequest,
+    pub page:         PageRequest,
+    pub group:        String,
+    pub status:       Option<i32>,
+    pub channel_type: Option<i32>,
+    pub sort_by:      String,
+    pub sort_order:   String,
+    pub id_sort:      bool,
+    pub tag_mode:     bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct SearchChannelsRequest {
-    pub search: SearchRequest,
+    pub search:       SearchRequest,
+    pub group:        String,
+    pub model:        String,
+    pub status:       Option<i32>,
+    pub channel_type: Option<i32>,
+    pub sort_by:      String,
+    pub sort_order:   String,
+    pub id_sort:      bool,
+    pub tag_mode:     bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1277,12 +1292,37 @@ impl Service<ListChannelsRequest> for MemoryManagementStore {
 
     async fn call(&self, req: ListChannelsRequest) -> Result<Self::Response, Self::Error> {
         let data = self.current_data()?;
+        let group = normalize_channel_group_filter(&req.group);
         let mut channels = data
             .channels
             .into_iter()
+            .filter(|channel| {
+                channel_matches_list_filters(
+                    channel,
+                    group.as_deref(),
+                    req.status,
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(channel_type) = req.channel_type {
+            channels.retain(|channel| channel.channel_type == channel_type);
+        }
+        sort_channels(
+            &mut channels,
+            &req.sort_by,
+            &req.sort_order,
+            req.id_sort,
+        );
+        if req.tag_mode {
+            return Ok(page_channels_by_tag(channels, req.page));
+        }
+        let channels = channels
+            .into_iter()
             .map(ChannelRecord::masked)
             .collect::<Vec<_>>();
-        channels.sort_by_key(|channel| std::cmp::Reverse(channel.id));
         Ok(page(channels, req.page))
     }
 }
@@ -1294,20 +1334,38 @@ impl Service<SearchChannelsRequest> for MemoryManagementStore {
     async fn call(&self, req: SearchChannelsRequest) -> Result<Self::Response, Self::Error> {
         let data = self.current_data()?;
         let keyword = req.search.keyword.trim().to_ascii_lowercase();
+        let model = req.model.trim().to_ascii_lowercase();
+        let group = normalize_channel_group_filter(&req.group);
         let mut channels = data
             .channels
             .into_iter()
             .filter(|channel| {
-                keyword.is_empty()
-                    || channel.name.to_ascii_lowercase().contains(keyword.as_str())
-                    || channel
-                        .models
-                        .to_ascii_lowercase()
-                        .contains(keyword.as_str())
+                channel_matches_list_filters(
+                    channel,
+                    group.as_deref(),
+                    req.status,
+                    None,
+                    Some(keyword.as_str()),
+                    Some(model.as_str()),
+                )
             })
+            .collect::<Vec<_>>();
+        if let Some(channel_type) = req.channel_type {
+            channels.retain(|channel| channel.channel_type == channel_type);
+        }
+        sort_channels(
+            &mut channels,
+            &req.sort_by,
+            &req.sort_order,
+            req.id_sort,
+        );
+        if req.tag_mode {
+            return Ok(page_channels_by_tag(channels, req.search.page));
+        }
+        let channels = channels
+            .into_iter()
             .map(ChannelRecord::masked)
             .collect::<Vec<_>>();
-        channels.sort_by_key(|channel| std::cmp::Reverse(channel.id));
         Ok(page(channels, req.search.page))
     }
 }
@@ -1834,6 +1892,157 @@ fn is_bcrypt_hash(value: &str) -> bool {
 fn can_manage_target_role(actor_role: i32, target_role: i32) -> bool {
     // Root may manage anyone (including self). Admins may only manage strictly lower roles.
     actor_role == ROLE_ROOT_USER || actor_role > target_role
+}
+
+
+
+/// Mirrors new-api ChannelSortOptions.
+fn sort_channels(channels: &mut [ChannelRecord], sort_by: &str, sort_order: &str, id_sort: bool) {
+    let sort_by = sort_by.trim().to_ascii_lowercase();
+    let ascending = sort_order.trim().eq_ignore_ascii_case("asc");
+    let column = match sort_by.as_str() {
+        "id" | "name" | "priority" | "balance" | "response_time" | "test_time" => sort_by,
+        _ if id_sort => "id".to_string(),
+        _ => "priority".to_string(),
+    };
+
+    channels.sort_by(|a, b| {
+        let ord = match column.as_str() {
+            "name" => a.name.cmp(&b.name),
+            "priority" => a
+                .priority
+                .unwrap_or(0)
+                .cmp(&b.priority.unwrap_or(0)),
+            "balance" => a
+                .balance
+                .partial_cmp(&b.balance)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            "response_time" => a.response_time.cmp(&b.response_time),
+            "test_time" => a.test_time.cmp(&b.test_time),
+            _ => a.id.cmp(&b.id),
+        };
+        if ascending {
+            ord
+        } else {
+            ord.reverse()
+        }
+    });
+}
+
+/// new-api tag_mode: paginate distinct non-empty tags, return all channels under those tags.
+/// `total` is the number of tags (not channels).
+fn page_channels_by_tag(
+    channels: Vec<ChannelRecord>,
+    page_req: PageRequest,
+) -> PageResult<ChannelRecord> {
+    let mut tags = channels
+        .iter()
+        .filter_map(|channel| {
+            channel
+                .tag
+                .as_deref()
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    tags.sort();
+    tags.dedup();
+    let total = tags.len();
+    let start = page_req.offset();
+    let limit = page_req.limit();
+    let page_tags = tags
+        .into_iter()
+        .skip(start)
+        .take(limit)
+        .collect::<std::collections::BTreeSet<_>>();
+    let items = channels
+        .into_iter()
+        .filter(|channel| {
+            channel
+                .tag
+                .as_deref()
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .is_some_and(|tag| page_tags.contains(tag))
+        })
+        .map(ChannelRecord::masked)
+        .collect::<Vec<_>>();
+    PageResult::new(items, total, page_req)
+}
+
+/// Mirrors new-api `NormalizeChannelGroupFilter`.
+fn normalize_channel_group_filter(group: &str) -> Option<String> {
+    let group = group.trim();
+    if group.is_empty() || group.eq_ignore_ascii_case("all") || group.eq_ignore_ascii_case("null") {
+        None
+    } else {
+        Some(group.to_string())
+    }
+}
+
+/// Mirrors new-api channel group membership: comma-separated list exact-token match.
+fn channel_belongs_to_group(channel: &ChannelRecord, group: &str) -> bool {
+    channel.group_list().iter().any(|item| item == group)
+}
+
+fn channel_matches_status_filter(channel: &ChannelRecord, status: Option<i32>) -> bool {
+    match status {
+        Some(status) if status == STATUS_ENABLED => channel.status == STATUS_ENABLED,
+        // new-api uses 0 for "disabled" filter: any non-enabled status.
+        Some(0) => channel.status != STATUS_ENABLED,
+        Some(status) => channel.status == status,
+        None => true,
+    }
+}
+
+fn channel_matches_list_filters(
+    channel: &ChannelRecord,
+    group: Option<&str>,
+    status: Option<i32>,
+    channel_type: Option<i32>,
+    keyword: Option<&str>,
+    model: Option<&str>,
+) -> bool {
+    if let Some(group) = group {
+        if !channel_belongs_to_group(channel, group) {
+            return false;
+        }
+    }
+    if !channel_matches_status_filter(channel, status) {
+        return false;
+    }
+    if let Some(channel_type) = channel_type {
+        if channel.channel_type != channel_type {
+            return false;
+        }
+    }
+    if let Some(keyword) = keyword {
+        let keyword = keyword.trim();
+        if !keyword.is_empty() {
+            // Mirrors new-api SearchChannels:
+            // id exact OR name LIKE OR key exact OR base_url LIKE, AND models LIKE (separate).
+            let name_ok = channel.name.to_ascii_lowercase().contains(keyword);
+            let id_ok = channel.id.to_string() == keyword;
+            let key_ok = channel.key == keyword;
+            let base_ok = channel
+                .base_url
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains(keyword);
+            if !(name_ok || id_ok || key_ok || base_ok) {
+                return false;
+            }
+        }
+    }
+    if let Some(model) = model {
+        let model = model.trim();
+        if !model.is_empty() && !channel.models.to_ascii_lowercase().contains(model) {
+            return false;
+        }
+    }
+    true
 }
 
 fn page<T>(items: Vec<T>, page: PageRequest) -> PageResult<T> {
@@ -2860,4 +3069,107 @@ mod tests {
             assert!(user.access_token.is_none());
         });
     }
+
+    fn sample_channel(id: u64, name: &str, group: &str) -> ChannelRecord {
+        ChannelRecord {
+            id,
+            snapshot_id: None,
+            channel_type: CHANNEL_TYPE_OPENAI,
+            key: format!("key-{id}"),
+            status: STATUS_ENABLED,
+            name: name.to_string(),
+            weight: Some(1),
+            created_time: 0,
+            test_time: 0,
+            response_time: 0,
+            base_url: Some("https://example.com".to_string()),
+            balance: 0.0,
+            balance_updated_time: 0,
+            models: "gpt-4".to_string(),
+            group: group.to_string(),
+            used_quota: 0,
+            model_mapping: None,
+            priority: Some(0),
+            auto_ban: Some(1),
+            tag: None,
+            setting: None,
+            param_override: None,
+            header_override: None,
+            remark: None,
+            proxy_id: None,
+        }
+    }
+
+    #[test]
+    fn filters_channels_by_group_exact_token() {
+        block_on(async {
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    sample_channel(1, "only-default", "default"),
+                    sample_channel(2, "only-ttt", "ttt"),
+                    sample_channel(3, "both", "ttt,default"),
+                ],
+                Vec::new(),
+            ));
+
+            let page = store
+                .call(ListChannelsRequest {
+                    page: PageRequest {
+                        page: 1,
+                        page_size: 50,
+                    },
+                    group: "ttt".to_string(),
+                    status: None,
+                    channel_type: None,
+                    sort_by: String::new(),
+                    sort_order: String::new(),
+                    id_sort: false,
+                    tag_mode: false,
+                })
+                .await
+                .expect("list channels");
+            let ids: Vec<u64> = page.items.iter().map(|c| c.id).collect();
+            assert!(ids.contains(&2), "ttt-only should match: {ids:?}");
+            assert!(ids.contains(&3), "multi-group should match: {ids:?}");
+            assert!(!ids.contains(&1), "default-only must be filtered out: {ids:?}");
+            assert_eq!(page.total, 2);
+        });
+    }
+
+    #[test]
+    fn empty_group_filter_returns_all_channels() {
+        block_on(async {
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    sample_channel(1, "only-default", "default"),
+                    sample_channel(2, "only-ttt", "ttt"),
+                ],
+                Vec::new(),
+            ));
+            let page = store
+                .call(ListChannelsRequest {
+                    page: PageRequest {
+                        page: 1,
+                        page_size: 50,
+                    },
+                    group: String::new(),
+                    status: None,
+                    channel_type: None,
+                    sort_by: String::new(),
+                    sort_order: String::new(),
+                    id_sort: false,
+                    tag_mode: false,
+                })
+                .await
+                .expect("list channels");
+            assert_eq!(page.total, 2);
+        });
+    }
+
 }

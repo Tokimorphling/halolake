@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 halolake-api-contract = { workspace = true }
 halolake-control-plane = { workspace = true }
+halolake-control-storage = { workspace = true }
 halolake-domain = { workspace = true }
 halolake-router-core = { workspace = true }
 halolake-telemetry = { workspace = true }
@@ -35,3 +36,16 @@ toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 webauthn-rs = { workspace = true }
+
+# Module surface partitioning (see docs/CONTROL_API_MODULES_CN.md).
+# Default keeps full new-api frontend compatibility (including stubs).
+[features]
+default = ["core", "admin-extras", "compat-stubs"]
+# Always-on product core: auth, users/tokens/channels, options, logs, gateway internal.
+core = []
+# Optional admin tooling beyond the proxy management core.
+admin-extras = []
+# Routes that only exist so the copied new-api web does not 404
+# (payment / OAuth / subscription / deployment / empty content pages).
+compat-stubs = []
+

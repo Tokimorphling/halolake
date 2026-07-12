@@ -4,6 +4,7 @@ members = [
     "apps/gateway-monoio",
     "crates/api-contract",
     "crates/control-plane",
+    "crates/control-storage",
     "crates/domain",
     "crates/protocol",
     "crates/router-core",
@@ -20,6 +21,7 @@ repository = "https://github.com/halolake/halolake"
 [workspace.dependencies]
 halolake-api-contract = { path = "crates/api-contract" }
 halolake-control-plane = { path = "crates/control-plane" }
+halolake-control-storage = { path = "crates/control-storage" }
 halolake-domain = { path = "crates/domain" }
 halolake-protocol = { path = "crates/protocol" }
 halolake-router-core = { path = "crates/router-core" }
