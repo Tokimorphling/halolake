@@ -1421,13 +1421,56 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
                 .find(|channel| channel.id == req.channel.id)
                 .ok_or(ManagementError::NotFound)?;
             let mut updated = req.channel;
-            if updated.key.is_empty() {
+            // new-api Save/Update: empty key means "keep existing" (masked list rows).
+            if updated.key.trim().is_empty() {
                 updated.key.clone_from(&channel.key);
+            }
+            // Empty group must not wipe an existing assignment (partial payloads).
+            if updated.group.trim().is_empty() {
+                updated.group.clone_from(&channel.group);
+            }
+            // Merge setting JSON so sparse admin saves do not drop multi_key_* /
+            // import_source / status_reason written by runtime or import.
+            updated.setting =
+                merge_channel_setting_json(channel.setting.as_deref(), updated.setting.as_deref());
+            if updated.proxy_id.is_none() {
+                updated.proxy_id = channel.proxy_id;
             }
             updated.snapshot_id.clone_from(&channel.snapshot_id);
             *channel = updated.clone();
             Ok(updated.masked())
         })
+    }
+}
+
+/// Overlay incoming setting object keys onto existing; preserve keys not sent.
+fn merge_channel_setting_json(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
+    let existing_val = existing
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    let incoming_val = incoming
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+    match (existing_val, incoming_val) {
+        (None, None) => None,
+        (Some(e), None) => serde_json::to_string(&e).ok(),
+        (None, Some(i)) => serde_json::to_string(&i).ok(),
+        (Some(mut e), Some(i)) => {
+            let Some(base) = e.as_object_mut() else {
+                return serde_json::to_string(&i).ok();
+            };
+            if let Some(overlay) = i.as_object() {
+                for (k, v) in overlay {
+                    base.insert(k.clone(), v.clone());
+                }
+            } else {
+                return serde_json::to_string(&i).ok();
+            }
+            serde_json::to_string(&e).ok()
+        }
     }
 }
 
@@ -1458,10 +1501,61 @@ impl Service<ChannelStatusUpdateRequest> for MemoryManagementStore {
                 .iter_mut()
                 .find(|channel| channel.id == req.id)
                 .ok_or(ManagementError::NotFound)?;
-            channel.status = req.status;
+            // Align with new-api `UpdateChannelStatus` / `handlerMultiKeyUpdate`:
+            // enabling clears multi-key disabled maps and status_reason so the
+            // channel is actually routable again (status flag alone is not enough).
+            apply_channel_status_update(channel, req.status, "manual operation");
             Ok(channel.clone().masked())
         })
     }
+}
+
+fn apply_channel_status_update(channel: &mut ChannelRecord, status: i32, reason: &str) {
+    channel.status = status;
+    let mut setting = channel
+        .setting
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !setting.is_object() {
+        setting = serde_json::json!({});
+    }
+    let object = setting.as_object_mut().expect("setting object");
+    if status == STATUS_ENABLED {
+        // Manual enable: clear auto-ban bookkeeping (new-api EnableChannel path).
+        object.remove("status_reason");
+        object.remove("status_time");
+        if let Some(map) = object.get_mut("multi_key_status_list") {
+            if let Some(obj) = map.as_object_mut() {
+                obj.clear();
+            } else {
+                object.insert("multi_key_status_list".into(), serde_json::json!({}));
+            }
+        }
+        if let Some(map) = object.get_mut("multi_key_disabled_reason") {
+            if let Some(obj) = map.as_object_mut() {
+                obj.clear();
+            }
+        }
+        if let Some(map) = object.get_mut("multi_key_disabled_time") {
+            if let Some(obj) = map.as_object_mut() {
+                obj.clear();
+            }
+        }
+    } else {
+        object.insert(
+            "status_reason".into(),
+            serde_json::Value::String(reason.to_string()),
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        object.insert("status_time".into(), serde_json::json!(now));
+    }
+    channel.setting = serde_json::to_string(&setting).ok();
 }
 
 impl Service<DeleteDisabledChannelsRequest> for MemoryManagementStore {

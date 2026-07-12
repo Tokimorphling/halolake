@@ -2,6 +2,8 @@
 
 Halolake can turn **third-party credential dumps** into control-plane channels (and proxy pool entries). This is a first-class feature for operators migrating from **Sub2API** and **CLIProxyAPI**, or pasting **Codex / ChatGPT OAuth** material.
 
+> **Implementers / upstream porting:** see [`AUTH_FILE_PORT_CN.md`](./AUTH_FILE_PORT_CN.md) for CLIProxyAPI & Sub2API field maps, runtime headers, and a checklist when `ref/` updates.
+
 ## What you can import
 
 | Source | Input | Becomes |
@@ -296,6 +298,7 @@ Single file uses JSON API; multi-file or forced CLIProxy mode uses multipart upl
 | Routes | `/api/channel/import/auth`, `/api/channel/import/auth/upload` |
 | UI | `web/new-api/default/src/features/channels/components/dialogs/import-data-dialog.tsx` |
 | References | `ref/sub2api`, `ref/CLIProxyAPI` |
+| Porting guide (CN) | [`AUTH_FILE_PORT_CN.md`](./AUTH_FILE_PORT_CN.md) |
 
 ---
 

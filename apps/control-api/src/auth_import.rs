@@ -13,6 +13,7 @@
 //! - Multipart files: same handler with form fields
 
 use crate::{
+    channel_probe::{ChannelProbeService, FetchModelsRequest},
     codex_auth_import::{
         self, CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage,
         CodexAuthImportRequest, CodexAuthImportResult, CodexOAuthKey, codex_key_to_json,
@@ -446,6 +447,40 @@ fn detect_format(content: &str) -> DetectedFormat {
     DetectedFormat::CodexSession
 }
 
+/// Best-effort `/models` pull after import. Never fails the import; keeps defaults on error.
+/// Only runs when the client did not supply an explicit models list.
+async fn best_effort_fetch_models(management: &ManagementStore, channel_id: u64) -> Option<String> {
+    let probe = ChannelProbeService::new(management.clone());
+    let models = probe
+        .call(FetchModelsRequest {
+            channel_id:   Some(channel_id),
+            base_url:     String::new(),
+            channel_type: 1,
+            key:          String::new(),
+        })
+        .await
+        .ok()?;
+    if models.is_empty() {
+        return None;
+    }
+    let joined = models.join(",");
+    let mut channel = management
+        .current_data()
+        .ok()?
+        .channels
+        .into_iter()
+        .find(|c| c.id == channel_id)?;
+    if channel.models == joined {
+        return Some(joined);
+    }
+    channel.models = joined.clone();
+    management
+        .call(UpdateChannelRequest { channel })
+        .await
+        .ok()?;
+    Some(joined)
+}
+
 async fn import_cliproxy_file(
     management: &ManagementStore,
     content: &str,
@@ -594,6 +629,9 @@ async fn import_cliproxy_file(
                 proxy_id,
             };
             let created = management.call(CreateChannelRequest { channel }).await?;
+            if models.trim().is_empty() {
+                let _ = best_effort_fetch_models(management, created.id).await;
+            }
             aggregate.created = aggregate.created.saturating_add(1);
             aggregate.items.push(CodexAuthImportItem {
                 index:      idx,
@@ -650,6 +688,9 @@ async fn import_cliproxy_file(
                 proxy_id,
             };
             let created = management.call(CreateChannelRequest { channel }).await?;
+            if models.trim().is_empty() {
+                let _ = best_effort_fetch_models(management, created.id).await;
+            }
             aggregate.created = aggregate.created.saturating_add(1);
             Ok(AuthFileResult {
                 name:       file_name.into(),
@@ -695,6 +736,9 @@ async fn import_cliproxy_file(
                 proxy_id,
             };
             let created = management.call(CreateChannelRequest { channel }).await?;
+            if models.trim().is_empty() {
+                let _ = best_effort_fetch_models(management, created.id).await;
+            }
             aggregate.created = aggregate.created.saturating_add(1);
             Ok(AuthFileResult {
                 name:       file_name.into(),
@@ -749,7 +793,8 @@ async fn import_cliproxy_xai(
     } else {
         label.to_string()
     };
-    let models = if models.trim().is_empty() {
+    let models_from_req_empty = models.trim().is_empty();
+    let models = if models_from_req_empty {
         XAI_DEFAULT_MODELS.to_string()
     } else {
         models.to_string()
@@ -859,6 +904,9 @@ async fn import_cliproxy_xai(
         proxy_id,
     };
     let created = management.call(CreateChannelRequest { channel }).await?;
+    if models_from_req_empty {
+        let _ = best_effort_fetch_models(management, created.id).await;
+    }
     aggregate.created = aggregate.created.saturating_add(1);
     aggregate.items.push(CodexAuthImportItem {
         index:      *index,

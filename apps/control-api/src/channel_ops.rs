@@ -410,7 +410,7 @@ impl ChannelOpsService {
         }
         settings.upstream_model_update_last_removed_models = pending_remove;
         settings.upstream_model_update_last_check_time = now_unix();
-        channel.setting = Some(serde_json::to_string(&settings).map_err(storage_err)?);
+        write_channel_settings(&mut channel, &settings)?;
         self.update_channel(channel.clone()).await?;
         Ok(DetectChannelUpstreamModelUpdatesResponse {
             channel_id: channel.id,
@@ -971,7 +971,7 @@ fn apply_channel_upstream_model_updates(
     settings.upstream_model_update_last_detected_models = remaining_models.clone();
     settings.upstream_model_update_last_removed_models = remaining_remove_models.clone();
     settings.upstream_model_update_last_check_time = now_unix();
-    channel.setting = Some(serde_json::to_string(&settings).map_err(storage_err)?);
+    write_channel_settings(channel, &settings)?;
     Ok((
         add_models,
         remove_models,
@@ -1056,6 +1056,16 @@ fn channel_settings(channel: &ChannelRecord) -> ChannelOtherSettings {
         .filter(|setting| !setting.is_empty())
         .and_then(|setting| serde_json::from_str(setting).ok())
         .unwrap_or_default()
+}
+
+/// Serialize settings while preserving unknown keys already stored on the channel
+/// (`#[serde(flatten)] extra` keeps multi_key_*, import_source, proxy, etc.).
+fn write_channel_settings(
+    channel: &mut ChannelRecord,
+    settings: &ChannelOtherSettings,
+) -> Result<(), ManagementError> {
+    channel.setting = Some(serde_json::to_string(settings).map_err(storage_err)?);
+    Ok(())
 }
 
 fn normalize_model_names(models: Vec<String>) -> Vec<String> {

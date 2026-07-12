@@ -488,17 +488,28 @@ export function transformChannelToFormDefaults(
 }
 
 /**
- * Build the setting JSON string from form extra settings
+ * Build the setting JSON string from form extra settings.
+ * Merge onto existing channel.setting so multi_key_*/import_source/status_* are kept.
  */
 function buildSettingJSON(formData: ChannelFormValues): string {
-  const settingObj = {
-    force_format: formData.force_format || false,
-    thinking_to_content: formData.thinking_to_content || false,
-    proxy: formData.proxy || '',
-    pass_through_body_enabled: formData.pass_through_body_enabled || false,
-    system_prompt: formData.system_prompt || '',
-    system_prompt_override: formData.system_prompt_override || false,
+  let settingObj: Record<string, unknown> = {}
+  if (formData.setting && formData.setting.trim()) {
+    try {
+      const parsed = JSON.parse(formData.setting)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        settingObj = parsed as Record<string, unknown>
+      }
+    } catch {
+      // ignore invalid existing setting
+    }
   }
+  settingObj.force_format = formData.force_format || false
+  settingObj.thinking_to_content = formData.thinking_to_content || false
+  settingObj.proxy = formData.proxy || ''
+  settingObj.pass_through_body_enabled =
+    formData.pass_through_body_enabled || false
+  settingObj.system_prompt = formData.system_prompt || ''
+  settingObj.system_prompt_override = formData.system_prompt_override || false
   return JSON.stringify(settingObj)
 }
 
