@@ -1,10 +1,8 @@
 use crate::storage::{ManagementStore, OptionStore};
 use halolake_control_plane::{
     AutoDisableChannelRequest, ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError,
-    ChannelFeedbackEvent, ChannelFeedbackReason,
+    ChannelFeedbackEvent, ChannelFeedbackReason, auto_disable_channel_in_place,
 };
-use halolake_domain::{ChannelRecord, STATUS_AUTO_DISABLED, STATUS_ENABLED};
-use serde_json::{Value as JsonValue, json};
 use service_async::Service;
 use std::collections::BTreeMap;
 use tracing::warn;
@@ -195,62 +193,6 @@ impl DisablePolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableResult {
-    changed:          bool,
-    channel_disabled: bool,
-    key_disabled:     bool,
-}
-
-fn apply_auto_disable(channel: &mut ChannelRecord, event: &ChannelFeedbackEvent) -> DisableResult {
-    let reason = feedback_reason(event);
-    let key_count = channel_key_count(&channel.key);
-    if let Some(key_index) = event.api_key_index
-        && key_index < key_count
-    {
-        let mut state = multi_key_state(channel);
-        let already_disabled = state
-            .status
-            .get(&key_index)
-            .is_some_and(|status| *status == STATUS_AUTO_DISABLED);
-        if !already_disabled {
-            state.status.insert(key_index, STATUS_AUTO_DISABLED);
-            state
-                .disabled_time
-                .insert(key_index, event.created_at_unix_ms / 1000);
-            state.disabled_reason.insert(key_index, reason.clone());
-            save_multi_key_state(channel, &state);
-        }
-
-        let channel_was_disabled = channel.status == STATUS_AUTO_DISABLED;
-        if !has_enabled_multi_key(key_count, &state.status) {
-            channel.status = STATUS_AUTO_DISABLED;
-            save_channel_status_info(channel, "All keys are disabled", event.created_at_unix_ms);
-        }
-        return DisableResult {
-            changed:          !already_disabled
-                || !channel_was_disabled && channel.status == STATUS_AUTO_DISABLED,
-            channel_disabled: !channel_was_disabled && channel.status == STATUS_AUTO_DISABLED,
-            key_disabled:     !already_disabled,
-        };
-    }
-
-    if channel.status == STATUS_AUTO_DISABLED {
-        return DisableResult {
-            changed:          false,
-            channel_disabled: false,
-            key_disabled:     false,
-        };
-    }
-    channel.status = STATUS_AUTO_DISABLED;
-    save_channel_status_info(channel, &reason, event.created_at_unix_ms);
-    DisableResult {
-        changed:          true,
-        channel_disabled: true,
-        key_disabled:     false,
-    }
-}
-
 fn feedback_reason(event: &ChannelFeedbackEvent) -> String {
     let mut reason = match (event.reason, event.status_code) {
         (ChannelFeedbackReason::UpstreamStatus, Some(status)) => {
@@ -264,81 +206,6 @@ fn feedback_reason(event: &ChannelFeedbackEvent) -> String {
         reason.push_str(event.message.trim());
     }
     reason
-}
-
-#[derive(Debug, Clone, Default)]
-struct MultiKeyState {
-    status:          BTreeMap<usize, i32>,
-    disabled_time:   BTreeMap<usize, i64>,
-    disabled_reason: BTreeMap<usize, String>,
-}
-
-fn multi_key_state(channel: &ChannelRecord) -> MultiKeyState {
-    let value = channel_setting_json(channel);
-    MultiKeyState {
-        status:          json_usize_i32_map(value.get("multi_key_status_list")),
-        disabled_time:   json_usize_i64_map(value.get("multi_key_disabled_time")),
-        disabled_reason: json_usize_string_map(value.get("multi_key_disabled_reason")),
-    }
-}
-
-fn save_multi_key_state(channel: &mut ChannelRecord, state: &MultiKeyState) {
-    let mut value = channel_setting_json(channel);
-    let object = value.as_object_mut().expect("setting is object");
-    object.insert(
-        "multi_key_status_list".to_string(),
-        usize_i32_map_json(&state.status),
-    );
-    object.insert(
-        "multi_key_disabled_time".to_string(),
-        usize_i64_map_json(&state.disabled_time),
-    );
-    object.insert(
-        "multi_key_disabled_reason".to_string(),
-        usize_string_map_json(&state.disabled_reason),
-    );
-    channel.setting = serde_json::to_string(&value).ok();
-}
-
-fn save_channel_status_info(channel: &mut ChannelRecord, reason: &str, created_at_unix_ms: i64) {
-    let mut value = channel_setting_json(channel);
-    let object = value.as_object_mut().expect("setting is object");
-    object.insert(
-        "status_reason".to_string(),
-        JsonValue::String(reason.to_string()),
-    );
-    object.insert(
-        "status_time".to_string(),
-        JsonValue::Number((created_at_unix_ms / 1000).into()),
-    );
-    channel.setting = serde_json::to_string(&value).ok();
-}
-
-fn channel_setting_json(channel: &ChannelRecord) -> JsonValue {
-    let mut value = channel
-        .setting
-        .as_deref()
-        .and_then(|setting| serde_json::from_str::<JsonValue>(setting).ok())
-        .unwrap_or_else(|| json!({}));
-    if !value.is_object() {
-        value = json!({});
-    }
-    value
-}
-
-fn has_enabled_multi_key(len: usize, status: &BTreeMap<usize, i32>) -> bool {
-    (0..len).any(|idx| {
-        status
-            .get(&idx)
-            .is_none_or(|status| *status == STATUS_ENABLED)
-    })
-}
-
-fn channel_key_count(key: &str) -> usize {
-    key.lines()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .count()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -426,69 +293,6 @@ fn parse_http_status(token: &str) -> Result<u16, ()> {
     Ok(code)
 }
 
-fn json_usize_i32_map(value: Option<&JsonValue>) -> BTreeMap<usize, i32> {
-    value
-        .and_then(JsonValue::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .filter_map(|(key, value)| {
-            let key = key.parse::<usize>().ok()?;
-            let value = value
-                .as_i64()
-                .or_else(|| value.as_str()?.parse::<i64>().ok())?;
-            Some((key, value as i32))
-        })
-        .collect()
-}
-
-fn json_usize_i64_map(value: Option<&JsonValue>) -> BTreeMap<usize, i64> {
-    value
-        .and_then(JsonValue::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .filter_map(|(key, value)| {
-            let key = key.parse::<usize>().ok()?;
-            let value = value
-                .as_i64()
-                .or_else(|| value.as_str()?.parse::<i64>().ok())?;
-            Some((key, value))
-        })
-        .collect()
-}
-
-fn json_usize_string_map(value: Option<&JsonValue>) -> BTreeMap<usize, String> {
-    value
-        .and_then(JsonValue::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .filter_map(|(key, value)| Some((key.parse::<usize>().ok()?, value.as_str()?.to_string())))
-        .collect()
-}
-
-fn usize_i32_map_json(map: &BTreeMap<usize, i32>) -> JsonValue {
-    json!(
-        map.iter()
-            .map(|(key, value)| (key.to_string(), *value))
-            .collect::<BTreeMap<_, _>>()
-    )
-}
-
-fn usize_i64_map_json(map: &BTreeMap<usize, i64>) -> JsonValue {
-    json!(
-        map.iter()
-            .map(|(key, value)| (key.to_string(), *value))
-            .collect::<BTreeMap<_, _>>()
-    )
-}
-
-fn usize_string_map_json(map: &BTreeMap<usize, String>) -> JsonValue {
-    json!(
-        map.iter()
-            .map(|(key, value)| (key.to_string(), value))
-            .collect::<BTreeMap<_, _>>()
-    )
-}
-
 fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
     options.get(key).map_or(default, |value| {
         matches!(
@@ -505,6 +309,7 @@ fn feedback_storage(err: impl std::fmt::Display) -> ChannelFeedbackError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use halolake_domain::{ChannelRecord, STATUS_AUTO_DISABLED, STATUS_ENABLED};
 
     #[test]
     fn parses_and_merges_status_code_ranges_like_new_api() {
@@ -553,21 +358,24 @@ mod tests {
             remark:               None,
             proxy_id:             None,
         };
-        let result = apply_auto_disable(&mut channel, &ChannelFeedbackEvent {
-            request_id:         "req".to_string(),
-            channel_id:         "openai-main".to_string(),
-            api_key_index:      Some(1),
-            status_code:        Some(401),
-            reason:             ChannelFeedbackReason::UpstreamStatus,
-            message:            "unauthorized".to_string(),
-            created_at_unix_ms: 1_700_000_000_000,
-        });
+        let result = auto_disable_channel_in_place(
+            &mut channel,
+            "upstream status 401: unauthorized",
+            Some(1),
+            1_700_000_000_000,
+        );
         assert!(result.changed);
         assert!(result.key_disabled);
         assert!(result.channel_disabled);
         assert_eq!(channel.status, STATUS_AUTO_DISABLED);
-        let state = multi_key_state(&channel);
-        assert_eq!(state.status.get(&1), Some(&STATUS_AUTO_DISABLED));
+        let setting: serde_json::Value =
+            serde_json::from_str(channel.setting.as_deref().expect("setting")).expect("json");
+        assert_eq!(
+            setting
+                .pointer("/multi_key_status_list/1")
+                .and_then(serde_json::Value::as_i64),
+            Some(STATUS_AUTO_DISABLED as i64)
+        );
     }
 
     #[test]

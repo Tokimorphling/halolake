@@ -52,7 +52,7 @@ use axum::{
 use halolake_control_plane::{
     BatchSetChannelTagRequest, ChannelStatusUpdateRequest, ChannelTagPatch, CreateChannelRequest,
     DeleteChannelRequest, DeleteDisabledChannelsRequest, GetChannelRequest, ListChannelsRequest,
-    RevealChannelKeyRequest, SearchChannelsRequest, UpdateChannelRequest,
+    ManagementError, RevealChannelKeyRequest, SearchChannelsRequest, UpdateChannelRequest,
     UpdateChannelsByTagRequest,
 };
 use halolake_domain::{
@@ -443,6 +443,36 @@ fn channel_record_from_json(mut value: JsonValue) -> Result<ChannelRecord, Strin
     serde_json::from_value(value).map_err(|err| format!("invalid channel payload: {err}"))
 }
 
+/// Apply a new-api update body as a field-level patch over the stored channel.
+///
+/// Several compatible UI actions intentionally send sparse bodies such as
+/// `{ "id": 7, "models": "..." }`. Deserializing those bodies directly as a
+/// `ChannelRecord` fills absent fields with OpenAI/default-group defaults and
+/// turns a model-only update into a destructive full-record replacement.
+fn patch_channel_record(
+    existing: &ChannelRecord,
+    body: JsonValue,
+) -> Result<ChannelRecord, String> {
+    let incoming = body
+        .as_object()
+        .ok_or_else(|| "channel update payload must be an object".to_string())?;
+    let mut merged = serde_json::to_value(existing)
+        .map_err(|err| format!("failed to serialize existing channel: {err}"))?;
+    let target = merged
+        .as_object_mut()
+        .ok_or_else(|| "failed to build channel update payload".to_string())?;
+
+    for (key, value) in incoming {
+        // new-api uses null for empty optional form fields. On update it means
+        // "not supplied"; explicit clears are represented by empty strings.
+        if !value.is_null() {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+
+    channel_record_from_json(merged)
+}
+
 fn channel_type_counts(items: &[JsonValue]) -> serde_json::Map<String, JsonValue> {
     let mut counts = serde_json::Map::new();
     for item in items {
@@ -616,6 +646,45 @@ mod create_channel_tests {
         let setting = channels[0].setting.as_deref().unwrap_or("");
         assert!(setting.contains("is_multi_key"));
         assert!(setting.contains("polling"));
+    }
+
+    #[test]
+    fn sparse_model_update_preserves_xai_channel_configuration() {
+        let existing = channel_record_from_json(json!({
+            "id": 48,
+            "type": 48,
+            "key": "oauth-secret",
+            "status": 3,
+            "name": "xAI OAuth",
+            "models": "grok-4",
+            "group": "xai-private",
+            "base_url": "https://cli-chat-proxy.grok.com",
+            "auto_ban": 0,
+            "setting": r#"{"provider":"xai","auth_kind":"oauth"}"#,
+            "header_override": r#"{"X-XAI-Token-Auth":"xai-grok-cli"}"#
+        }))
+        .expect("existing channel");
+
+        let updated = patch_channel_record(
+            &existing,
+            json!({
+                "id": existing.id,
+                "models": "grok-4,grok-4.5",
+                "group": null,
+                "base_url": null
+            }),
+        )
+        .expect("patch channel");
+
+        assert_eq!(updated.models, "grok-4,grok-4.5");
+        assert_eq!(updated.channel_type, existing.channel_type);
+        assert_eq!(updated.group, existing.group);
+        assert_eq!(updated.key, existing.key);
+        assert_eq!(updated.status, existing.status);
+        assert_eq!(updated.base_url, existing.base_url);
+        assert_eq!(updated.setting, existing.setting);
+        assert_eq!(updated.header_override, existing.header_override);
+        assert_eq!(updated.auto_ban, existing.auto_ban);
     }
 }
 
@@ -1074,27 +1143,27 @@ pub(crate) async fn update_channel(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    // new-api PUT body is a flat channel-like object with extra fields + nulls.
-    // Track which keys the client actually sent so serde defaults do not wipe
-    // status / counters that the admin form never includes.
-    let body_has_status = body
-        .as_object()
-        .is_some_and(|obj| obj.contains_key("status") && !obj["status"].is_null());
-    let mut channel = match channel_record_from_json(body) {
+    // Parse once to validate the payload and extract its id, then apply the raw
+    // JSON as a patch over the stored record. The web UI deliberately uses
+    // sparse updates for models, priority, weight, and test-dialog actions.
+    let requested = match channel_record_from_json(body.clone()) {
         Ok(c) => c,
         Err(msg) => return api_error_status(StatusCode::BAD_REQUEST, &msg),
     };
-    if channel.id == 0 {
+    if requested.id == 0 {
         return api_error_status(StatusCode::BAD_REQUEST, "channel id is required");
     }
-    if !body_has_status {
-        // Frontend update payload omits status; keep existing enable/disable state.
-        if let Ok(data) = state.management.current_data() {
-            if let Some(existing) = data.channels.iter().find(|c| c.id == channel.id) {
-                channel.status = existing.status;
-            }
-        }
-    }
+    let existing = match state.management.current_data() {
+        Ok(data) => match data.channels.into_iter().find(|c| c.id == requested.id) {
+            Some(channel) => channel,
+            None => return management_error(ManagementError::NotFound),
+        },
+        Err(err) => return management_error(err),
+    };
+    let channel = match patch_channel_record(&existing, body) {
+        Ok(channel) => channel,
+        Err(msg) => return api_error_status(StatusCode::BAD_REQUEST, &msg),
+    };
     match state
         .management
         .call(UpdateChannelRequest { channel })

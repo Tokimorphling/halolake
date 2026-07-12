@@ -22,8 +22,8 @@ pub use management::{
     SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageRequest,
     UpdateChannelRequest, UpdateChannelsByTagRequest, UpdateTokenRequest,
     UpdateUserAccessTokenRequest, UpdateUserRequest, UsageEventQuota, UsagePricing,
-    UsageSettlement, ValidateUserAccessTokenRequest, ensure_user_password_hashed,
-    hash_user_password,
+    UsageSettlement, ValidateUserAccessTokenRequest, auto_disable_channel_in_place,
+    ensure_user_password_hashed, hash_user_password,
 };
 pub use memory::{MemorySnapshotBus, MemoryUsageEventSink};
 pub use snapshot::{

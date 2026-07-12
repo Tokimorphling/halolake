@@ -1450,20 +1450,6 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             if updated.group.trim().is_empty() {
                 updated.group.clone_from(&channel.group);
             }
-            // Protect special providers from being rewritten to generic OpenAI (1)
-            // by partial admin saves / "fetch models then save". Explicit changes
-            // to another non-default type are still allowed.
-            if updated.channel_type == CHANNEL_TYPE_OPENAI
-                && matches!(
-                    channel.channel_type,
-                    CHANNEL_TYPE_XAI
-                        | CHANNEL_TYPE_CODEX
-                        | CHANNEL_TYPE_ANTHROPIC
-                        | CHANNEL_TYPE_GEMINI
-                )
-            {
-                updated.channel_type = channel.channel_type;
-            }
             // Merge setting JSON so sparse admin saves do not drop multi_key_* /
             // import_source / status_reason written by runtime or import.
             updated.setting =
@@ -3445,6 +3431,92 @@ mod tests {
             remark: None,
             proxy_id: None,
         }
+    }
+
+    #[test]
+    fn auto_disable_mutates_only_the_requested_channel() {
+        block_on(async {
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    sample_channel(1, "failing-xai", "xai-private"),
+                    sample_channel(2, "healthy-xai", "paid"),
+                ],
+                Vec::new(),
+            ));
+
+            let result = store
+                .call(AutoDisableChannelRequest {
+                    id:                 1,
+                    reason:             "upstream status 401".to_string(),
+                    api_key_index:      None,
+                    created_at_unix_ms: 1_700_000_000_000,
+                })
+                .await
+                .expect("auto-disable should succeed");
+            assert!(result.channel_disabled);
+
+            let data = store.current_data().expect("data should be readable");
+            let failing = data
+                .channels
+                .iter()
+                .find(|channel| channel.id == 1)
+                .unwrap();
+            let healthy = data
+                .channels
+                .iter()
+                .find(|channel| channel.id == 2)
+                .unwrap();
+            assert_eq!(failing.status, STATUS_AUTO_DISABLED);
+            assert_eq!(healthy.status, STATUS_ENABLED);
+            assert_eq!(healthy.group, "paid");
+            assert_eq!(healthy.models, "gpt-4");
+        });
+    }
+
+    #[test]
+    fn manual_enable_clears_auto_disabled_key_state() {
+        block_on(async {
+            let mut channel = sample_channel(1, "multi-key", "default");
+            channel.key = "key-a\nkey-b".to_string();
+            channel.status = STATUS_AUTO_DISABLED;
+            channel.setting = Some(
+                r#"{"multi_key_status_list":{"0":3,"1":3},"multi_key_disabled_reason":{"0":"401","1":"401"},"multi_key_disabled_time":{"0":1700000000,"1":1700000000},"status_reason":"All keys are disabled","status_time":1700000000}"#
+                    .to_string(),
+            );
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![channel],
+                Vec::new(),
+            ));
+
+            store
+                .call(ChannelStatusUpdateRequest {
+                    id:     1,
+                    status: STATUS_ENABLED,
+                })
+                .await
+                .expect("manual enable should succeed");
+
+            let data = store.current_data().expect("data should be readable");
+            let channel = data.channels.first().expect("channel");
+            assert_eq!(channel.status, STATUS_ENABLED);
+            assert_eq!(channel_runtime_api_keys(channel).len(), 2);
+            let setting: serde_json::Value =
+                serde_json::from_str(channel.setting.as_deref().expect("setting")).expect("json");
+            assert!(setting.get("status_reason").is_none());
+            assert_eq!(
+                setting
+                    .get("multi_key_status_list")
+                    .and_then(serde_json::Value::as_object)
+                    .map(serde_json::Map::len),
+                Some(0)
+            );
+        });
     }
 
     #[test]
