@@ -336,8 +336,8 @@ impl ChannelOpsService {
         let (url, body, auth) =
             build_test_http_request(channel, &base_url, &key, model, endpoint, stream);
         let request_body = serde_json::to_vec(&body).map_err(storage_err)?;
-        let mut request = self
-            .client
+        let client = http_client_for_channel(channel)?;
+        let mut request = client
             .post(url)
             .header("content-type", "application/json")
             .body(request_body);
@@ -1266,6 +1266,32 @@ fn channel_base_url(channel: &ChannelRecord) -> String {
         .unwrap_or_else(|| default_channel_base_url(channel.channel_type))
         .trim_end_matches('/')
         .to_string()
+}
+
+/// Build an HTTP client that honors channel `setting.proxy` (same URL the gateway uses).
+fn http_client_for_channel(channel: &ChannelRecord) -> Result<reqwest::Client, ManagementError> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(15));
+    if let Some(proxy_url) = channel_setting_proxy_url(channel) {
+        let proxy = reqwest::Proxy::all(&proxy_url)
+            .map_err(|err| ManagementError::Storage(format!("invalid channel proxy URL: {err}")))?;
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(storage_err)
+}
+
+fn channel_setting_proxy_url(channel: &ChannelRecord) -> Option<String> {
+    let raw = channel.setting.as_deref()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let v: JsonValue = serde_json::from_str(raw).ok()?;
+    v.get("proxy")?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn default_channel_base_url(channel_type: i32) -> &'static str {
