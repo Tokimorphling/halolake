@@ -8,6 +8,7 @@ const CHANNEL_TYPE_OLLAMA: i32 = 4;
 const CHANNEL_TYPE_ALI: i32 = 17;
 const CHANNEL_TYPE_OPENROUTER: i32 = 20;
 const CHANNEL_TYPE_ZHIPU_V4: i32 = 26;
+const CHANNEL_TYPE_XAI: i32 = 48;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct FetchModelsRequest {
@@ -22,6 +23,9 @@ pub(crate) struct FetchModelsRequest {
     /// Channel-level header overrides (e.g. xAI chat-proxy CLI identity).
     #[serde(default)]
     pub(crate) header_override: Option<String>,
+    /// Channel setting JSON (import_source / using_api for static model lists).
+    #[serde(default)]
+    pub(crate) setting:         Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +62,7 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
                 channel_type:    channel.channel_type,
                 key:             channel.key.clone(),
                 header_override: channel.header_override.clone(),
+                setting:         channel.setting.clone(),
             }
         } else {
             req
@@ -66,6 +71,18 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
         let base_url = resolve_base_url(request.channel_type, &request.base_url)?;
         let key = first_key(&request.key);
         let headers = parse_header_override_map(request.header_override.as_deref());
+        // Align with CLIProxyAPI: xAI OAuth / chat-proxy does not discover models via
+        // upstream GET /v1/models — use the static Grok catalog instead.
+        if request.channel_type == CHANNEL_TYPE_XAI
+            && should_use_static_xai_models(&request.base_url, request.setting.as_deref())
+        {
+            return Ok(normalize_model_names(
+                xai_static_models()
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+            ));
+        }
         let models = match request.channel_type {
             CHANNEL_TYPE_OLLAMA => self.fetch_ollama_models(&base_url, &key, &headers).await,
             CHANNEL_TYPE_GEMINI => self.fetch_gemini_models(&base_url, &key, &headers).await,
@@ -234,6 +251,63 @@ fn normalize_model_names(models: Vec<String>) -> Vec<String> {
     models.sort();
     models.dedup();
     models
+}
+
+/// CLIProxy `GetXAIModels` catalog (+ common aliases). Not discovered from chat-proxy.
+fn xai_static_models() -> &'static [&'static str] {
+    &[
+        "grok-build-0.1",
+        "grok-4.5",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-multi-agent-0309",
+        "grok-4",
+        "grok-4-latest",
+        "grok-3",
+        "grok-3-mini",
+        "grok-3-mini-fast",
+        "grok-2",
+        "grok-2-latest",
+        "grok-composer-2.5-fast",
+        "grok-imagine-image",
+        "grok-imagine-image-quality",
+        "grok-imagine-video",
+        "grok-imagine-video-1.5-preview",
+    ]
+}
+
+fn should_use_static_xai_models(base_url: &str, setting: Option<&str>) -> bool {
+    let base = base_url.trim().to_ascii_lowercase();
+    if base.contains("cli-chat-proxy.grok.com") {
+        return true;
+    }
+    if let Some(raw) = setting.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            if value.get("using_api").and_then(|v| v.as_bool()) == Some(true) {
+                return false;
+            }
+            let auth_kind = value
+                .get("auth_kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if auth_kind == "oauth" {
+                return true;
+            }
+            if value.get("import_source").and_then(|v| v.as_str()) == Some("cliproxyapi")
+                && value.get("using_api").and_then(|v| v.as_bool()) != Some(true)
+            {
+                return true;
+            }
+            // API key path on official host → allow remote discovery.
+            if base.contains("api.x.ai") {
+                return false;
+            }
+        }
+    }
+    // type=48 without using_api / without api.x.ai → static catalog
+    !base.contains("api.x.ai")
 }
 
 fn parse_header_override_map(raw: Option<&str>) -> Vec<(String, String)> {

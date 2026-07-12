@@ -1239,6 +1239,7 @@ pub(crate) async fn fetch_models_for_channel(
             channel_type:    1,
             key:             String::new(),
             header_override: None,
+            setting:         None,
         })
         .await
     {

@@ -394,6 +394,7 @@ impl ChannelOpsService {
                 channel_type:    CHANNEL_TYPE_OPENAI,
                 key:             String::new(),
                 header_override: None,
+                setting:         None,
             })
             .await?;
         let (pending_add, pending_remove) = collect_pending_upstream_model_changes(

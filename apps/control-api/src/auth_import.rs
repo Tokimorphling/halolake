@@ -35,7 +35,10 @@ const CHANNEL_TYPE_GEMINI: i32 = 24;
 const CHANNEL_TYPE_XAI: i32 = 48;
 const XAI_DEFAULT_API_BASE: &str = "https://api.x.ai";
 const XAI_DEFAULT_CLI_CHAT_BASE: &str = "https://cli-chat-proxy.grok.com";
-const XAI_DEFAULT_MODELS: &str = "grok-4,grok-4-latest,grok-3,grok-3-mini,grok-2,grok-2-latest";
+const XAI_DEFAULT_MODELS: &str = "grok-build-0.1,grok-4.5,grok-4.3,grok-4.20-0309-reasoning,\
+                                  grok-4.20-0309-non-reasoning,grok-4.20-multi-agent-0309,grok-4,\
+                                  grok-4-latest,grok-3,grok-3-mini,grok-3-mini-fast,grok-2,\
+                                  grok-2-latest,grok-composer-2.5-fast";
 /// Keep in sync with CLIProxyAPI `xaiClientVersionValue` / chat-proxy identity headers.
 const XAI_TOKEN_AUTH_HEADER: &str = "X-XAI-Token-Auth";
 const XAI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
@@ -458,6 +461,7 @@ async fn best_effort_fetch_models(management: &ManagementStore, channel_id: u64)
             channel_type:    1,
             key:             String::new(),
             header_override: None,
+            setting:         None,
         })
         .await
         .ok()?;

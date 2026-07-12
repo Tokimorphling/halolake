@@ -55,6 +55,15 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
             if !result.changed {
                 continue;
             }
+            warn!(
+                channel_id = channel.id,
+                channel_name = %channel.name,
+                group = %channel.group,
+                feedback_id = %event.channel_id,
+                status_code = ?event.status_code,
+                reason = %event.message,
+                "auto-disabling channel from gateway feedback"
+            );
             self.management
                 .call(UpdateChannelRequest { channel })
                 .await
@@ -136,6 +145,14 @@ impl DisablePolicy {
     /// TLS) alone do **not** disable a channel — that was over-aggressive and
     /// caused healthy channels to flip to status=3 after flaky network blips.
     fn should_disable(&self, event: &ChannelFeedbackEvent) -> bool {
+        // Config / client-identity errors must not auto-ban channels (or unrelated ones).
+        let lower_msg = event.message.to_ascii_lowercase();
+        if lower_msg.contains("grok cli version")
+            || lower_msg.contains("not from a valid issuer")
+            || lower_msg.contains("x-grok-client-version")
+        {
+            return false;
+        }
         if let Some(status_code) = event.status_code
             && self
                 .status_ranges
@@ -147,10 +164,10 @@ impl DisablePolicy {
         if self.keywords.is_empty() || event.message.is_empty() {
             return false;
         }
-        let lower = event.message.to_ascii_lowercase();
-        self.keywords
-            .iter()
-            .any(|keyword| lower.contains(keyword.as_str()))
+        self.keywords.iter().any(|keyword| {
+            // Ignore very short keywords that match too many error bodies.
+            keyword.len() >= 4 && lower_msg.contains(keyword.as_str())
+        })
     }
 }
 
@@ -565,5 +582,19 @@ mod tests {
             ..transport
         };
         assert!(policy.should_disable(&keyword));
+
+        let grok_cli = ChannelFeedbackEvent {
+            request_id:         "req".into(),
+            channel_id:         "1".into(),
+            api_key_index:      None,
+            status_code:        Some(400),
+            reason:             ChannelFeedbackReason::UpstreamStatus,
+            message:            "Your Grok CLI version (none) is outdated".into(),
+            created_at_unix_ms: 0,
+        };
+        assert!(
+            !policy.should_disable(&grok_cli),
+            "xAI client identity errors must not auto-ban"
+        );
     }
 }
