@@ -76,7 +76,7 @@ import {
   transformFormDataToPayload,
   transformApiKeyToFormDefaults,
 } from '../lib'
-import { type ApiKey } from '../types'
+import type { ApiKey } from '../types'
 import {
   ApiKeyGroupCombobox,
   type ApiKeyGroupOption,
@@ -139,17 +139,29 @@ export function ApiKeysMutateDrawer({
   // Load existing data when updating
   useEffect(() => {
     if (open && isUpdate && currentRow) {
-      getApiKey(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformApiKeyToFormDefaults(result.data))
-        }
-      })
+      void getApiKey(currentRow.id)
+        .then((result) => {
+          if (result.success && result.data) {
+            form.reset(transformApiKeyToFormDefaults(result.data))
+          }
+        })
+        .catch(() => {
+          toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+        })
     } else if (open && !isUpdate) {
       form.reset(
         getApiKeyFormDefaultValues(defaultUseAutoGroup && backendHasAuto)
       )
     }
-  }, [open, isUpdate, currentRow, form, defaultUseAutoGroup, backendHasAuto])
+  }, [
+    open,
+    isUpdate,
+    currentRow,
+    form,
+    defaultUseAutoGroup,
+    backendHasAuto,
+    t,
+  ])
 
   // Correct group after groups load: if the form value is not in available groups, fall back
   useEffect(() => {
@@ -215,7 +227,7 @@ export function ApiKeysMutateDrawer({
           triggerRefresh()
         }
       }
-    } catch (_error) {
+    } catch {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsSubmitting(false)
@@ -266,10 +278,10 @@ export function ApiKeysMutateDrawer({
         )}
       >
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle className='tracking-tight'>
+          <SheetTitle className='text-title tracking-[var(--tracking-title)]'>
             {isUpdate ? t('Update API Key') : t('Create API Key')}
           </SheetTitle>
-          <SheetDescription>
+          <SheetDescription className='mt-1.5 text-xs leading-relaxed sm:text-sm'>
             {isUpdate
               ? t('Update the API key by providing necessary info.')
               : t('Add a new API key by providing necessary info.')}
@@ -279,7 +291,7 @@ export function ApiKeysMutateDrawer({
           <form
             id='api-key-form'
             onSubmit={form.handleSubmit(onSubmit, onInvalid)}
-            className={sideDrawerFormClassName('gap-5')}
+            className={sideDrawerFormClassName()}
           >
             <SideDrawerSection>
               <SideDrawerSectionHeader

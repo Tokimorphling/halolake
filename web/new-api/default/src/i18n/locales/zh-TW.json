@@ -905,6 +905,7 @@
     "Common": "通用",
     "Common Keys": "常用 Key",
     "Common Logs": "通用日誌",
+    "Inspect request history, usage, and failure details": "查看請求歷史、用量與失敗詳情",
     "Common pitfall: the user group base ratio is NOT a personal discount. It only applies when the user group itself is the billing group.": "常見誤區：用戶分組的基礎倍率不是個人折扣，只有當用戶分組本身就是收費分組時才會生效。",
     "Common ports include 25, 465, and 587": "常用端口包括 25、465 和 587",
     "Common User": "普通用戶",

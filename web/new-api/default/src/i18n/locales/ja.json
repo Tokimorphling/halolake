@@ -905,6 +905,7 @@
     "Common": "共通",
     "Common Keys": "よく使うキー",
     "Common Logs": "一般的なログ",
+    "Inspect request history, usage, and failure details": "Inspect request history, usage, and failure details",
     "Common pitfall: the user group base ratio is NOT a personal discount. It only applies when the user group itself is the billing group.": "よくある誤解：ユーザーグループの基本倍率は個人割引ではありません。ユーザーグループ自体が課金グループになる場合にのみ適用されます。",
     "Common ports include 25, 465, and 587": "一般的なポートには 25, 465, 587 が含まれます",
     "Common User": "一般ユーザー",

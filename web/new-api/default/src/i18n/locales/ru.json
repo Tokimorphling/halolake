@@ -905,6 +905,7 @@
     "Common": "Общие",
     "Common Keys": "Часто используемые ключи",
     "Common Logs": "Общие журналы",
+    "Inspect request history, usage, and failure details": "Inspect request history, usage, and failure details",
     "Common pitfall: the user group base ratio is NOT a personal discount. It only applies when the user group itself is the billing group.": "Частая ошибка: базовый коэффициент группы пользователя — НЕ персональная скидка. Он применяется, только когда эта группа сама является тарифной.",
     "Common ports include 25, 465, and 587": "Распространенные порты включают 25, 465 и 587",
     "Common User": "Обычный пользователь",

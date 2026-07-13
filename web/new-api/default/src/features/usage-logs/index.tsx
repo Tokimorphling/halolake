@@ -114,15 +114,26 @@ function UsageLogsContent() {
     <>
       <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>
-          {t(pageMeta.titleKey)}
+          <span className='block min-w-0'>
+            <span className='text-title block truncate tracking-[var(--tracking-title)]'>
+              {t(pageMeta.titleKey)}
+            </span>
+            <span className='text-muted-foreground mt-1 block truncate text-xs font-normal tracking-normal sm:text-sm'>
+              {t('Inspect request history, usage, and failure details')}
+            </span>
+          </span>
         </SectionPageLayout.Title>
         <SectionPageLayout.Content>
-          <div className='flex h-full min-h-0 flex-col gap-4'>
+          <div className='flex h-full min-h-0 flex-col gap-3.5 sm:gap-4'>
             {showTaskSwitcher && (
               <Tabs value={activeCategory} onValueChange={handleSectionChange}>
-                <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
+                <TabsList className='bg-card/70 ring-foreground/6 max-w-full flex-wrap justify-start rounded-xl p-1 shadow-[0_1px_0_0_var(--hairline)] ring-1 group-data-horizontal/tabs:h-auto'>
                   {visibleSections.map((section) => (
-                    <TabsTrigger key={section} value={section}>
+                    <TabsTrigger
+                      key={section}
+                      value={section}
+                      className='rounded-lg'
+                    >
                       {t(SECTION_META[section].titleKey)}
                     </TabsTrigger>
                   ))}

@@ -126,7 +126,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
       )}
       <ChevronDown
         className={cn(
-          'size-3.5 transition-transform duration-200',
+          'size-3.5 transition-transform duration-[var(--duration-panel)] ease-[var(--ease-out)]',
           advancedOpen && 'rotate-180'
         )}
       />
@@ -137,7 +137,10 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
     return (
       <Drawer open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
         <div
-          className={cn('bg-card/50 rounded-lg border p-2.5', props.className)}
+          className={cn(
+            'bg-card/70 ring-foreground/6 rounded-2xl p-3 shadow-[0_1px_0_0_var(--hairline)] ring-1',
+            props.className
+          )}
         >
           <div className='grid gap-2'>{props.mobilePinnedFilters}</div>
 
@@ -178,9 +181,11 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
 
         <DrawerContent className='max-h-[85dvh] p-0'>
           <div className='mx-auto flex w-full max-w-md flex-1 flex-col overflow-hidden'>
-            <DrawerHeader className='border-border/70 border-b px-4 py-3 text-left'>
-              <DrawerTitle>{t('Filter')}</DrawerTitle>
-              <DrawerDescription>
+            <DrawerHeader className='app-material-chrome border-b border-[color:var(--material-chrome-border)] px-4 py-3 text-left'>
+              <DrawerTitle className='text-title tracking-[var(--tracking-title)]'>
+                {t('Filter')}
+              </DrawerTitle>
+              <DrawerDescription className='text-xs leading-relaxed'>
                 {t('Adjust filters, then search to refresh the logs.')}
               </DrawerDescription>
             </DrawerHeader>
@@ -192,7 +197,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
                 </>
               )}
             </div>
-            <DrawerFooter className='border-border/70 grid grid-cols-2 gap-2 border-t px-4 py-3'>
+            <DrawerFooter className='app-material-chrome grid grid-cols-2 gap-2 border-t border-[color:var(--material-chrome-border)] px-4 py-3'>
               <Button
                 type='button'
                 variant='outline'
@@ -219,7 +224,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
   return (
     <div
       className={cn(
-        'bg-card/50 rounded-lg border p-2.5 sm:p-3',
+        'bg-card/70 ring-foreground/6 rounded-2xl p-3 shadow-[0_1px_0_0_var(--hairline)] ring-1 sm:p-3.5',
         props.className
       )}
     >

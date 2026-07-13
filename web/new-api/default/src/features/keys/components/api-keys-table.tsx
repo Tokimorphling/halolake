@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { type Table as TanstackTable } from '@tanstack/react-table'
+import type { Table as TanstackTable } from '@tanstack/react-table'
 import { Database } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -51,7 +51,7 @@ import {
   API_KEY_STATUSES,
   ERROR_MESSAGES,
 } from '../constants'
-import { type ApiKey } from '../types'
+import type { ApiKey } from '../types'
 import { ApiKeyCell } from './api-keys-cells'
 import { useApiKeysColumns } from './api-keys-columns'
 import { useApiKeys } from './api-keys-provider'
@@ -68,8 +68,8 @@ function isDisabledApiKeyRow(apiKey: ApiKey) {
 function ApiKeysMobileSkeleton() {
   return (
     <div className='bg-card/40 ring-foreground/6 divide-[color:var(--hairline)] overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 divide-y dark:shadow-[0_1px_0_0_var(--hairline)]'>
-      {Array.from({ length: 5 }).map((_, index) => (
-        <div key={index} className='space-y-2 px-3.5 py-3'>
+      {['sk-a', 'sk-b', 'sk-c', 'sk-d', 'sk-e'].map((skeletonKey) => (
+        <div key={skeletonKey} className='space-y-2 px-3.5 py-3'>
           <div className='flex items-center justify-between'>
             <Skeleton className='h-4 w-32' />
             <Skeleton className='h-5 w-16 rounded-full' />
@@ -126,16 +126,16 @@ function ApiKeysMobileList({
           <div
             key={row.id}
             className={cn(
-              'bg-card/60 space-y-2.5 px-3.5 py-3',
+              'bg-card/60 space-y-2.5 px-3.5 py-3 transition-[background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-card/80',
               isDisabledApiKeyRow(apiKey) && DISABLED_ROW_MOBILE
             )}
           >
             <div className='flex items-start justify-between gap-3'>
               <div className='min-w-0'>
-                <div className='truncate text-sm font-semibold'>
+                <div className='truncate text-sm font-semibold tracking-tight'>
                   {apiKey.name}
                 </div>
-                <div className='text-muted-foreground text-[11px]'>
+                <div className='text-muted-foreground text-[11px] tracking-[var(--tracking-caption)]'>
                   {t('API Key')}
                 </div>
               </div>

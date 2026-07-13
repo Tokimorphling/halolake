@@ -57,11 +57,11 @@ interface UsageLogsMobileListProps<TData> {
 
 function UsageLogsMobileSkeleton() {
   return (
-    <div className='border-border/50 bg-card overflow-hidden rounded-lg border'>
+    <div className='bg-card/70 ring-foreground/6 overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline)] ring-1'>
       {[1, 2, 3].map((i) => (
         <div
           key={i}
-          className='border-border/40 space-y-2.5 border-b p-3 last:border-b-0'
+          className='divide-[color:var(--hairline)] space-y-2.5 border-b border-[color:var(--hairline)] p-3.5 last:border-b-0'
         >
           <div className='flex items-center justify-between gap-3'>
             <Skeleton className='h-5 w-40 rounded-md' />
@@ -127,7 +127,10 @@ function SummaryField<TData>({
 
   return (
     <div
-      className={cn('bg-muted/20 min-w-0 rounded-md px-2 py-1.5', className)}
+      className={cn(
+        'bg-muted/25 ring-foreground/5 min-w-0 rounded-lg px-2 py-1.5 ring-1',
+        className
+      )}
     >
       <div className='text-muted-foreground mb-1 text-[11px] leading-none font-medium select-none'>
         {label}
@@ -339,7 +342,7 @@ export function UsageLogsMobileList<TData>({
 
   if (!rows || rows.length === 0) {
     return (
-      <div className='rounded-lg border p-6'>
+      <div className='bg-card/70 ring-foreground/6 rounded-2xl p-6 shadow-[0_1px_0_0_var(--hairline)] ring-1'>
         <Empty className='border-none p-0'>
           <EmptyHeader>
             <EmptyMedia variant='icon'>
@@ -354,7 +357,7 @@ export function UsageLogsMobileList<TData>({
   }
 
   return (
-    <div className='border-border/50 bg-card overflow-hidden rounded-lg border'>
+    <div className='bg-card/70 ring-foreground/6 overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline)] ring-1'>
       {rows.map((row) => {
         const cells = new Map(
           row.getVisibleCells().map((cell) => [cell.column.id, cell])
@@ -369,7 +372,7 @@ export function UsageLogsMobileList<TData>({
           <div
             key={row.id}
             className={cn(
-              'border-border/40 border-b border-l-2 border-l-transparent p-3 transition-colors last:border-b-0',
+              'border-b border-l-2 border-l-transparent border-[color:var(--hairline)] p-3.5 transition-[background-color,border-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] last:border-b-0 hover:bg-card/90',
               tintClass
             )}
           >
