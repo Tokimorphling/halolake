@@ -320,24 +320,23 @@ where
                 }
             }
             Provider::OpenAi => {
-                let body =
-                    match rewrite_openai_chat_model_body(&req.raw_body, &route.upstream_model) {
-                        Ok(body) => body,
-                        Err(err) => {
-                            return Ok(json_error(
-                                StatusCode::BAD_REQUEST,
-                                "invalid_request_error",
-                                &format!("failed to rewrite OpenAI chat request: {err}"),
-                            ));
-                        }
-                    };
-                self.openai_passthrough(
-                    route,
+                let (upstream_path, body) = match prepare_openai_text_upstream(
                     "/v1/chat/completions",
-                    body,
-                    &req.downstream_headers,
-                )
-                .await
+                    &req.raw_body,
+                    &route.upstream_model,
+                    &route.upstream_endpoint_type,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to prepare OpenAI upstream request: {err}"),
+                        ));
+                    }
+                };
+                self.openai_passthrough(route, &upstream_path, body, &req.downstream_headers)
+                    .await
             }
             Provider::Gemini => {
                 let gemini_req = match openai_chat_to_gemini_request(&req.request) {
@@ -463,13 +462,33 @@ where
                         ));
                     }
                 };
+                let chat_body = match serde_json::to_vec(&openai_req) {
+                    Ok(b) => Bytes::from(b),
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to serialize OpenAI request: {err}"),
+                        ));
+                    }
+                };
+                let (upstream_path, body) = match prepare_openai_text_upstream(
+                    "/v1/chat/completions",
+                    &chat_body,
+                    &route.upstream_model,
+                    &route.upstream_endpoint_type,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to prepare OpenAI upstream request: {err}"),
+                        ));
+                    }
+                };
                 let upstream = match self
-                    .send_openai_json(
-                        &route,
-                        &req.downstream_headers,
-                        &openai_req,
-                        "/v1/chat/completions",
-                    )
+                    .send_openai_body(&route, &req.downstream_headers, body, &upstream_path)
                     .await
                 {
                     Ok(resp) => resp,
@@ -738,7 +757,22 @@ where
                 "raw OpenAI passthrough requires an OpenAI provider channel",
             ));
         }
-        self.openai_passthrough(route, &req.path, req.body, &req.downstream_headers)
+        let (upstream_path, body) = match prepare_openai_text_upstream(
+            &req.path,
+            &req.body,
+            &route.upstream_model,
+            &route.upstream_endpoint_type,
+        ) {
+            Ok(v) => v,
+            Err(err) => {
+                return Ok(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request_error",
+                    &format!("failed to prepare OpenAI upstream request: {err}"),
+                ));
+            }
+        };
+        self.openai_passthrough(route, &upstream_path, body, &req.downstream_headers)
             .await
     }
 }
@@ -801,13 +835,33 @@ where
                         ));
                     }
                 };
+                let chat_body = match serde_json::to_vec(&openai_req) {
+                    Ok(b) => Bytes::from(b),
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to serialize OpenAI request: {err}"),
+                        ));
+                    }
+                };
+                let (upstream_path, body) = match prepare_openai_text_upstream(
+                    "/v1/chat/completions",
+                    &chat_body,
+                    &route.upstream_model,
+                    &route.upstream_endpoint_type,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to prepare OpenAI upstream request: {err}"),
+                        ));
+                    }
+                };
                 let upstream = match self
-                    .send_openai_json(
-                        &route,
-                        &req.downstream_headers,
-                        &openai_req,
-                        "/v1/chat/completions",
-                    )
+                    .send_openai_body(&route, &req.downstream_headers, body, &upstream_path)
                     .await
                 {
                     Ok(resp) => resp,
@@ -1090,6 +1144,194 @@ impl RelayService {
             }
         }
     }
+}
+
+
+/// new-api-compatible upstream path selection for OpenAI text APIs.
+/// Channel setting `upstream_endpoint_type`:
+/// - empty/auto: keep client path (rewrite model only for chat)
+/// - openai: force `/v1/chat/completions` (+ convert responses body → chat if needed)
+/// - openai-response / openai-response-compact: force responses path (+ convert chat → responses)
+fn prepare_openai_text_upstream(
+    client_path: &str,
+    raw_body: &[u8],
+    upstream_model: &str,
+    endpoint_type: &str,
+) -> Result<(String, Bytes)> {
+    let client_path = client_path.split('?').next().unwrap_or(client_path);
+    let mode = normalize_upstream_endpoint_type(endpoint_type);
+    let client_is_responses = client_path.ends_with("/responses")
+        || client_path.ends_with("/responses/compact");
+    let client_is_chat = client_path.ends_with("/chat/completions");
+
+    match mode.as_str() {
+        "openai" => {
+            let body = if client_is_responses {
+                convert_responses_body_to_chat(raw_body, upstream_model)?
+            } else {
+                rewrite_openai_chat_model_body(raw_body, upstream_model)?
+            };
+            Ok(("/v1/chat/completions".to_string(), body))
+        }
+        "openai-response" => {
+            let body = if client_is_chat || !client_is_responses {
+                convert_chat_body_to_responses(raw_body, upstream_model, false)?
+            } else {
+                rewrite_openai_responses_model_body(raw_body, upstream_model)?
+            };
+            Ok(("/v1/responses".to_string(), body))
+        }
+        "openai-response-compact" => {
+            let body = if client_is_chat || !client_is_responses {
+                convert_chat_body_to_responses(raw_body, upstream_model, true)?
+            } else {
+                rewrite_openai_responses_model_body(raw_body, upstream_model)?
+            };
+            Ok(("/v1/responses/compact".to_string(), body))
+        }
+        _ => {
+            // auto: preserve client path; still rewrite model id
+            if client_is_chat {
+                let body = rewrite_openai_chat_model_body(raw_body, upstream_model)?;
+                Ok((client_path.to_string(), body))
+            } else if client_is_responses {
+                let body = rewrite_openai_responses_model_body(raw_body, upstream_model)?;
+                Ok((client_path.to_string(), body))
+            } else {
+                // other openai paths (embeddings/completions): pass through, try model rewrite
+                let body = rewrite_openai_any_model_body(raw_body, upstream_model)
+                    .unwrap_or_else(|_| Bytes::copy_from_slice(raw_body));
+                Ok((client_path.to_string(), body))
+            }
+        }
+    }
+}
+
+fn normalize_upstream_endpoint_type(raw: &str) -> String {
+    let v = raw.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "" | "auto" => "auto".to_string(),
+        "openai" | "chat" | "chat_completions" | "chat-completions" => "openai".to_string(),
+        "openai-response" | "openai_response" | "responses" | "response" => {
+            "openai-response".to_string()
+        }
+        "openai-response-compact" | "openai_response_compact" | "responses-compact" => {
+            "openai-response-compact".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+fn rewrite_openai_responses_model_body(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {
+    let mut value: JsonValue =
+        serde_json::from_slice(raw_body).context("parse OpenAI responses request body")?;
+    value["model"] = JsonValue::String(upstream_model.to_string());
+    Ok(Bytes::from(
+        serde_json::to_vec(&value).context("serialize OpenAI responses request body")?,
+    ))
+}
+
+fn rewrite_openai_any_model_body(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {
+    let mut value: JsonValue =
+        serde_json::from_slice(raw_body).context("parse OpenAI request body")?;
+    if value.get("model").is_some() {
+        value["model"] = JsonValue::String(upstream_model.to_string());
+    }
+    Ok(Bytes::from(
+        serde_json::to_vec(&value).context("serialize OpenAI request body")?,
+    ))
+}
+
+/// Minimal chat → responses conversion (new-api ChatCompletionsRequestToResponsesRequest subset).
+fn convert_chat_body_to_responses(
+    raw_body: &[u8],
+    upstream_model: &str,
+    compact: bool,
+) -> Result<Bytes> {
+    let chat: JsonValue =
+        serde_json::from_slice(raw_body).context("parse chat request for responses convert")?;
+    let messages = chat
+        .get("messages")
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Array(vec![]));
+    let mut out = serde_json::Map::new();
+    out.insert("model".into(), JsonValue::String(upstream_model.to_string()));
+    out.insert("input".into(), messages);
+    if let Some(stream) = chat.get("stream") {
+        out.insert("stream".into(), stream.clone());
+    }
+    if let Some(temp) = chat.get("temperature") {
+        out.insert("temperature".into(), temp.clone());
+    }
+    if let Some(top_p) = chat.get("top_p") {
+        out.insert("top_p".into(), top_p.clone());
+    }
+    // max_tokens → max_output_tokens
+    if let Some(max_out) = chat
+        .get("max_completion_tokens")
+        .or_else(|| chat.get("max_tokens"))
+    {
+        out.insert("max_output_tokens".into(), max_out.clone());
+    }
+    if let Some(tools) = chat.get("tools") {
+        out.insert("tools".into(), tools.clone());
+    }
+    if let Some(tool_choice) = chat.get("tool_choice") {
+        out.insert("tool_choice".into(), tool_choice.clone());
+    }
+    if let Some(user) = chat.get("user") {
+        out.insert("user".into(), user.clone());
+    }
+    if compact {
+        // compact API is non-stream in new-api tests
+        out.remove("stream");
+    }
+    Ok(Bytes::from(
+        serde_json::to_vec(&JsonValue::Object(out)).context("serialize responses body")?,
+    ))
+}
+
+/// Minimal responses → chat conversion for forced openai upstream.
+fn convert_responses_body_to_chat(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {
+    let resp: JsonValue =
+        serde_json::from_slice(raw_body).context("parse responses request for chat convert")?;
+    let input = resp.get("input").cloned().unwrap_or(JsonValue::Array(vec![]));
+    // If input is a string, wrap as user message
+    let messages = match input {
+        JsonValue::String(s) => serde_json::json!([{"role": "user", "content": s}]),
+        JsonValue::Array(arr) => JsonValue::Array(arr),
+        other => serde_json::json!([{"role": "user", "content": other}]),
+    };
+    let mut out = serde_json::Map::new();
+    out.insert("model".into(), JsonValue::String(upstream_model.to_string()));
+    out.insert("messages".into(), messages);
+    if let Some(stream) = resp.get("stream") {
+        out.insert("stream".into(), stream.clone());
+    }
+    if let Some(temp) = resp.get("temperature") {
+        out.insert("temperature".into(), temp.clone());
+    }
+    if let Some(top_p) = resp.get("top_p") {
+        out.insert("top_p".into(), top_p.clone());
+    }
+    if let Some(max_out) = resp.get("max_output_tokens") {
+        out.insert("max_tokens".into(), max_out.clone());
+    }
+    if let Some(tools) = resp.get("tools") {
+        out.insert("tools".into(), tools.clone());
+    }
+    if let Some(tool_choice) = resp.get("tool_choice") {
+        out.insert("tool_choice".into(), tool_choice.clone());
+    }
+    if let Some(user) = resp.get("user") {
+        out.insert("user".into(), user.clone());
+    }
+    if out.get("stream").and_then(|v| v.as_bool()) == Some(true) {
+        out.insert("stream_options".into(), serde_json::json!({"include_usage": true}));
+    }
+    Ok(Bytes::from(
+        serde_json::to_vec(&JsonValue::Object(out)).context("serialize chat body")?,
+    ))
 }
 
 fn rewrite_openai_chat_model_body(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {

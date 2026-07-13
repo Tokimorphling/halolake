@@ -48,4 +48,6 @@ pub struct RouteContext {
     pub proxy:           Option<String>,
     /// Explicit channel header overrides (after default/auth headers).
     pub header_override: std::collections::BTreeMap<String, String>,
+    /// auto | openai | openai-response (channel setting upstream_endpoint_type).
+    pub upstream_endpoint_type: String,
 }

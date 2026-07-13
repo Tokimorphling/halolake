@@ -1901,6 +1901,7 @@ fn channel_config(channel: &ChannelRecord) -> Result<Option<ChannelConfig>, Mana
         groups: channel.group_list(),
         proxy: channel_setting_proxy(channel),
         header_override: parse_channel_header_override(channel.header_override.as_deref()),
+        upstream_endpoint_type: channel_upstream_endpoint_type(channel),
     }))
 }
 
@@ -1941,6 +1942,25 @@ fn is_header_passthrough_rule_key(key: &str) -> bool {
     }
     let lower = key.to_ascii_lowercase();
     lower.starts_with("re:") || lower.starts_with("regex:")
+}
+
+
+/// Channel setting key aligned with new-api force path selection for OpenAI text APIs.
+/// Values: auto | openai | openai-response | openai-response-compact
+fn channel_upstream_endpoint_type(channel: &ChannelRecord) -> String {
+    let raw = channel.setting.as_deref().unwrap_or("").trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return String::new();
+    };
+    v.get("upstream_endpoint_type")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "auto")
+        .unwrap_or("")
+        .to_string()
 }
 
 fn channel_setting_proxy(channel: &ChannelRecord) -> Option<String> {
@@ -2664,6 +2684,7 @@ mod tests {
                     groups:          Vec::new(),
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 }],
                 model_mappings:   vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
@@ -2859,6 +2880,7 @@ mod tests {
                     groups:          Vec::new(),
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 }],
                 model_mappings:   vec![ModelMapping {
                     requested_model: "gpt-4o".to_string(),
@@ -3151,6 +3173,7 @@ mod tests {
                 groups:          Vec::new(),
                 proxy:           None,
                 header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
             }],
             model_mappings:   vec![ModelMapping {
                 requested_model: "requested".to_string(),
@@ -3198,6 +3221,7 @@ mod tests {
                 groups:          Vec::new(),
                 proxy:           None,
                 header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
             }],
             model_mappings:   vec![ModelMapping {
                 requested_model: "deepseek-v4-pro".to_string(),

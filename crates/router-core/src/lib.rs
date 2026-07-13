@@ -150,6 +150,10 @@ pub struct ChannelConfig {
     /// Passthrough rules (`*`, `re:…`) are ignored until gateway implements them.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub header_override: std::collections::BTreeMap<String, String>,
+    /// new-api style: how to call OpenAI-compatible upstream text APIs.
+    /// `auto` | `openai` (chat/completions) | `openai-response` (/v1/responses)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub upstream_endpoint_type: String,
 }
 
 impl ChannelConfig {
@@ -1103,6 +1107,7 @@ mod tests {
             groups:          Vec::new(),
             proxy:           None,
             header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
         });
 
         let indexed = snapshot.index().expect("snapshot should index");
@@ -1134,6 +1139,7 @@ mod tests {
             groups:          Vec::new(),
             proxy:           None,
             header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
         });
 
         let indexed = snapshot.index().expect("snapshot should index");
@@ -1181,6 +1187,7 @@ mod tests {
                     groups:          Vec::new(),
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
                     id:              "channel-b".to_string(),
@@ -1196,6 +1203,7 @@ mod tests {
                     groups:          Vec::new(),
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
             ],
             model_mappings:   vec![
@@ -1280,6 +1288,7 @@ mod tests {
                     groups:          Vec::new(),
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
                     id:              "channel-b".to_string(),
@@ -1295,6 +1304,7 @@ mod tests {
                     groups:          Vec::new(),
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
             ],
             model_mappings:   vec![
@@ -1403,6 +1413,7 @@ mod tests {
             groups:          Vec::new(),
             proxy:           None,
             header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
         });
         snapshot.tokens[0].allowed_ips =
             vec!["203.0.113.7".to_string(), "2001:db8::/32".to_string()];
@@ -1437,6 +1448,7 @@ mod tests {
             groups:          Vec::new(),
             proxy:           None,
             header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
         });
         snapshot.tokens[0].allowed_ips = vec!["not-an-ip".to_string()];
 
@@ -1478,6 +1490,7 @@ mod tests {
                     groups:          vec!["default".to_string()],
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
                     id:              "paid-channel".to_string(),
@@ -1493,6 +1506,7 @@ mod tests {
                     groups:          vec!["paid".to_string()],
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
             ],
             model_mappings:   Vec::new(),
@@ -1545,6 +1559,7 @@ mod tests {
                     groups:          vec!["default".to_string()],
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
                     id:              "paid-channel".to_string(),
@@ -1560,6 +1575,7 @@ mod tests {
                     groups:          vec!["paid".to_string()],
                     proxy:           None,
                     header_override: Default::default(),
+                    upstream_endpoint_type: String::new(),
                 },
             ],
             model_mappings:   Vec::new(),
@@ -1609,6 +1625,7 @@ mod tests {
             groups:          vec!["paid".to_string()],
             proxy:           None,
             header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
         });
         snapshot.tokens[0].user_group = "default".to_string();
         snapshot.tokens[0].token_group = "paid".to_string();
@@ -1642,6 +1659,7 @@ mod tests {
             groups:          vec!["default".to_string()],
             proxy:           None,
             header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
         });
         let indexed = snapshot.index().expect("snapshot should index");
         indexed
