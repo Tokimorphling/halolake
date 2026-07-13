@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileJson, Upload } from 'lucide-react'
+import { FileJson, KeyRound, Upload } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -40,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
 import { getGroups, importAuthJson, importAuthUpload } from '../../api'
@@ -50,8 +51,23 @@ type ImportDataDialogProps = {
   onOpenChange: (open: boolean) => void
 }
 
-/** auto = detect; or force a family */
+/** Source family for file / API import */
 type ImportMode = 'auto' | 'sub2api-data' | 'cliproxy' | 'codex-session'
+
+/**
+ * OpenAI / Codex authorization method (sub2api-aligned).
+ * - file: multi-file / drag-drop
+ * - refresh_token: manual RT (one per line, batch)
+ * - mobile_refresh_token: same RT exchange path (label only)
+ * - codex_session: Codex JSON / AT paste (batch lines or JSON)
+ * - codex_pat: Codex Personal Access Token (at-*, batch)
+ */
+type AuthMethod =
+  | 'file'
+  | 'refresh_token'
+  | 'mobile_refresh_token'
+  | 'codex_session'
+  | 'codex_pat'
 
 function fileHelpText(mode: ImportMode, t: (key: string) => string): string {
   if (mode === 'sub2api-data') {
@@ -72,10 +88,11 @@ function fileHelpText(mode: ImportMode, t: (key: string) => string): string {
 
 function collectJsonFiles(list: FileList | File[] | null): File[] {
   if (!list) return []
-  return Array.from(list).filter((file) => {
+  return [...list].filter((file) => {
     const name = file.name.toLowerCase()
     return (
       name.endsWith('.json') ||
+      name.endsWith('.txt') ||
       file.type === 'application/json' ||
       file.type === 'text/plain' ||
       file.type === ''
@@ -83,12 +100,57 @@ function collectJsonFiles(list: FileList | File[] | null): File[] {
   })
 }
 
+function countPasteLines(text: string): number {
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return 1
+  return trimmed
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#')).length
+}
+
+function pastePlaceholder(method: AuthMethod, t: (key: string) => string): string {
+  if (method === 'refresh_token' || method === 'mobile_refresh_token') {
+    return t('One refresh token per line (batch supported)')
+  }
+  if (method === 'codex_pat') {
+    return t('One Codex PAT (at-...) per line (batch supported)')
+  }
+  return t(
+    'Paste Codex session JSON, access tokens, or one credential per line'
+  )
+}
+
+function pasteHelp(method: AuthMethod, t: (key: string) => string): string {
+  if (method === 'refresh_token') {
+    return t(
+      'Manual RT: each line is exchanged via OpenAI OAuth and imported as a Codex channel.'
+    )
+  }
+  if (method === 'mobile_refresh_token') {
+    return t(
+      'Mobile RT: same OAuth refresh exchange as manual RT; paste one token per line.'
+    )
+  }
+  if (method === 'codex_pat') {
+    return t(
+      'Codex Personal Access Token (at-*). Validated via whoami, then imported. One per line.'
+    )
+  }
+  return t(
+    'Codex JSON / AT: full session JSON, NDJSON, or access tokens (one per line).'
+  )
+}
+
 export function ImportDataDialog(props: ImportDataDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('file')
   const [mode, setMode] = useState<ImportMode>('auto')
   const [files, setFiles] = useState<File[]>([])
+  const [pasteText, setPasteText] = useState('')
   const [group, setGroup] = useState('default')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
@@ -106,13 +168,20 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
       if (name) names.add(name)
     }
     if (group) names.add(group)
-    return Array.from(names)
+    return [...names]
   }, [groupsData, group])
+
+  const pasteCount = countPasteLines(pasteText)
+  const canSubmit =
+    authMethod === 'file' ? files.length > 0 : pasteText.trim().length > 0
 
   const reset = () => {
     setFiles([])
+    setPasteText('')
     setGroup('default')
     setIsDragging(false)
+    setAuthMethod('file')
+    setMode('auto')
     if (fileRef.current) fileRef.current.value = ''
   }
 
@@ -180,35 +249,64 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
   }
 
   const handleImport = async () => {
-    if (!files.length) {
-      toast.error(t('Please select a data file'))
-      return
-    }
     setIsSubmitting(true)
     try {
-      const format = mode === 'auto' ? 'auto' : mode
-      const useMultipart = files.length > 1 || mode === 'cliproxy'
+      const defaultGroup = group.trim() || 'default'
 
-      const result = useMultipart
-        ? await importAuthUpload({
-            files,
-            format,
-            group: group.trim() || 'default',
-            update_existing: true,
-          })
-        : await importAuthJson({
-            format,
-            content: await files[0].text(),
-            filenames: [files[0].name],
-            group: group.trim() || 'default',
-            update_existing: true,
-          })
+      if (authMethod === 'file') {
+        if (!files.length) {
+          toast.error(t('Please select a data file'))
+          return
+        }
+        const format = mode === 'auto' ? 'auto' : mode
+        const useMultipart = files.length > 1 || mode === 'cliproxy'
+        const result = useMultipart
+          ? await importAuthUpload({
+              files,
+              format,
+              group: defaultGroup,
+              update_existing: true,
+            })
+          : await importAuthJson({
+              format,
+              content: await files[0].text(),
+              filenames: [files[0].name],
+              group: defaultGroup,
+              update_existing: true,
+            })
 
-      if (!result.success || !result.data) {
-        toast.error(result.message || t('Import failed'))
-        return
+        if (!result.success || !result.data) {
+          toast.error(result.message || t('Import failed'))
+          return
+        }
+        summarize(result.data)
+      } else {
+        const content = pasteText.trim()
+        if (!content) {
+          toast.error(t('Please paste credentials'))
+          return
+        }
+        // Backend expand_codex_import_blob handles RT / PAT / JSON for codex-session.
+        let pasteFilename = 'paste-refresh-token.txt'
+        if (authMethod === 'codex_pat') {
+          pasteFilename = 'paste-pat.txt'
+        } else if (authMethod === 'codex_session') {
+          pasteFilename = 'paste-session.txt'
+        }
+        const result = await importAuthJson({
+          format: 'codex-session',
+          content,
+          filenames: [pasteFilename],
+          group: defaultGroup,
+          update_existing: true,
+        })
+        if (!result.success || !result.data) {
+          toast.error(result.message || t('Import failed'))
+          return
+        }
+        summarize(result.data)
       }
-      summarize(result.data)
+
       await queryClient.invalidateQueries({
         queryKey: channelsQueryKeys.lists(),
       })
@@ -221,6 +319,14 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
     }
   }
 
+  const authMethods: Array<{ value: AuthMethod; label: string }> = [
+    { value: 'file', label: t('File upload') },
+    { value: 'refresh_token', label: t('Manual RT') },
+    { value: 'mobile_refresh_token', label: t('Mobile RT') },
+    { value: 'codex_session', label: t('Codex JSON / AT') },
+    { value: 'codex_pat', label: t('Codex Personal Access Token') },
+  ]
+
   return (
     <Dialog
       open={props.open}
@@ -229,134 +335,191 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
         if (!open) reset()
       }}
     >
-      <DialogContent className='sm:max-w-lg'>
+      <DialogContent className='sm:max-w-xl'>
         <DialogHeader>
           <DialogTitle>{t('Import credentials')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Import Sub2API exports, CLIProxyAPI auth JSON files (codex/claude/gemini/xai), or Codex session tokens. Drag multiple JSON files or choose them. Groups are not auto-bound — set a default group below if needed.'
+              'OpenAI / Codex authorization: manual RT, mobile RT, Codex JSON/AT, PAT, multi-file upload, and API batch paste. Groups are not auto-bound — set a default group below if needed.'
             )}
           </DialogDescription>
         </DialogHeader>
 
         <div className='space-y-4'>
           <div className='space-y-2'>
-            <Label>{t('Format')}</Label>
-            <div className='flex flex-wrap gap-2'>
-              {(
-                [
-                  ['auto', t('Auto-detect')],
-                  ['sub2api-data', t('Sub2API data JSON')],
-                  ['cliproxy', t('CLIProxyAPI auth')],
-                  ['codex-session', t('Codex session')],
-                ] as const
-              ).map(([value, label]) => (
+            <Label className='flex items-center gap-1.5'>
+              <KeyRound className='size-3.5' />
+              {t('Authorization Method')}
+            </Label>
+            <div className='flex flex-wrap gap-1.5'>
+              {authMethods.map((item) => (
                 <Button
-                  key={value}
+                  key={item.value}
                   type='button'
                   size='sm'
-                  variant={mode === value ? 'default' : 'outline'}
-                  onClick={() => setMode(value)}
+                  variant={authMethod === item.value ? 'default' : 'outline'}
+                  className='h-8'
+                  onClick={() => setAuthMethod(item.value)}
                 >
-                  {label}
+                  {item.label}
                 </Button>
               ))}
             </div>
           </div>
 
-          <div className='space-y-2'>
-            <Label>{t('Data file')}</Label>
-            <p className='text-muted-foreground text-xs'>
-              {fileHelpText(mode, t)}
-            </p>
-            <div
-              role='button'
-              tabIndex={0}
-              className={cn(
-                'border-muted-foreground/30 bg-muted/20 hover:bg-muted/30 focus-visible:ring-ring rounded-lg border border-dashed px-4 py-6 text-center transition-colors outline-none focus-visible:ring-2',
-                isDragging && 'border-primary bg-primary/5'
-              )}
-              onClick={() => fileRef.current?.click()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  fileRef.current?.click()
-                }
-              }}
-              onDragEnter={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setIsDragging(true)
-              }}
-              onDragOver={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setIsDragging(true)
-              }}
-              onDragLeave={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setIsDragging(false)
-              }}
-              onDrop={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setIsDragging(false)
-                handleFiles(e.dataTransfer.files)
-              }}
-            >
-              <Upload className='text-muted-foreground mx-auto mb-2 h-6 w-6' />
-              <p className='text-sm font-medium'>
-                {t('Drop JSON files here, or click to choose')}
-              </p>
-              <p className='text-muted-foreground mt-1 text-xs'>
-                {t('Supports multi-file CLIProxyAPI auth upload')}
-              </p>
-              <div className='mt-3 flex items-center justify-center gap-2'>
-                <Button
-                  type='button'
-                  variant='outline'
-                  size='sm'
-                  onClick={(e) => {
+          {authMethod === 'file' ? (
+            <>
+              <div className='space-y-2'>
+                <Label>{t('Format')}</Label>
+                <div className='flex flex-wrap gap-2'>
+                  {(
+                    [
+                      ['auto', t('Auto-detect')],
+                      ['sub2api-data', t('Sub2API data JSON')],
+                      ['cliproxy', t('CLIProxyAPI auth')],
+                      ['codex-session', t('Codex session')],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <Button
+                      key={value}
+                      type='button'
+                      size='sm'
+                      variant={mode === value ? 'default' : 'outline'}
+                      onClick={() => setMode(value)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className='space-y-2'>
+                <Label>{t('Data file')}</Label>
+                <p className='text-muted-foreground text-xs'>
+                  {fileHelpText(mode, t)}
+                </p>
+                <div
+                  role='button'
+                  tabIndex={0}
+                  className={cn(
+                    'border-muted-foreground/30 bg-muted/20 hover:bg-muted/30 focus-visible:ring-ring rounded-xl border border-dashed px-4 py-6 text-center transition-[background-color,border-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] outline-none focus-visible:ring-2',
+                    isDragging && 'border-primary bg-primary/5'
+                  )}
+                  onClick={() => fileRef.current?.click()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      fileRef.current?.click()
+                    }
+                  }}
+                  onDragEnter={(e) => {
+                    e.preventDefault()
                     e.stopPropagation()
-                    fileRef.current?.click()
+                    setIsDragging(true)
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsDragging(true)
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsDragging(false)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsDragging(false)
+                    handleFiles(e.dataTransfer.files)
                   }}
                 >
-                  <Upload className='mr-2 h-4 w-4' />
-                  {t('Choose file')}
-                </Button>
-                <span className='text-muted-foreground truncate text-sm'>
-                  {files.length === 0
-                    ? t('No file selected')
-                    : files.length === 1
-                      ? files[0].name
-                      : t('{{count}} files selected', { count: files.length })}
-                </span>
-              </div>
-              <input
-                ref={fileRef}
-                type='file'
-                multiple
-                accept='.json,application/json,text/plain,*/*'
-                className='hidden'
-                onChange={(e) => {
-                  handleFiles(e.target.files)
-                }}
-              />
-            </div>
-            {files.length > 0 ? (
-              <div className='bg-muted/40 max-h-28 space-y-1 overflow-auto rounded-md border px-3 py-2 text-xs'>
-                {files.map((f) => (
-                  <div key={f.name + f.size} className='flex items-center gap-2'>
-                    <FileJson className='h-3.5 w-3.5 shrink-0' />
-                    <span className='truncate'>
-                      {f.name} ({f.size} B)
+                  <Upload className='text-muted-foreground mx-auto mb-2 h-6 w-6' />
+                  <p className='text-sm font-medium'>
+                    {t('Drop JSON files here, or click to choose')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    {t('Supports multi-file CLIProxyAPI auth upload')}
+                  </p>
+                  <div className='mt-3 flex items-center justify-center gap-2'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        fileRef.current?.click()
+                      }}
+                    >
+                      <Upload className='mr-2 h-4 w-4' />
+                      {t('Choose file')}
+                    </Button>
+                    <span className='text-muted-foreground truncate text-sm'>
+                      {(() => {
+                        if (files.length === 0) return t('No file selected')
+                        if (files.length === 1) return files[0].name
+                        return t('{{count}} files selected', {
+                          count: files.length,
+                        })
+                      })()}
                     </span>
                   </div>
-                ))}
+                  <input
+                    ref={fileRef}
+                    type='file'
+                    multiple
+                    accept='.json,.txt,application/json,text/plain,*/*'
+                    className='hidden'
+                    onChange={(e) => {
+                      handleFiles(e.target.files)
+                    }}
+                  />
+                </div>
+                {files.length > 0 ? (
+                  <div className='bg-muted/40 max-h-28 space-y-1 overflow-auto rounded-md border px-3 py-2 text-xs'>
+                    {files.map((f) => (
+                      <div
+                        key={`${f.name}-${f.size}-${f.lastModified}`}
+                        className='flex items-center gap-2'
+                      >
+                        <FileJson className='h-3.5 w-3.5 shrink-0' />
+                        <span className='truncate'>
+                          {f.name} ({f.size} B)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            </>
+          ) : (
+            <div className='space-y-2'>
+              <div className='flex items-center justify-between gap-2'>
+                <Label htmlFor='import-paste'>{t('Credentials')}</Label>
+                {pasteCount > 1 ? (
+                  <span className='bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-[10px] font-medium'>
+                    {t('{{count}} items', { count: pasteCount })}
+                  </span>
+                ) : null}
+              </div>
+              <p className='text-muted-foreground text-xs'>
+                {pasteHelp(authMethod, t)}
+              </p>
+              <Textarea
+                id='import-paste'
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder={pastePlaceholder(authMethod, t)}
+                className='min-h-36 font-mono text-xs'
+                spellCheck={false}
+              />
+              {pasteCount > 1 ? (
+                <p className='text-muted-foreground text-xs'>
+                  {t('Batch create {{count}} channels', { count: pasteCount })}
+                </p>
+              ) : null}
+            </div>
+          )}
 
           <div className='space-y-2'>
             <Label htmlFor='import-group'>{t('Default group')}</Label>
@@ -405,7 +568,7 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
             onClick={() => {
               void handleImport()
             }}
-            disabled={isSubmitting || files.length === 0}
+            disabled={isSubmitting || !canSubmit}
           >
             {isSubmitting ? t('Importing...') : t('Import')}
           </Button>

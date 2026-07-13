@@ -5,11 +5,11 @@
 //! reused by fingerprint; accounts always create new channels.
 
 use crate::{
-    codex_auth_import::{
-        CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
-    },
     proxy::{CreateProxyRequest, ListProxiesRequest, ProxyRecord, ProxyStore, UpdateProxyRequest},
     storage::ManagementStore,
+};
+use super::codex_auth_import::{
+    CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
 };
 use halolake_control_plane::{CreateChannelRequest, ManagementError};
 use halolake_domain::{ChannelRecord, STATUS_ENABLED};

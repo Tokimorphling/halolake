@@ -14,13 +14,16 @@
 
 use crate::{
     channel_probe::{ChannelProbeService, FetchModelsRequest},
+    proxy::ProxyStore,
+    storage::ManagementStore,
+};
+use super::{
     codex_auth_import::{
         self, CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage,
         CodexAuthImportRequest, CodexAuthImportResult, CodexOAuthKey, codex_key_to_json,
         collect_entries, find_existing_channel_id, parse_flexible_codex_key,
     },
-    proxy::ProxyStore,
-    storage::ManagementStore,
+    openai_oauth::expand_codex_import_blob,
     sub2api_data_import::{self, DataImportResult, Sub2apiDataImportRequest},
 };
 use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
@@ -342,10 +345,26 @@ pub(crate) async fn import_auth(
             continue;
         }
 
-        // Codex session / raw token — reuse codex_auth_import pipeline for this blob.
+        // Codex session / raw token / RT / PAT — expand then import.
+        let expanded = match expand_codex_import_blob(content).await {
+            Ok(items) => items,
+            Err(err) => {
+                aggregate.failed = aggregate.failed.saturating_add(1);
+                file_results.push(AuthFileResult {
+                    name:       file_name.clone(),
+                    format:     "codex-session".into(),
+                    ok:         false,
+                    message:    err.to_string(),
+                    channel_id: None,
+                    created:    None,
+                    updated:    None,
+                });
+                continue;
+            }
+        };
         let codex_req = CodexAuthImportRequest {
-            content:         content.clone(),
-            contents:        Vec::new(),
+            content:         String::new(),
+            contents:        expanded,
             name:            if name_base.is_empty() {
                 String::new()
             } else {

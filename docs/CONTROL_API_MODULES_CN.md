@@ -52,7 +52,7 @@ compat-stubs = []
 | 模型目录 | `/api/models/*`, `/api/vendors/*` | 元数据 CRUD + upstream sync |
 | 倍率同步 | `/api/ratio_sync/*`, `ratio_sync` | 上游 ratio 拉取 |
 | 代理池 | `/api/proxy/*`, `proxy`, `proxy_probe` | HTTP 代理节点 |
-| 渠道导入 | `/api/channel/import/*`, `auth_import`, `codex_auth_import`, `sub2api_data_import` | 批量凭证导入 |
+| 渠道导入 | `/api/channel/import/*`, `control_api_ext::{auth,codex,sub2api,openai_oauth}` | 批量凭证导入（RT/PAT/文件） |
 | 渠道专用 | codex/ollama/upstream_updates、`channel_special` | 厂商专用操作 |
 | 签到 | `/api/user/checkin` | 可选运营 |
 | Prefill | `/api/prefill_group/*` | 预填分组 |
@@ -64,7 +64,7 @@ compat-stubs = []
 
 > 现状：`admin-extras` 已通过 `admin_extras::mount` + `#[cfg(feature = "admin-extras")]` 挂载；  
 > `playground` 同属该 feature。以下 `mod` 也已 feature 门控（core-only 不编译）：  
-> `auth_import` / `codex_auth_import` / `sub2api_data_import` / `ratio_sync` /  
+> `control_api_ext`（含 auth/codex/sub2api import + OpenAI RT/PAT）/ `ratio_sync` /  
 > `model_sync` / `proxy_probe` / `channel_special` / `playground`。  
 > 对应 HTTP handlers 同样 `cfg`。`ProxyStore` / `CheckinStore` / `CatalogStore` 仍常驻 AppState（snapshot/import 共用或后续可再收）。
 

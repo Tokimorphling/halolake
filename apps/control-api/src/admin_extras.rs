@@ -6,6 +6,7 @@
 use super::*;
 
 pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
+    let router = crate::control_api_ext::mount(router);
     router
         .route("/api/pricing", get(api_pricing))
         .route("/api/rankings", get(api_rankings))
@@ -69,26 +70,7 @@ pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
         .route("/api/proxy/{id}", get(get_proxy).delete(delete_proxy))
         .route("/api/proxy/{id}/test", post(test_proxy))
         .route("/api/proxy/{id}/quality-check", post(quality_check_proxy))
-        .route("/api/channel/import/auth", post(import_auth_json))
-        .route("/api/channel/import/auth/", post(import_auth_json))
-        .route(
-            "/api/channel/import/auth/upload",
-            post(import_auth_multipart),
-        )
-        .route(
-            "/api/channel/import/auth/upload/",
-            post(import_auth_multipart),
-        )
-        .route("/api/channel/import/codex-auth", post(import_codex_auth))
-        .route("/api/channel/import/codex-auth/", post(import_codex_auth))
-        .route(
-            "/api/channel/import/sub2api-data",
-            post(import_sub2api_data),
-        )
-        .route(
-            "/api/channel/import/sub2api-data/",
-            post(import_sub2api_data),
-        )
+        // Credential import (control_api_ext)
         .route("/api/channel/multi_key/manage", post(manage_multi_keys))
         .route("/api/channel/ollama/pull", post(ollama_pull_model))
         .route(

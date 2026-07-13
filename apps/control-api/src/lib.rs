@@ -29,8 +29,6 @@ mod api_system;
 mod api_usage;
 mod api_user;
 mod api_web;
-#[cfg(feature = "admin-extras")]
-mod auth_import;
 mod billing;
 mod bootstrap_credentials;
 mod catalog;
@@ -43,7 +41,7 @@ mod channel_special;
 mod channel_task;
 mod checkin;
 #[cfg(feature = "admin-extras")]
-mod codex_auth_import;
+mod control_api_ext;
 #[cfg(feature = "compat-stubs")]
 mod compat;
 mod config;
@@ -66,8 +64,6 @@ mod session;
 mod snapshot_publish;
 mod storage;
 mod store_open;
-#[cfg(feature = "admin-extras")]
-mod sub2api_data_import;
 mod system_instance;
 mod system_task;
 pub(crate) use api_catalog::*;
