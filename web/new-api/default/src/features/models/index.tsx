@@ -86,23 +86,42 @@ function ModelsContent() {
   return (
     <>
       <SectionPageLayout fixedContent>
-        <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          <span className='block min-w-0'>
+            <span className='text-title block truncate tracking-[var(--tracking-title)]'>
+              {t(meta.titleKey)}
+            </span>
+            <span className='text-muted-foreground mt-1 block truncate text-xs font-normal tracking-normal sm:text-sm'>
+              {activeSection === 'metadata'
+                ? t('Model catalog, pricing metadata, and sync tools')
+                : t('Managed model deployments and connection status')}
+            </span>
+          </span>
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           {activeSection === 'metadata' ? (
             <ModelsPrimaryButtons />
           ) : (
-            <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
+            <Button
+              onClick={() => setCreateDeploymentOpen(true)}
+              size='sm'
+              className='shadow-[0_1px_0_0_var(--hairline)]'
+            >
               <Plus className='h-4 w-4' />
               {t('Create deployment')}
             </Button>
           )}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <div className='flex h-full min-h-0 flex-col gap-4'>
+          <div className='flex h-full min-h-0 flex-col gap-3.5 sm:gap-4'>
             <Tabs value={activeSection} onValueChange={handleSectionChange}>
-              <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
+              <TabsList className='bg-card/70 ring-foreground/6 max-w-full flex-wrap justify-start rounded-xl p-1 shadow-[0_1px_0_0_var(--hairline)] ring-1 group-data-horizontal/tabs:h-auto'>
                 {MODELS_SECTION_IDS.map((section) => (
-                  <TabsTrigger key={section} value={section}>
+                  <TabsTrigger
+                    key={section}
+                    value={section}
+                    className='rounded-lg'
+                  >
                     {t(SECTION_META[section].titleKey)}
                   </TabsTrigger>
                 ))}

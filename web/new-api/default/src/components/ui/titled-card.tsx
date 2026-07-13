@@ -60,17 +60,23 @@ export function TitledCard({
   return (
     <Card
       data-card-hover={disableHoverEffect ? 'false' : undefined}
-      className={cn('gap-0 overflow-hidden py-0', className)}
+      className={cn(
+        'bg-card/70 ring-foreground/6 gap-0 overflow-hidden py-0 shadow-[0_1px_0_0_var(--hairline)] ring-1',
+        className
+      )}
     >
       <CardHeader
-        className={cn('border-b p-3 !pb-3 sm:p-5 sm:!pb-5', headerClassName)}
+        className={cn(
+          'border-b border-[color:var(--hairline)] p-3 !pb-3 sm:p-5 sm:!pb-5',
+          headerClassName
+        )}
       >
         <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
           <div className='flex min-w-0 items-center gap-3'>
             {icon != null && (
               <div
                 className={cn(
-                  'bg-muted flex h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:h-9 sm:w-9',
+                  'bg-muted/80 ring-foreground/6 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ring-1 sm:h-9 sm:w-9',
                   iconClassName
                 )}
               >
@@ -80,7 +86,7 @@ export function TitledCard({
             <div className='min-w-0'>
               <CardTitle
                 className={cn(
-                  'text-lg tracking-tight sm:text-xl',
+                  'text-title text-lg tracking-[var(--tracking-title)] sm:text-xl',
                   titleClassName
                 )}
               >
@@ -88,7 +94,10 @@ export function TitledCard({
               </CardTitle>
               {description != null && (
                 <CardDescription
-                  className={cn('text-xs sm:text-sm', descriptionClassName)}
+                  className={cn(
+                    'mt-1 text-xs leading-relaxed sm:text-sm',
+                    descriptionClassName
+                  )}
                 >
                   {description}
                 </CardDescription>

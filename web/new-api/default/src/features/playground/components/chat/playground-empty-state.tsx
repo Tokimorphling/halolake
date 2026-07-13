@@ -46,12 +46,12 @@ export function PlaygroundEmptyState({
   return (
     <div className='flex min-h-[min(520px,calc(100svh-18rem))] items-center justify-center px-1 py-8 md:py-12'>
       <div className='grid w-full max-w-2xl gap-5 text-center'>
-        <div className='bg-muted/50 text-muted-foreground mx-auto flex size-11 items-center justify-center rounded-xl border'>
+        <div className='bg-muted/60 text-muted-foreground ring-foreground/6 mx-auto flex size-11 items-center justify-center rounded-2xl shadow-[0_1px_0_0_var(--hairline)] ring-1'>
           <MessageSquarePlusIcon className='size-5' aria-hidden='true' />
         </div>
 
         <div className='grid gap-2'>
-          <h2 className='text-xl font-semibold tracking-tight text-balance md:text-2xl'>
+          <h2 className='text-title text-xl font-semibold tracking-[var(--tracking-title)] text-balance md:text-2xl'>
             {t('Start a playground chat')}
           </h2>
           <p className='text-muted-foreground mx-auto max-w-lg text-sm leading-6 text-balance'>
@@ -67,7 +67,7 @@ export function PlaygroundEmptyState({
 
             return (
               <Button
-                className='h-auto min-h-11 justify-start gap-2 px-3 py-2.5 text-left whitespace-normal'
+                className='bg-card/70 ring-foreground/6 h-auto min-h-11 justify-start gap-2 rounded-xl px-3 py-2.5 text-left whitespace-normal shadow-[0_1px_0_0_var(--hairline)] ring-1 transition-[transform,background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-card/90 active:scale-[0.98]'
                 key={text}
                 onClick={() => onSelectPrompt(prompt)}
                 variant='outline'

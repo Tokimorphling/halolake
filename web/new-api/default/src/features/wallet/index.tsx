@@ -262,7 +262,16 @@ export function Wallet(props: WalletProps) {
   return (
     <>
       <SectionPageLayout>
-        <SectionPageLayout.Title>{t('Wallet')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          <span className='block min-w-0'>
+            <span className='text-title block truncate tracking-[var(--tracking-title)]'>
+              {t('Wallet')}
+            </span>
+            <span className='text-muted-foreground mt-1 block truncate text-xs font-normal tracking-normal sm:text-sm'>
+              {t('Balance, top-ups, and affiliate rewards')}
+            </span>
+          </span>
+        </SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
             <WalletStatsCard user={user} loading={userLoading} />

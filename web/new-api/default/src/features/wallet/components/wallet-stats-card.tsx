@@ -33,10 +33,10 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
   const { t } = useTranslation()
   if (props.loading) {
     return (
-      <div className='overflow-hidden rounded-lg border'>
-        <div className='divide-border/60 grid grid-cols-3 divide-x'>
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className='px-3 py-3 sm:px-5 sm:py-4'>
+      <div className='bg-card/70 ring-foreground/6 overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline)] ring-1'>
+        <div className='divide-[color:var(--hairline)] grid grid-cols-3 divide-x'>
+          {['wallet-sk-a', 'wallet-sk-b', 'wallet-sk-c'].map((skeletonKey) => (
+            <div key={skeletonKey} className='px-3 py-3.5 sm:px-5 sm:py-4'>
               <Skeleton className='h-3.5 w-20' />
               <Skeleton className='mt-2 h-7 w-28' />
               <Skeleton className='mt-1.5 h-3.5 w-24' />
@@ -69,13 +69,16 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
   ]
 
   return (
-    <div className='overflow-hidden rounded-lg border'>
-      <div className='divide-border/60 grid grid-cols-3 divide-x'>
+    <div className='bg-card/70 ring-foreground/6 overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline)] ring-1'>
+      <div className='divide-[color:var(--hairline)] grid grid-cols-3 divide-x'>
         {stats.map((item) => (
-          <div key={item.label} className='px-3 py-3 sm:px-5 sm:py-4'>
+          <div
+            key={item.label}
+            className='px-3 py-3.5 transition-[background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-card/90 sm:px-5 sm:py-4'
+          >
             <div className='flex items-center gap-2'>
               <item.icon className='text-muted-foreground/60 size-3.5 shrink-0' />
-              <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+              <div className='text-muted-foreground truncate text-[11px] font-medium tracking-[var(--tracking-caption)] uppercase'>
                 {item.label}
               </div>
             </div>

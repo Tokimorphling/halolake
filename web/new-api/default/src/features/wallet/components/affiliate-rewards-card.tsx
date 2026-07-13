@@ -46,14 +46,17 @@ export function AffiliateRewardsCard({
   const { t } = useTranslation()
   if (loading) {
     return (
-      <Card data-card-hover='false' className='bg-muted/20 py-0'>
+      <Card
+        data-card-hover='false'
+        className='bg-card/70 ring-foreground/6 py-0 shadow-[0_1px_0_0_var(--hairline)] ring-1'
+      >
         <CardContent className='grid gap-4 p-3 sm:p-4 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,0.72fr)_minmax(320px,1.15fr)] lg:items-center'>
           <div>
             <Skeleton className='h-5 w-32' />
             <Skeleton className='mt-2 h-4 w-48' />
           </div>
-          <Skeleton className='h-14 rounded-lg' />
-          <Skeleton className='h-10 rounded-lg' />
+          <Skeleton className='h-14 rounded-xl' />
+          <Skeleton className='h-10 rounded-xl' />
         </CardContent>
       </Card>
     )
@@ -62,14 +65,17 @@ export function AffiliateRewardsCard({
   const hasRewards = (user?.aff_quota ?? 0) > 0
 
   return (
-    <Card data-card-hover='false' className='bg-muted/20 py-0'>
+    <Card
+      data-card-hover='false'
+      className='bg-card/70 ring-foreground/6 py-0 shadow-[0_1px_0_0_var(--hairline)] ring-1'
+    >
       <CardContent className='grid gap-3 p-3 sm:gap-4 sm:p-4 lg:grid-cols-[minmax(200px,1fr)_minmax(180px,0.65fr)_minmax(280px,1fr)] lg:items-center'>
         <div className='flex min-w-0 items-center gap-2.5'>
-          <div className='bg-background flex size-8 shrink-0 items-center justify-center rounded-lg border'>
+          <div className='bg-muted/70 ring-foreground/6 flex size-8 shrink-0 items-center justify-center rounded-xl ring-1'>
             <Share2 className='text-muted-foreground size-4' />
           </div>
           <div className='min-w-0'>
-            <h3 className='truncate text-sm font-semibold'>
+            <h3 className='text-title truncate text-sm font-semibold tracking-[var(--tracking-title)]'>
               {t('Referral Program')}
             </h3>
             <p className='text-muted-foreground line-clamp-1 text-xs'>
@@ -87,7 +93,7 @@ export function AffiliateRewardsCard({
             [t('Invites'), String(user?.aff_count ?? 0)],
           ].map(([label, value]) => (
             <div key={label}>
-              <div className='text-muted-foreground truncate text-[10px] font-medium tracking-wider uppercase'>
+              <div className='text-muted-foreground truncate text-[10px] font-medium tracking-[var(--tracking-caption)] uppercase'>
                 {label}
               </div>
               <div className='mt-0.5 truncate text-sm font-semibold tabular-nums'>

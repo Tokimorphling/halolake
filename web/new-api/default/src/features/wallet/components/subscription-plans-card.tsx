@@ -244,8 +244,8 @@ export function SubscriptionPlansCard({
         <CardContent className='space-y-4 p-3 sm:p-5'>
           <Skeleton className='h-20 w-full' />
           <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3'>
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className='h-48 w-full' />
+            {['sub-sk-a', 'sub-sk-b', 'sub-sk-c'].map((skeletonKey) => (
+              <Skeleton key={skeletonKey} className='h-48 w-full' />
             ))}
           </div>
         </CardContent>
@@ -267,7 +267,7 @@ export function SubscriptionPlansCard({
         contentClassName='space-y-4 sm:space-y-5'
       >
         {/* My subscriptions & billing preference */}
-        <div className='rounded-xl border p-3 sm:p-4'>
+        <div className='bg-muted/20 ring-foreground/5 rounded-xl p-3 ring-1 sm:p-4'>
           <div className='flex flex-wrap items-center justify-between gap-2.5 sm:gap-3'>
             <div className='flex min-w-0 flex-wrap items-center gap-2'>
               <span className='text-sm font-medium'>
@@ -424,25 +424,33 @@ export function SubscriptionPlansCard({
                               ? `${planTitle} · ${t('Subscription')} #${subscription?.id}`
                               : `${t('Subscription')} #${subscription?.id}`}
                           </span>
-                          {isActive ? (
-                            <StatusBadge
-                              label={t('Active')}
-                              variant='success'
-                              copyable={false}
-                            />
-                          ) : isCancelled ? (
-                            <StatusBadge
-                              label={t('Cancelled')}
-                              variant='neutral'
-                              copyable={false}
-                            />
-                          ) : (
-                            <StatusBadge
-                              label={t('Expired')}
-                              variant='neutral'
-                              copyable={false}
-                            />
-                          )}
+                          {(() => {
+                            if (isActive) {
+                              return (
+                                <StatusBadge
+                                  label={t('Active')}
+                                  variant='success'
+                                  copyable={false}
+                                />
+                              )
+                            }
+                            if (isCancelled) {
+                              return (
+                                <StatusBadge
+                                  label={t('Cancelled')}
+                                  variant='neutral'
+                                  copyable={false}
+                                />
+                              )
+                            }
+                            return (
+                              <StatusBadge
+                                label={t('Expired')}
+                                variant='neutral'
+                                copyable={false}
+                              />
+                            )
+                          })()}
                         </div>
                         {isActive && (
                           <span className='text-muted-foreground'>
@@ -453,11 +461,11 @@ export function SubscriptionPlansCard({
                         )}
                       </div>
                       <div className='text-muted-foreground mt-1.5'>
-                        {isActive
-                          ? t('Until')
-                          : isCancelled
-                            ? t('Cancelled at')
-                            : t('Expired at')}{' '}
+                        {(() => {
+                          if (isActive) return t('Until')
+                          if (isCancelled) return t('Cancelled at')
+                          return t('Expired at')
+                        })()}{' '}
                         {new Date(
                           (subscription?.end_time || 0) * 1000
                         ).toLocaleString()}
@@ -466,7 +474,7 @@ export function SubscriptionPlansCard({
                         <div className='text-muted-foreground mt-1'>
                           {t('Next reset')}:{' '}
                           {new Date(
-                            subscription!.next_reset_time! * 1000
+                            (subscription?.next_reset_time ?? 0) * 1000
                           ).toLocaleString()}
                         </div>
                       )}
