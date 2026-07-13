@@ -150,7 +150,7 @@ export function CCSwitchDialog(props: Props) {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={t('Import to CC Switch')}
-      contentClassName='sm:max-w-md'
+      contentClassName='sm:max-w-md rounded-2xl shadow-[0_8px_40px_oklch(0_0_0/0.12)] ring-1 ring-foreground/8'
       contentHeight='auto'
       bodyClassName={
         currentConfig.modelFields.length === 1 ? 'space-y-4 pb-52' : 'space-y-4'

@@ -59,26 +59,36 @@ export function CommandMenu() {
   )
 
   return (
-    <CommandDialog modal open={open} onOpenChange={setOpen}>
-      <Command>
+    <CommandDialog
+      modal
+      open={open}
+      onOpenChange={setOpen}
+      className='app-header-surface top-[18%] max-w-lg overflow-hidden rounded-2xl! p-0 ring-0 sm:max-w-lg'
+    >
+      <Command className='bg-transparent'>
         <CommandInput placeholder={t('Type a command or search...')} />
         <CommandList>
           <ScrollArea className='h-72 pe-1'>
             <CommandEmpty>{t('No results found.')}</CommandEmpty>
             {navGroups.map((group) => (
-              <CommandGroup key={group.id || group.title} heading={group.title}>
+              <CommandGroup
+                key={group.id || group.title}
+                heading={group.title}
+                className='p-1.5'
+              >
                 {group.items.map((navItem, i) => {
                   if (navItem.url)
                     return (
                       <CommandItem
                         key={`${navItem.url}-${i}`}
                         value={navItem.title}
+                        className='rounded-xl px-2.5 py-2'
                         onSelect={() => {
                           runCommand(() => navigate({ to: navItem.url }))
                         }}
                       >
-                        <div className='flex size-4 items-center justify-center'>
-                          <ArrowRight className='text-muted-foreground/80 size-2' />
+                        <div className='bg-muted/50 flex size-6 items-center justify-center rounded-lg'>
+                          <ArrowRight className='text-muted-foreground size-3' />
                         </div>
                         {navItem.title}
                       </CommandItem>
@@ -88,32 +98,51 @@ export function CommandMenu() {
                     <CommandItem
                       key={`${navItem.title}-${subItem.url}-${i}`}
                       value={`${navItem.title}-${subItem.url}`}
+                      className='rounded-xl px-2.5 py-2'
                       onSelect={() => {
                         runCommand(() => navigate({ to: subItem.url }))
                       }}
                     >
-                      <div className='flex size-4 items-center justify-center'>
-                        <ArrowRight className='text-muted-foreground/80 size-2' />
+                      <div className='bg-muted/50 flex size-6 items-center justify-center rounded-lg'>
+                        <ArrowRight className='text-muted-foreground size-3' />
                       </div>
-                      {navItem.title} <ChevronRight /> {subItem.title}
+                      <span className='text-muted-foreground'>
+                        {navItem.title}
+                      </span>
+                      <ChevronRight className='text-muted-foreground/60 size-3.5' />
+                      <span>{subItem.title}</span>
                     </CommandItem>
                   ))
                 })}
               </CommandGroup>
             ))}
-            <CommandSeparator />
-            <CommandGroup heading='Theme'>
-              <CommandItem onSelect={() => runCommand(() => setTheme('light'))}>
-                <Sun /> <span>{t('Light')}</span>
+            <CommandSeparator className='mx-2' />
+            <CommandGroup heading={t('Theme')} className='p-1.5'>
+              <CommandItem
+                className='rounded-xl px-2.5 py-2'
+                onSelect={() => runCommand(() => setTheme('light'))}
+              >
+                <div className='bg-muted/50 flex size-6 items-center justify-center rounded-lg'>
+                  <Sun className='size-3.5' />
+                </div>
+                <span>{t('Light')}</span>
               </CommandItem>
-              <CommandItem onSelect={() => runCommand(() => setTheme('dark'))}>
-                <Moon className='scale-90' />
+              <CommandItem
+                className='rounded-xl px-2.5 py-2'
+                onSelect={() => runCommand(() => setTheme('dark'))}
+              >
+                <div className='bg-muted/50 flex size-6 items-center justify-center rounded-lg'>
+                  <Moon className='size-3.5' />
+                </div>
                 <span>{t('Dark')}</span>
               </CommandItem>
               <CommandItem
+                className='rounded-xl px-2.5 py-2'
                 onSelect={() => runCommand(() => setTheme('system'))}
               >
-                <Laptop />
+                <div className='bg-muted/50 flex size-6 items-center justify-center rounded-lg'>
+                  <Laptop className='size-3.5' />
+                </div>
                 <span>{t('System')}</span>
               </CommandItem>
             </CommandGroup>

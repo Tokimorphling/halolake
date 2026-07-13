@@ -37,15 +37,15 @@ export const MOBILE_DRAWER_ANIMATION = {
       rotate: 0,
       transition: {
         type: 'spring',
-        damping: 15,
-        stiffness: 200,
+        bounce: 0.15,
+        duration: 0.35,
         staggerChildren: 0.03,
       },
     },
     exit: {
       opacity: 0,
       y: 100,
-      transition: { duration: 0.1 },
+      transition: { type: 'spring', bounce: 0, duration: 0.25 },
     },
   },
   menuItem: {
@@ -60,6 +60,6 @@ export const MOBILE_DRAWER_ANIMATION = {
 export const MOBILE_DRAWER_CONFIG = {
   overlayTransitionDuration: 0.2,
   drawerClassName:
-    'fixed inset-x-0 bottom-3 z-50 mx-auto w-[95%] rounded-xl border border-border bg-background p-4 shadow-lg md:hidden',
-  overlayClassName: 'fixed inset-0 z-40 bg-black/50 backdrop-blur-sm',
+    'app-material-chrome fixed inset-x-0 bottom-3 z-50 mx-auto w-[95%] rounded-2xl border border-[color:var(--material-chrome-border)] p-4 shadow-[0_8px_40px_oklch(0_0_0/0.16)] md:hidden',
+  overlayClassName: 'fixed inset-0 z-40 bg-black/30 backdrop-blur-sm',
 } as const

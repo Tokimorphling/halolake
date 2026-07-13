@@ -65,11 +65,11 @@ export function NavGroup({ title, items }: NavGroupProps) {
   const href = useLocation({ select: (location) => location.href })
 
   return (
-    <SidebarGroup className='px-2 py-1'>
-      <SidebarGroupLabel className='text-muted-foreground/70 px-2 text-[11px] font-medium tracking-wider uppercase'>
+    <SidebarGroup className='px-2 py-1.5'>
+      <SidebarGroupLabel className='text-muted-foreground/55 mb-0.5 h-5 px-2.5 text-[10px] font-medium tracking-[0.08em] uppercase'>
         {title}
       </SidebarGroupLabel>
-      <SidebarMenu>
+      <SidebarMenu className='gap-0.5'>
         {items.map((item) => {
           const key = `${item.title}-${item.url || item.type}`
 

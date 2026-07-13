@@ -236,15 +236,15 @@ export function SummaryCards() {
   })
 
   return (
-    <div className='bg-card overflow-hidden rounded-2xl border shadow-xs'>
+    <div className='bg-card ring-foreground/6 overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 dark:shadow-[0_1px_0_0_var(--hairline)]'>
       <div className='grid xl:grid-cols-[minmax(0,1fr)_19rem]'>
-        <div className='flex flex-col gap-3 p-4 sm:p-5'>
+        <div className='flex flex-col gap-4 p-4 sm:p-5'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
-            <div className='flex flex-col gap-1'>
-              <h3 className='text-base font-semibold'>
+            <div className='flex flex-col gap-0.5'>
+              <h3 className='text-base leading-snug font-semibold tracking-tight'>
                 {t('Usage at a glance')}
               </h3>
-              <p className='text-muted-foreground text-sm'>
+              <p className='text-muted-foreground text-sm leading-relaxed'>
                 {t('Monitor balance, usage, and request volume')}
               </p>
             </div>
@@ -253,7 +253,7 @@ export function SummaryCards() {
             {items.map((it) => (
               <StaggerItem
                 key={it.key}
-                className='bg-background/60 rounded-xl border p-3'
+                className='bg-background/50 ring-foreground/5 rounded-2xl p-3.5 ring-1'
               >
                 <StatCard
                   title={it.title}
@@ -270,10 +270,10 @@ export function SummaryCards() {
           </StaggerContainer>
         </div>
 
-        <div className='bg-warning/10 flex flex-col justify-between gap-4 border-t p-4 sm:p-5 xl:border-t-0 xl:border-l'>
-          <div className='flex flex-col gap-3'>
-            <div className='flex items-center justify-between'>
-              <span className='text-muted-foreground text-xs font-medium'>
+        <div className='from-warning/8 via-warning/5 to-background/40 flex flex-col justify-between gap-4 border-t border-border/60 bg-linear-to-b p-4 sm:p-5 xl:border-t-0 xl:border-l'>
+          <div className='flex flex-col gap-3.5'>
+            <div className='flex items-center justify-between gap-2'>
+              <span className='text-muted-foreground text-xs font-medium tracking-wide'>
                 {t('Credit remaining')}
               </span>
               <span className='flex items-center gap-1.5'>
@@ -287,12 +287,12 @@ export function SummaryCards() {
               </span>
             </div>
 
-            <div className='font-mono text-2xl font-semibold tracking-tight'>
+            <div className='font-mono text-[1.75rem] leading-none font-semibold tracking-tight tabular-nums'>
               {formatQuota(remainQuota)}
             </div>
 
             <div className='grid grid-cols-2 gap-2'>
-              <div className='bg-background/60 rounded-lg px-2.5 py-2'>
+              <div className='bg-background/55 ring-foreground/5 rounded-xl px-2.5 py-2.5 ring-1'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
                   <Flame className='size-3 shrink-0' aria-hidden='true' />
                   <span className='truncate'>{t('Last 24h usage')}</span>
@@ -301,7 +301,7 @@ export function SummaryCards() {
                   {formatQuota(recentUsage)}
                 </div>
               </div>
-              <div className='bg-background/60 rounded-lg px-2.5 py-2'>
+              <div className='bg-background/55 ring-foreground/5 rounded-xl px-2.5 py-2.5 ring-1'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
                   {runwayDays !== null && runwayDays < 3 ? (
                     <TrendingDown

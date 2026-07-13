@@ -30,7 +30,14 @@ export function Proxies() {
   return (
     <ProxiesProvider>
       <SectionPageLayout fixedContent>
-        <SectionPageLayout.Title>{t('Proxies')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          <span className='block min-w-0'>
+            <span className='block truncate'>{t('Proxies')}</span>
+            <span className='text-muted-foreground mt-0.5 block truncate text-xs font-normal tracking-normal sm:text-sm'>
+              {t('Upstream egress proxies for channel traffic')}
+            </span>
+          </span>
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <ProxiesPrimaryButtons />
         </SectionPageLayout.Actions>

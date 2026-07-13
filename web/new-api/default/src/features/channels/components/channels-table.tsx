@@ -481,13 +481,18 @@ export function ChannelsTable() {
         ),
       }}
       getRowClassName={(row, { isMobile }) => {
+        // Card grid shells: Apple-soft rounded-2xl + hairline shadow.
+        // Table rows keep existing disabled styling only.
+        const cardChrome =
+          'rounded-2xl border-border/60 bg-card/90 px-3.5 py-3 shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 ring-foreground/6 transition-[background-color,border-color,box-shadow] duration-150 dark:shadow-[0_1px_0_0_var(--hairline)] data-[state=selected]:border-primary/35 data-[state=selected]:ring-primary/15'
         if (!isDisabledChannelRow(row.original)) {
-          return undefined
+          return isMobile ? undefined : cardChrome
         }
         if (isMobile) {
           return DISABLED_ROW_MOBILE
         }
-        return DISABLED_ROW_DESKTOP
+        // Desktop card view reuses getRowClassName; keep disabled tint + chrome.
+        return `${DISABLED_ROW_DESKTOP} ${cardChrome}`
       }}
       bulkActions={batchMode ? <DataTableBulkActions table={table} /> : null}
     />

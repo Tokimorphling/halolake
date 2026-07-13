@@ -261,10 +261,12 @@ export function ApiKeysMutateDrawer({
       }}
     >
       <SheetContent
-        className={sideDrawerContentClassName('max-w-none sm:!max-w-[620px]')}
+        className={sideDrawerContentClassName(
+          'max-w-none shadow-[0_8px_40px_oklch(0_0_0/0.12)] ring-foreground/8 ring-1 sm:!max-w-[620px]'
+        )}
       >
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>
+          <SheetTitle className='tracking-tight'>
             {isUpdate ? t('Update API Key') : t('Create API Key')}
           </SheetTitle>
           <SheetDescription>
@@ -501,7 +503,7 @@ export function ApiKeysMutateDrawer({
                   render={
                     <button
                       type='button'
-                      className='hover:bg-muted/40 flex w-full items-center gap-3 rounded-md py-1.5 text-left transition-colors'
+                      className='hover:bg-muted/40 flex w-full items-center gap-3 rounded-xl py-1.5 text-left transition-colors'
                     />
                   }
                 >

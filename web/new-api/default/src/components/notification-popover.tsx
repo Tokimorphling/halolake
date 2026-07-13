@@ -309,16 +309,16 @@ export function NotificationPopover({
           <Button
             variant='ghost'
             size='icon'
-            className={cn('relative size-9', className)}
+            className={cn('app-header-control relative', className)}
             aria-label={t('Notifications')}
           />
         }
       >
-        <Bell className='size-[1.2rem]' />
+        <Bell className='size-4' />
         {unreadCount > 0 ? (
           <Badge
             variant='destructive'
-            className='absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center px-1 text-[10px] font-semibold tabular-nums'
+            className='absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-background px-1 text-[10px] font-semibold tabular-nums shadow-sm'
           >
             {unreadCount > 99 ? '99+' : unreadCount}
           </Badge>
@@ -327,11 +327,13 @@ export function NotificationPopover({
 
       <PopoverContent
         align='end'
-        sideOffset={8}
-        className='w-[min(26rem,calc(100vw-1rem))] gap-3 p-3'
+        sideOffset={10}
+        className='app-header-surface w-[min(26rem,calc(100vw-1rem))] gap-3 rounded-2xl p-3.5 ring-0'
       >
-        <PopoverHeader className='gap-1 px-1'>
-          <PopoverTitle>{t('System Announcements')}</PopoverTitle>
+        <PopoverHeader className='gap-0.5 px-1 pb-0.5'>
+          <PopoverTitle className='text-[15px] font-semibold tracking-tight'>
+            {t('System Announcements')}
+          </PopoverTitle>
           <p className='text-muted-foreground text-xs'>
             {t('Latest platform updates and notices')}
           </p>
@@ -341,22 +343,25 @@ export function NotificationPopover({
           value={activeTab}
           onValueChange={onTabChange as (value: string) => void}
         >
-          <TabsList className='grid w-full grid-cols-2'>
-            <TabsTrigger value='notice' className='gap-1.5'>
-              <Bell className='size-3.5' />
+          <TabsList className='grid w-full grid-cols-2 rounded-full p-[3px]'>
+            <TabsTrigger value='notice' className='gap-1.5 rounded-full'>
+              <Bell className='size-3.5 opacity-70' />
               {t('Notice')}
             </TabsTrigger>
-            <TabsTrigger value='announcements' className='gap-1.5'>
-              <Megaphone className='size-3.5' />
+            <TabsTrigger
+              value='announcements'
+              className='gap-1.5 rounded-full'
+            >
+              <Megaphone className='size-3.5 opacity-70' />
               {t('Timeline')}
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value='notice' className='mt-2'>
+          <TabsContent value='notice' className='mt-2.5'>
             <NoticeContent notice={notice} loading={loading} t={t} />
           </TabsContent>
 
-          <TabsContent value='announcements' className='mt-2'>
+          <TabsContent value='announcements' className='mt-2.5'>
             <AnnouncementsContent
               announcements={announcements}
               loading={loading}
@@ -365,8 +370,13 @@ export function NotificationPopover({
           </TabsContent>
         </Tabs>
 
-        <div className='flex justify-end'>
-          <Button size='sm' onClick={() => onOpenChange(false)}>
+        <div className='flex justify-end pt-0.5'>
+          <Button
+            size='sm'
+            variant='secondary'
+            className='h-7 rounded-full px-3.5'
+            onClick={() => onOpenChange(false)}
+          >
             {t('Close')}
           </Button>
         </div>

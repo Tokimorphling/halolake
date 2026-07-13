@@ -28,7 +28,11 @@ export function ProxiesPrimaryButtons() {
   const { setOpen } = useProxies()
 
   return (
-    <Button size='sm' onClick={() => setOpen('create')}>
+    <Button
+      size='sm'
+      className='shadow-[0_1px_0_0_var(--hairline)]'
+      onClick={() => setOpen('create')}
+    >
       <Plus className='h-4 w-4' />
       {t('Add Proxy')}
     </Button>

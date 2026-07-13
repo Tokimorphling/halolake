@@ -92,11 +92,11 @@ function ChannelCardComponent({
     <ChannelRowActionsLayoutContext.Provider value='card'>
       <div
         data-state={isSelected ? 'selected' : undefined}
-        className='flex flex-col gap-3'
+        className='flex flex-col gap-3.5'
       >
         {/* Row 1: selection + type, with status badge + actions menu */}
         <div className='flex items-center justify-between gap-2'>
-          <div className='flex min-w-0 flex-1 items-center gap-2'>
+          <div className='flex min-w-0 flex-1 items-center gap-2.5'>
             {!isTagRow && selectCell && (
               <span className='shrink-0'>{selectCell}</span>
             )}
@@ -157,7 +157,7 @@ function ChannelCardComponent({
         </div>
 
         {/* Last row: groups span the full width, showing every group (no label) */}
-        <div className='min-w-0'>
+        <div className='min-w-0 border-t border-[color:var(--hairline)] pt-3'>
           {groups.length > 0 ? (
             <div className='-ml-1.5 flex flex-wrap gap-1'>
               {groups.map((g) => (

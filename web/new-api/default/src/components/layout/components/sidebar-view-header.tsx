@@ -52,8 +52,8 @@ export function SidebarViewHeader(props: SidebarViewHeaderProps) {
           <SidebarMenuButton
             tooltip={t(props.view.parent.label)}
             className={cn(
-              'text-muted-foreground hover:text-foreground',
-              'gap-1.5 font-medium'
+              'text-muted-foreground/80 hover:text-foreground',
+              'gap-1.5 text-[13px] font-medium'
             )}
             render={
               <Link
@@ -62,7 +62,7 @@ export function SidebarViewHeader(props: SidebarViewHeaderProps) {
               />
             }
           >
-            <ChevronLeft className='size-4 shrink-0' />
+            <ChevronLeft className='size-3.5 shrink-0 opacity-80' />
             <span className='truncate'>{t(props.view.parent.label)}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>

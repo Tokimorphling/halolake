@@ -73,7 +73,7 @@ export function ApiKeysMultiDeleteDialog<TData>({
       onOpenChange={onOpenChange}
       handleConfirm={handleConfirm}
       isLoading={isDeleting}
-      className='max-w-md'
+      className='max-w-md sm:max-w-md'
       title={t('Delete {{count}} API key(s)?', { count: selectedRows.length })}
       desc={
         <>

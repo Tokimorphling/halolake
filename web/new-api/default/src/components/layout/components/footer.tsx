@@ -226,17 +226,24 @@ export function Footer(props: FooterProps) {
     return (
       <footer
         className={cn(
-          'border-border/40 relative z-10 border-t',
+          'relative z-10 border-t border-[color:var(--material-chrome-border)]',
           props.className
         )}
       >
         <div className='mx-auto w-full max-w-6xl px-6 py-5'>
-          <div className='bg-muted/20 border-border/50 flex flex-col items-center justify-between gap-4 rounded-2xl border px-4 py-4 backdrop-blur-sm sm:flex-row sm:px-5'>
+          <div
+            className={cn(
+              'app-material-chrome flex flex-col items-center justify-between gap-4 rounded-2xl px-4 py-4 sm:flex-row sm:px-5',
+              'border border-[color:var(--material-chrome-border)]',
+              'shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)]',
+              'dark:shadow-[0_1px_0_0_var(--hairline)]'
+            )}
+          >
             <div
               className='custom-footer text-muted-foreground min-w-0 text-center text-sm sm:text-left'
               dangerouslySetInnerHTML={{ __html: footerHtml }}
             />
-            <div className='border-border/60 text-muted-foreground/45 flex w-full flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t pt-4 text-xs sm:w-auto sm:justify-end sm:border-t-0 sm:border-l sm:pt-0 sm:pl-5'>
+            <div className='border-[color:var(--hairline)] text-muted-foreground/45 flex w-full flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t pt-4 text-xs sm:w-auto sm:justify-end sm:border-t-0 sm:border-l sm:pt-0 sm:pl-5'>
               <LegalLinks />
               <ProjectAttribution currentYear={currentYear} inline />
             </div>
@@ -248,7 +255,10 @@ export function Footer(props: FooterProps) {
 
   return (
     <footer
-      className={cn('border-border/40 relative z-10 border-t', props.className)}
+      className={cn(
+        'relative z-10 border-t border-[color:var(--material-chrome-border)]',
+        props.className
+      )}
     >
       <div className='mx-auto max-w-6xl px-6 py-12 md:py-16'>
         <div className='flex flex-col justify-between gap-10 md:flex-row md:gap-16'>
@@ -292,7 +302,7 @@ export function Footer(props: FooterProps) {
 
         {/* Copyright + optional legal links inline on the left, project
             attribution on the right; wraps on narrow screens. */}
-        <div className='border-border/30 mt-12 flex flex-col items-center justify-between gap-x-3 gap-y-2 border-t pt-6 sm:flex-row'>
+        <div className='mt-12 flex flex-col items-center justify-between gap-x-3 gap-y-2 border-t border-[color:var(--hairline)] pt-6 sm:flex-row'>
           <div className='text-muted-foreground/40 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:justify-start'>
             <span>
               &copy; {currentYear} {displayName}.{' '}

@@ -59,19 +59,21 @@ export function AnnouncementDetailModal({
         <div className='space-y-4'>
           {announcement?.content && (
             <div>
-              <h4 className='mb-2 font-medium'>{t('Content')}</h4>
+              <h4 className='mb-2 text-sm font-semibold tracking-tight'>
+                {t('Content')}
+              </h4>
               <RichContent breaks content={announcement.content} />
             </div>
           )}
           {announcement?.extra && (
             <div>
-              <h4 className='mb-2 font-medium'>
+              <h4 className='mb-2 text-sm font-semibold tracking-tight'>
                 {t('Additional Information')}
               </h4>
               <RichContent
                 breaks
                 content={announcement.extra}
-                className='text-muted-foreground'
+                className='text-muted-foreground leading-relaxed'
               />
             </div>
           )}

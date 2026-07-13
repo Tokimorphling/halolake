@@ -209,11 +209,11 @@ export function StatCard(props: StatCardProps) {
   const sparklineVariant = props.sparklineVariant ?? 'bars'
 
   return (
-    <div className='group flex min-h-32 flex-col justify-between gap-3'>
+    <div className='group flex min-h-32 flex-col justify-between gap-3.5'>
       <div className='flex items-start justify-between gap-1'>
-        <div className='text-muted-foreground flex items-center gap-1.5 text-xs font-medium sm:gap-2'>
+        <div className='text-muted-foreground flex items-center gap-1.5 text-xs font-medium tracking-wide sm:gap-2'>
           <Icon
-            className='text-muted-foreground/60 size-3.5 shrink-0'
+            className='text-muted-foreground/55 size-3.5 shrink-0'
             aria-hidden='true'
           />
           <span className='line-clamp-2 leading-snug'>{props.title}</span>
@@ -228,19 +228,19 @@ export function StatCard(props: StatCardProps) {
         </div>
       ) : props.error ? (
         <div className='flex flex-col gap-1'>
-          <div className='text-muted-foreground mt-0.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:text-2xl'>
+          <div className='text-muted-foreground mt-0.5 font-mono text-base font-semibold tracking-tight break-all tabular-nums sm:text-2xl'>
             --
           </div>
-          <p className='text-muted-foreground/60 text-xs'>
+          <p className='text-muted-foreground/65 text-xs leading-relaxed'>
             {props.description}
           </p>
         </div>
       ) : (
         <div className='flex flex-col gap-1'>
-          <div className='text-foreground font-mono text-2xl font-semibold tracking-tight break-all tabular-nums'>
+          <div className='text-foreground font-mono text-[1.65rem] leading-none font-semibold tracking-tight break-all tabular-nums sm:text-2xl'>
             {props.value}
           </div>
-          <p className='text-muted-foreground/60 text-xs leading-relaxed'>
+          <p className='text-muted-foreground/65 text-xs leading-relaxed'>
             {props.description}
           </p>
         </div>

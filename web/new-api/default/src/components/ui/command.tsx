@@ -41,7 +41,7 @@ function Command({
     <CommandPrimitive
       data-slot='command'
       className={cn(
-        'bg-popover text-popover-foreground flex size-full flex-col overflow-hidden rounded-xl! p-1',
+        'bg-popover text-popover-foreground flex size-full flex-col overflow-hidden rounded-xl! p-1 not-in-data-[slot=dialog-content]:shadow-[0_8px_30px_oklch(0_0_0/0.10)] not-in-data-[slot=dialog-content]:ring-1 not-in-data-[slot=dialog-content]:ring-foreground/8',
         className
       )}
       {...props}

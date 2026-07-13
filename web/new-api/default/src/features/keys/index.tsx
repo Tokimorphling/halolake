@@ -30,7 +30,14 @@ export function ApiKeys() {
   return (
     <ApiKeysProvider>
       <SectionPageLayout fixedContent>
-        <SectionPageLayout.Title>{t('API Keys')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          <span className='block min-w-0'>
+            <span className='block truncate'>{t('API Keys')}</span>
+            <span className='text-muted-foreground mt-0.5 block truncate text-xs font-normal tracking-normal sm:text-sm'>
+              {t('Manage tokens for API access and client integrations')}
+            </span>
+          </span>
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <ApiKeysPrimaryButtons />
         </SectionPageLayout.Actions>

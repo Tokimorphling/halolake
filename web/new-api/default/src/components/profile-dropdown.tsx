@@ -59,9 +59,15 @@ export function ProfileDropdown() {
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger
-          render={<Button variant='ghost' className='relative size-6 p-0' />}
+          render={
+            <Button
+              variant='ghost'
+              size='icon'
+              className='app-header-control relative p-0'
+            />
+          }
         >
-          <Avatar className='size-6'>
+          <Avatar className='size-7 ring-1 ring-foreground/8'>
             <AvatarFallback
               className={`${avatarFallbackClassName} text-[11px]`}
               style={avatarFallbackStyle}
@@ -70,9 +76,13 @@ export function ProfileDropdown() {
             </AvatarFallback>
           </Avatar>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align='end' sideOffset={8} className='w-56'>
-          <div className='flex items-center gap-2 px-1.5 py-1.5'>
-            <Avatar className='size-8'>
+        <DropdownMenuContent
+          align='end'
+          sideOffset={10}
+          className='app-header-surface w-60 rounded-2xl p-1.5 ring-0'
+        >
+          <div className='flex items-center gap-2.5 px-2 py-2'>
+            <Avatar className='size-9 ring-1 ring-foreground/8'>
               <AvatarFallback
                 className={`${avatarFallbackClassName} text-xs`}
                 style={avatarFallbackStyle}
@@ -81,7 +91,7 @@ export function ProfileDropdown() {
               </AvatarFallback>
             </Avatar>
             <div className='flex flex-1 flex-col gap-0.5 overflow-hidden'>
-              <p className='text-foreground truncate text-sm font-medium'>
+              <p className='text-foreground truncate text-sm font-medium tracking-tight'>
                 {displayName}
               </p>
               <div className='flex items-center gap-1.5'>
@@ -90,7 +100,7 @@ export function ProfileDropdown() {
                 </span>
                 {user?.group && (
                   <>
-                    <span className='text-muted-foreground text-xs'>·</span>
+                    <span className='text-muted-foreground/70 text-xs'>·</span>
                     <span className='text-muted-foreground truncate text-xs'>
                       {String(user.group)}
                     </span>
@@ -100,22 +110,29 @@ export function ProfileDropdown() {
             </div>
           </div>
 
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator className='mx-1 my-1' />
 
-          <DropdownMenuItem onClick={() => navigate({ to: '/profile' })}>
-            <User className='size-4' />
+          <DropdownMenuItem
+            className='rounded-xl px-2 py-1.5'
+            onClick={() => navigate({ to: '/profile' })}
+          >
+            <User className='size-4 opacity-70' />
             {t('Profile')}
           </DropdownMenuItem>
 
           {isWalletVisible && (
-            <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>
-              <Wallet className='size-4' />
+            <DropdownMenuItem
+              className='rounded-xl px-2 py-1.5'
+              onClick={() => navigate({ to: '/wallet' })}
+            >
+              <Wallet className='size-4 opacity-70' />
               {t('Wallet')}
             </DropdownMenuItem>
           )}
 
           {isSuperAdmin && (
             <DropdownMenuItem
+              className='rounded-xl px-2 py-1.5'
               onClick={() =>
                 navigate({
                   to: '/system-settings/site/$section',
@@ -123,14 +140,18 @@ export function ProfileDropdown() {
                 })
               }
             >
-              <Settings className='size-4' />
+              <Settings className='size-4 opacity-70' />
               {t('System Settings')}
             </DropdownMenuItem>
           )}
 
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator className='mx-1 my-1' />
 
-          <DropdownMenuItem variant='destructive' onClick={() => setOpen(true)}>
+          <DropdownMenuItem
+            variant='destructive'
+            className='rounded-xl px-2 py-1.5'
+            onClick={() => setOpen(true)}
+          >
             <LogOut className='size-4' />
             {t('Sign out')}
           </DropdownMenuItem>

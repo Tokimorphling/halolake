@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: 'Public Sans', sans-serif;
+  /* System stack first (optical sizing / tracking), then Public Sans. */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Public Sans', 'Segoe UI', system-ui,
+    sans-serif;
   /* Editorial serif token — the body face used by the `serif` font axis
    * and by presets that opt in (currently Anthropic). Lora carries only
    * Latin glyphs, so the stack walks through CJK serifs (Noto / Source Han
@@ -91,7 +94,8 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 :root {
-  --radius: 1rem;
+  /* ~12px continuous corner — closer to Apple control radii than 16px. */
+  --radius: 0.75rem;
   --app-header-height: 3rem;
   /* Static build-channel fallback consumed when JS hasn't booted yet. */
   --app-rev: '2k6e8r7p';
@@ -100,7 +104,28 @@ For commercial licensing, please contact support@quantumnous.com
    * in theme-presets.css. Default mirrors `--font-sans` so behavior is
    * identical when no font preference is set. */
   --font-body: var(--font-sans);
-  --background: oklch(1 0 0);
+  /* Translucent materials (header / sidebar chrome). Opacity rises under
+   * prefers-reduced-transparency. */
+  --material-chrome: oklch(1 0 0 / 72%);
+  --material-chrome-border: oklch(0.145 0 0 / 8%);
+  --material-sidebar: oklch(0.975 0 0 / 82%);
+  --material-elevated: oklch(1 0 0 / 86%);
+  --material-scrim: oklch(0 0 0 / 18%);
+  --material-blur: 20px;
+  --material-saturate: 180%;
+  --hairline: oklch(0.145 0 0 / 8%);
+  --shadow-elevated:
+    0 1px 2px oklch(0 0 0 / 4%), 0 8px 24px oklch(0 0 0 / 6%);
+  --shadow-sheet:
+    0 0 0 0.5px oklch(0 0 0 / 4%), 0 12px 40px oklch(0 0 0 / 12%);
+  --tracking-display: -0.022em;
+  --tracking-title: -0.015em;
+  --tracking-body: 0em;
+  --tracking-caption: 0.01em;
+  --leading-display: 1.05;
+  --leading-title: 1.2;
+  --leading-body: 1.5;
+  --background: oklch(0.985 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -124,8 +149,8 @@ For commercial licensing, please contact support@quantumnous.com
   --info-foreground: oklch(0.985 0 0);
   --neutral: oklch(0.708 0 0);
   --neutral-foreground: oklch(0.145 0 0);
-  --border: oklch(0.93 0 0);
-  --input: oklch(0.93 0 0);
+  --border: oklch(0.92 0 0);
+  --input: oklch(0.92 0 0);
   --ring: oklch(0.708 0 0);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
@@ -171,12 +196,24 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .dark {
-  /* OpenAI-like dark mode with a crisp charcoal canvas. */
-  --background: oklch(0.235 0 0);
+  /* Charcoal canvas with frosted chrome materials. */
+  --material-chrome: oklch(0.22 0 0 / 72%);
+  --material-chrome-border: oklch(1 0 0 / 10%);
+  --material-sidebar: oklch(0.21 0 0 / 78%);
+  --material-elevated: oklch(0.28 0 0 / 88%);
+  --material-scrim: oklch(0 0 0 / 42%);
+  --material-blur: 24px;
+  --material-saturate: 160%;
+  --hairline: oklch(1 0 0 / 10%);
+  --shadow-elevated:
+    0 1px 2px oklch(0 0 0 / 20%), 0 12px 32px oklch(0 0 0 / 35%);
+  --shadow-sheet:
+    0 0 0 0.5px oklch(1 0 0 / 8%), 0 16px 48px oklch(0 0 0 / 45%);
+  --background: oklch(0.22 0 0);
   --foreground: oklch(0.965 0 0);
-  --card: oklch(0.285 0 0);
+  --card: oklch(0.27 0 0);
   --card-foreground: oklch(0.965 0 0);
-  --popover: oklch(0.305 0 0);
+  --popover: oklch(0.29 0 0);
   --popover-foreground: oklch(0.965 0 0);
   --primary: oklch(0.965 0 0);
   --primary-foreground: oklch(0.155 0 0);
@@ -204,13 +241,13 @@ For commercial licensing, please contact support@quantumnous.com
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.225 0 0);
+  --sidebar: oklch(0.21 0 0);
   --sidebar-foreground: oklch(0.95 0 0);
   --sidebar-primary: oklch(0.965 0 0);
   --sidebar-primary-foreground: oklch(0.155 0 0);
-  --sidebar-accent: oklch(0.355 0 0);
+  --sidebar-accent: oklch(0.34 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 11%);
+  --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.68 0 0);
   --skeleton-base: oklch(0.335 0 0);
   --skeleton-highlight: oklch(0.44 0 0);

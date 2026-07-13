@@ -250,7 +250,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
       onChange={handleSearchChange}
       onCompositionStart={handleSearchCompositionStart}
       onCompositionEnd={handleSearchCompositionEnd}
-      className='w-full sm:w-[200px] lg:w-[240px]'
+      className='bg-muted/35 border-border/50 focus-visible:bg-background h-8 w-full shadow-none sm:w-[200px] lg:w-[240px]'
     />
   )
 
@@ -287,7 +287,12 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
   let resetButton: ReactNode = null
   if (hasSearch) {
     resetButton = (
-      <Button variant='outline' onClick={handleReset} disabled={!isFiltered}>
+      <Button
+        variant='outline'
+        onClick={handleReset}
+        disabled={!isFiltered}
+        className='border-border/60 bg-background/50 h-8 shadow-none'
+      >
         {t('Reset')}
       </Button>
     )
@@ -296,7 +301,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
       <Button
         variant='ghost'
         onClick={handleReset}
-        className='text-muted-foreground hover:text-foreground gap-1 px-2'
+        className='text-muted-foreground hover:text-foreground h-8 gap-1 px-2'
       >
         {t('Reset')}
         <Cross2Icon />
@@ -305,7 +310,11 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
   }
 
   const searchButton = hasSearch ? (
-    <Button onClick={props.onSearch} disabled={props.searchLoading}>
+    <Button
+      onClick={props.onSearch}
+      disabled={props.searchLoading}
+      className='h-8 shadow-none'
+    >
       {props.searchLoading && <Loader2 className='animate-spin' />}
       {t('Search')}
     </Button>
@@ -323,7 +332,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
       onClick={() => setExpanded((p) => !p)}
       aria-expanded={expanded}
       className={cn(
-        'text-muted-foreground hover:text-foreground gap-1 px-2',
+        'text-muted-foreground hover:text-foreground h-8 gap-1 px-2',
         props.hasExpandedActiveFilters &&
           !expanded &&
           'text-primary hover:text-primary'
@@ -343,25 +352,25 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
 
   if (hasLeftActions) {
     return (
-      <div className={cn('flex flex-col gap-2', props.className)}>
-        <div className='flex flex-wrap items-center gap-2 sm:gap-3'>
+      <div className={cn('flex flex-col gap-2.5', props.className)}>
+        <div className='flex flex-wrap items-center gap-2 sm:gap-2.5'>
           {props.customSearch !== undefined ? props.customSearch : searchInput}
           {props.additionalSearch}
           {filterChips}
-          <div className='ms-auto flex shrink-0 items-center gap-1.5 sm:gap-2'>
+          <div className='ms-auto flex shrink-0 items-center gap-1 sm:gap-1.5'>
             {expandToggle}
           </div>
         </div>
 
         {expanded && hasExpandable && (
-          <div className='flex flex-wrap items-center gap-2 sm:gap-3'>
+          <div className='flex flex-wrap items-center gap-2 sm:gap-2.5'>
             {props.expandable}
           </div>
         )}
 
-        <div className='flex flex-wrap items-center gap-2 sm:gap-3'>
+        <div className='flex flex-wrap items-center gap-2 sm:gap-2.5'>
           {props.leftActions}
-          <div className='ms-auto flex shrink-0 items-center gap-1.5 sm:gap-2'>
+          <div className='ms-auto flex shrink-0 items-center gap-1 sm:gap-1.5'>
             {props.preActions}
             {resetButton}
             {searchButton}
@@ -376,7 +385,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
   return (
     <div
       className={cn(
-        'flex flex-wrap items-center gap-2 sm:gap-3',
+        'flex flex-wrap items-center gap-2 sm:gap-2.5',
         props.className
       )}
     >
@@ -385,7 +394,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
       {filterChips}
       {expanded && hasExpandable && props.expandable}
 
-      <div className='ms-auto flex shrink-0 items-center gap-1.5 sm:gap-2'>
+      <div className='ms-auto flex shrink-0 items-center gap-1 sm:gap-1.5'>
         {props.preActions}
         {resetButton}
         {searchButton}

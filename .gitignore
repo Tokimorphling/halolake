@@ -9,3 +9,4 @@
 !.env.example
 .DS_Store
 data/
+.opencode

@@ -65,9 +65,11 @@ export function ApiKeysDeleteDialog() {
       open={open === 'delete'}
       onOpenChange={(open) => !open && setOpen(null)}
     >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t('Are you sure?')}</AlertDialogTitle>
+      <AlertDialogContent className='sm:max-w-md'>
+        <AlertDialogHeader className='text-start'>
+          <AlertDialogTitle className='tracking-tight'>
+            {t('Are you sure?')}
+          </AlertDialogTitle>
           <AlertDialogDescription>
             {t('This will permanently delete API key')}{' '}
             <span className='font-semibold'>{currentRow?.name}</span>

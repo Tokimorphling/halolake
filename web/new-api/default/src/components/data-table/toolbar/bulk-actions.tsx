@@ -166,27 +166,27 @@ export function DataTableBulkActions<TData>({
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         className={cn(
-          'fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl',
-          'transition-all delay-100 duration-300 ease-out hover:scale-105',
+          'fixed bottom-6 left-1/2 z-50 -translate-x-1/2',
+          'transition-all delay-100 duration-300 ease-out hover:scale-[1.02]',
           'focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:outline-none'
         )}
       >
         <div
           className={cn(
-            'p-2 shadow-xl',
-            'rounded-xl border',
-            'bg-background/95 supports-[backdrop-filter]:bg-background/60 backdrop-blur-lg',
-            'flex items-center gap-x-2'
+            'app-material-chrome flex items-center gap-x-2 rounded-full px-2.5 py-2',
+            'border border-[color:var(--material-chrome-border)]',
+            'shadow-[0_8px_32px_-8px_oklch(0_0_0/0.16),0_0_0_0.5px_var(--hairline)]',
+            'dark:shadow-[0_10px_36px_-10px_oklch(0_0_0/0.5),0_0_0_0.5px_var(--hairline)]'
           )}
         >
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
-                  variant='outline'
+                  variant='ghost'
                   size='icon'
                   onClick={handleClearSelection}
-                  className='size-6'
+                  className='text-muted-foreground hover:text-foreground size-7 rounded-full'
                   aria-label={t('Clear selection')}
                   title={t('Clear selection (Escape)')}
                 />
@@ -201,18 +201,18 @@ export function DataTableBulkActions<TData>({
           </Tooltip>
 
           <Separator
-            className='h-5'
+            className='bg-border/60 h-5'
             orientation='vertical'
             aria-hidden='true'
           />
 
           <div
-            className='flex items-center gap-x-1 text-sm'
+            className='text-muted-foreground flex items-center gap-x-1.5 text-sm'
             id='bulk-actions-description'
           >
             <Badge
               variant='default'
-              className='min-w-8 rounded-lg'
+              className='min-w-7 rounded-full px-2'
               aria-label={`${selectedCount} selected`}
             >
               {selectedCount}
@@ -225,7 +225,7 @@ export function DataTableBulkActions<TData>({
           </div>
 
           <Separator
-            className='h-5'
+            className='bg-border/60 h-5'
             orientation='vertical'
             aria-hidden='true'
           />

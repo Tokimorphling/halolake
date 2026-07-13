@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSystemConfig } from '@/hooks/use-system-config'
+import { cn } from '@/lib/utils'
 
 type AuthLayoutProps = {
   children: React.ReactNode
@@ -31,30 +32,44 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   const { systemName, logo, loading } = useSystemConfig()
 
   return (
-    <div className='relative grid h-svh max-w-none'>
+    <div className='bg-background text-foreground relative grid min-h-svh max-w-none'>
       <Link
         to='/'
-        className='absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity hover:opacity-80 sm:top-8 sm:left-8'
+        className={cn(
+          'absolute top-4 left-4 z-10 flex items-center gap-2.5 rounded-full px-2.5 py-1.5 transition-opacity hover:opacity-90 sm:top-6 sm:left-6',
+          'app-material-chrome border border-[color:var(--material-chrome-border)]',
+          'shadow-[0_1px_0_0_var(--hairline)]'
+        )}
       >
-        <div className='relative h-8 w-8'>
+        <div className='relative size-7 shrink-0'>
           {loading ? (
-            <Skeleton className='absolute inset-0 rounded-full' />
+            <Skeleton className='absolute inset-0 rounded-lg' />
           ) : (
             <img
               src={logo}
               alt={t('Logo')}
-              className='h-8 w-8 rounded-full object-cover'
+              className='size-7 rounded-lg object-contain'
             />
           )}
         </div>
         {loading ? (
-          <Skeleton className='h-6 w-24' />
+          <Skeleton className='h-4 w-20' />
         ) : (
-          <h1 className='text-xl font-medium'>{systemName}</h1>
+          <span className='text-sm font-semibold tracking-tight'>
+            {systemName}
+          </span>
         )}
       </Link>
-      <div className='container flex items-center pt-16 sm:pt-0'>
-        <div className='mx-auto flex w-full flex-col justify-center space-y-2 px-4 py-8 sm:w-[480px] sm:p-8'>
+      <div className='container flex items-center justify-center px-4 py-20 sm:py-10'>
+        <div
+          className={cn(
+            'bg-card/90 mx-auto flex w-full flex-col justify-center space-y-2 px-5 py-7 sm:w-[480px] sm:px-8 sm:py-9',
+            'rounded-2xl ring-1 ring-foreground/6',
+            'shadow-[0_8px_40px_oklch(0_0_0/0.08),0_1px_0_0_var(--hairline)]',
+            'dark:bg-card/80 dark:shadow-[0_12px_48px_oklch(0_0_0/0.35),0_1px_0_0_var(--hairline)]',
+            'backdrop-blur-md'
+          )}
+        >
           {children}
         </div>
       </div>

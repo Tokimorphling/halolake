@@ -74,31 +74,38 @@ const Toaster = (props: ToasterProps) => {
           />
         ),
       }}
+      toastOptions={{
+        classNames: {
+          toast:
+            'app-material-chrome border-[color:var(--material-chrome-border)] shadow-[0_8px_32px_-8px_oklch(0_0_0/0.16),0_0_0_0.5px_var(--hairline)] dark:shadow-[0_10px_36px_-10px_oklch(0_0_0/0.5),0_0_0_0.5px_var(--hairline)]',
+        },
+      }}
       style={
         {
-          '--normal-bg': 'var(--popover)',
+          '--normal-bg': 'var(--material-chrome)',
           '--normal-text': 'var(--popover-foreground)',
-          '--normal-border': 'var(--border)',
+          '--normal-border': 'var(--material-chrome-border)',
           '--success-bg':
-            'color-mix(in oklch, var(--success) 16%, var(--popover))',
+            'color-mix(in oklch, var(--success) 12%, var(--material-chrome))',
           '--success-border':
-            'color-mix(in oklch, var(--success) 35%, var(--border))',
+            'color-mix(in oklch, var(--success) 28%, var(--material-chrome-border))',
           '--success-text': 'var(--success)',
-          '--info-bg': 'color-mix(in oklch, var(--info) 16%, var(--popover))',
+          '--info-bg':
+            'color-mix(in oklch, var(--info) 12%, var(--material-chrome))',
           '--info-border':
-            'color-mix(in oklch, var(--info) 35%, var(--border))',
+            'color-mix(in oklch, var(--info) 28%, var(--material-chrome-border))',
           '--info-text': 'var(--info)',
           '--warning-bg':
-            'color-mix(in oklch, var(--warning) 18%, var(--popover))',
+            'color-mix(in oklch, var(--warning) 14%, var(--material-chrome))',
           '--warning-border':
-            'color-mix(in oklch, var(--warning) 38%, var(--border))',
+            'color-mix(in oklch, var(--warning) 30%, var(--material-chrome-border))',
           '--warning-text': 'var(--warning)',
           '--error-bg':
-            'color-mix(in oklch, var(--destructive) 16%, var(--popover))',
+            'color-mix(in oklch, var(--destructive) 12%, var(--material-chrome))',
           '--error-border':
-            'color-mix(in oklch, var(--destructive) 35%, var(--border))',
+            'color-mix(in oklch, var(--destructive) 28%, var(--material-chrome-border))',
           '--error-text': 'var(--destructive)',
-          '--border-radius': 'var(--radius)',
+          '--border-radius': '1rem',
         } as React.CSSProperties
       }
       {...props}

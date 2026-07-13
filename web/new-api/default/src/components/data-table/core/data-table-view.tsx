@@ -62,7 +62,7 @@ export function DataTableView<TData>(props: DataTableViewProps<TData>) {
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-lg border',
+        'bg-card/40 overflow-hidden rounded-xl border border-[color:var(--hairline)] shadow-[0_1px_0_0_var(--hairline)]',
         props.containerClassName
       )}
       {...props.containerProps}
@@ -139,8 +139,10 @@ function SplitHeaderTableView<TData>({
       <div
         className={cn(
           'min-h-0 flex-1 overflow-auto',
-          '**:data-[slot=table-header]:[--table-header-bg:var(--table-header)]',
+          '**:data-[slot=table-header]:[--table-header-bg:color-mix(in_oklch,var(--table-header)_88%,transparent)]',
           '**:data-[slot=table-header]:bg-(--table-header-bg)',
+          '**:data-[slot=table-header]:backdrop-blur-md',
+          '**:data-[slot=table-header]:supports-backdrop-filter:bg-(--table-header-bg)',
           props.splitHeaderScrollClassName,
           props.bodyContainerClassName
         )}
@@ -148,7 +150,7 @@ function SplitHeaderTableView<TData>({
         <table
           data-slot='table'
           className={cn(
-            'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm',
+            'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-xs [&_th_*]:text-xs',
             props.tableClassName
           )}
           style={tableSizing.style}

@@ -31,7 +31,7 @@ function Table({ className, ...props }: React.ComponentProps<'table'>) {
       <table
         data-slot='table'
         className={cn(
-          'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm',
+          'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-xs [&_th_*]:text-xs',
           className
         )}
         {...props}
@@ -44,7 +44,10 @@ function TableHeader({ className, ...props }: React.ComponentProps<'thead'>) {
   return (
     <thead
       data-slot='table-header'
-      className={cn('[&_tr]:border-b', className)}
+      className={cn(
+        '[&_tr]:border-b [&_tr]:border-[color:var(--hairline)]',
+        className
+      )}
       {...props}
     />
   )
@@ -78,7 +81,7 @@ function TableRow({ className, ...props }: React.ComponentProps<'tr'>) {
     <tr
       data-slot='table-row'
       className={cn(
-        'group data-[state=selected]:bg-muted border-b transition-colors hover:[background-color:color-mix(in_oklch,var(--muted)_50%,var(--background))] has-aria-expanded:[background-color:color-mix(in_oklch,var(--muted)_50%,var(--background))]',
+        'group data-[state=selected]:bg-muted/70 border-b border-[color:var(--hairline)] transition-colors hover:[background-color:color-mix(in_oklch,var(--muted)_45%,var(--background))] has-aria-expanded:[background-color:color-mix(in_oklch,var(--muted)_45%,var(--background))]',
         className
       )}
       {...props}
@@ -91,7 +94,7 @@ function TableHead({ className, ...props }: React.ComponentProps<'th'>) {
     <th
       data-slot='table-head'
       className={cn(
-        'text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap [&:has([role=checkbox])]:pr-0',
+        'text-muted-foreground h-10 px-2 text-left align-middle text-xs font-medium tracking-wide whitespace-nowrap [&:has([role=checkbox])]:pr-0',
         className
       )}
       {...props}

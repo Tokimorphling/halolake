@@ -91,19 +91,21 @@ export function PerformanceHealthPanel() {
   const hasData = models.length > 0
 
   return (
-    <section className='bg-card h-full overflow-hidden rounded-2xl border shadow-xs'>
-      <div className='flex items-center gap-2 border-b px-4 py-3 sm:px-5'>
+    <section className='bg-card ring-foreground/6 h-full overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 dark:shadow-[0_1px_0_0_var(--hairline)]'>
+      <div className='border-border/60 flex items-center gap-2 border-b px-4 py-3.5 sm:px-5'>
         <HeartPulse
-          className='text-muted-foreground/60 size-4 shrink-0'
+          className='text-muted-foreground/55 size-4 shrink-0'
           aria-hidden='true'
         />
-        <h3 className='text-sm font-semibold'>{t('Performance health')}</h3>
-        <span className='text-muted-foreground ml-auto text-xs'>
+        <h3 className='text-[15px] leading-snug font-semibold tracking-tight'>
+          {t('Performance health')}
+        </h3>
+        <span className='text-muted-foreground ml-auto text-xs leading-relaxed'>
           {t('Performance metrics for the last 24 hours')}
         </span>
       </div>
 
-      <div className='space-y-3 p-4 sm:p-5'>
+      <div className='space-y-3.5 p-4 sm:p-5'>
         <div className='grid grid-cols-3 gap-2'>
           <MetricCell
             icon={HeartPulse}
@@ -127,22 +129,22 @@ export function PerformanceHealthPanel() {
         </div>
 
         {loading ? (
-          <div className='space-y-1'>
+          <div className='space-y-1.5'>
             {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className='h-5 w-full rounded' />
+              <Skeleton key={i} className='h-5 w-full rounded-lg' />
             ))}
           </div>
         ) : (
           hasData && (
             <div>
-              <span className='text-muted-foreground mb-1 block text-[11px] font-medium'>
+              <span className='text-muted-foreground mb-1.5 block text-[11px] font-medium tracking-wide'>
                 {t('Top models by traffic')}
               </span>
               <div className='grid grid-cols-1 gap-x-4 sm:grid-cols-2'>
                 {topModels.map((model) => (
                   <div
                     key={model.model_name}
-                    className='flex items-center justify-between gap-2 rounded px-1.5 py-1'
+                    className='flex items-center justify-between gap-2 rounded-lg px-1.5 py-1'
                   >
                     <span className='min-w-0 flex-1 truncate font-mono text-[11px]'>
                       {model.model_name}
@@ -184,8 +186,8 @@ function MetricCell(props: {
 }) {
   const Icon = props.icon
   return (
-    <div className='bg-muted/40 rounded-xl px-3 py-2.5'>
-      <div className='text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium'>
+    <div className='bg-muted/35 ring-foreground/5 rounded-2xl px-3 py-2.5 ring-1'>
+      <div className='text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide'>
         <Icon className='size-3 shrink-0' aria-hidden='true' />
         <span className='truncate'>{props.label}</span>
       </div>
@@ -194,7 +196,7 @@ function MetricCell(props: {
       ) : (
         <div
           className={cn(
-            'mt-1.5 font-mono text-sm font-semibold tabular-nums',
+            'mt-1.5 font-mono text-sm font-semibold tracking-tight tabular-nums',
             props.valueClassName
           )}
         >

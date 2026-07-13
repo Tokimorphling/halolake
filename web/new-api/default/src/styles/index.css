@@ -62,6 +62,27 @@ For commercial licensing, please contact support@quantumnous.com
      * (defined in theme.css, swapped by `[data-theme-font='...']` blocks
      * in theme-presets.css). Defaults to the project's humanist sans. */
     font-family: var(--font-body);
+    font-optical-sizing: auto;
+    line-height: var(--leading-body, 1.5);
+    letter-spacing: var(--tracking-body, 0em);
+  }
+
+  h1,
+  .text-display {
+    letter-spacing: var(--tracking-display, -0.022em);
+    line-height: var(--leading-display, 1.05);
+  }
+
+  h2,
+  h3,
+  .text-title {
+    letter-spacing: var(--tracking-title, -0.015em);
+    line-height: var(--leading-title, 1.2);
+  }
+
+  small,
+  .text-caption {
+    letter-spacing: var(--tracking-caption, 0.01em);
   }
 
   /* Keep sticky headers stable while primitives lock body scrolling. */
@@ -258,6 +279,114 @@ For commercial licensing, please contact support@quantumnous.com
 
   .glass-5 {
     @apply border-border border-b-input from-card/100 to-card/20 dark:border-border/10 dark:border-t-border/30 dark:from-primary/15 dark:to-primary/5 border bg-linear-to-b dark:border-b-0;
+  }
+
+  /* Apple materials — translucent chrome over scrolling content.
+   * Prefer `app-material-*` in components; bare `material-*` are aliases. */
+  .app-material-chrome,
+  .material-chrome {
+    background: var(--material-chrome);
+    border-color: var(--material-chrome-border);
+    -webkit-backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+    backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+  }
+
+  .app-material-sidebar,
+  .material-sidebar {
+    background: var(--material-sidebar);
+    -webkit-backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+    backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+  }
+
+  .material-elevated {
+    background: var(--material-elevated);
+    box-shadow: var(--shadow-elevated);
+    -webkit-backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+    backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+  }
+
+  .material-sheet {
+    box-shadow: var(--shadow-sheet);
+  }
+
+  .scroll-edge-fade {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      black 12px,
+      black calc(100% - 12px),
+      transparent 100%
+    );
+  }
+
+  .app-page-title {
+    background: color-mix(in oklch, var(--background) 88%, transparent);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+  }
+
+  /* Soft circular controls that sit on frosted header chrome. */
+  .app-header-control {
+    @apply text-muted-foreground hover:text-foreground size-8 shrink-0 rounded-full;
+    @apply bg-transparent hover:bg-foreground/5 active:bg-foreground/[0.08];
+    @apply transition-[transform,background-color,color,box-shadow] duration-150 ease-out;
+    @apply active:scale-[0.94];
+    @apply aria-expanded:bg-foreground/5 aria-expanded:text-foreground;
+  }
+
+  /* Floating panels spawned from header chrome (menus / popovers / command). */
+  .app-header-surface {
+    background: color-mix(in oklch, var(--popover) 86%, transparent);
+    backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+    -webkit-backdrop-filter: blur(var(--material-blur))
+      saturate(var(--material-saturate));
+    box-shadow:
+      0 12px 40px oklch(0 0 0 / 0.12),
+      0 0 0 0.5px var(--hairline);
+  }
+
+  .dark .app-header-surface {
+    background: color-mix(in oklch, var(--popover) 78%, transparent);
+    box-shadow:
+      0 16px 48px oklch(0 0 0 / 0.45),
+      0 0 0 0.5px var(--hairline);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .app-material-chrome,
+    .material-chrome,
+    .material-elevated {
+      background: var(--background);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .app-material-sidebar,
+    .material-sidebar {
+      background: var(--sidebar);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .app-page-title {
+      background: var(--background);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .app-header-surface {
+      background: var(--popover);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      box-shadow: 0 12px 40px oklch(0 0 0 / 0.12);
+    }
   }
 
   /* Fade effects - matching Launch UI template */
@@ -482,28 +611,26 @@ For commercial licensing, please contact support@quantumnous.com
   }
 }
 
-/* Micro-interactions — Vercel-style subtle hover/active feedback */
+/* Micro-interactions — Apple-style instant press + soft card lift */
 @media (prefers-reduced-motion: no-preference) {
   [data-slot='card']:not([data-card-hover='false']) {
     transition:
-      transform 150ms ease,
-      box-shadow 150ms ease;
+      transform 200ms cubic-bezier(0.33, 1, 0.68, 1),
+      box-shadow 200ms cubic-bezier(0.33, 1, 0.68, 1);
   }
 
   @media (min-width: 641px) {
     [data-slot='card']:not([data-card-hover='false']):hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgb(0 0 0 / 0.06);
-    }
-
-    .dark [data-slot='card']:not([data-card-hover='false']):hover {
-      box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
+      box-shadow: var(--shadow-elevated);
     }
   }
 
+  /* Feedback on pointer-down (scale 0.97), not only on release */
   button:not(:disabled):active,
   [role='button']:not(:disabled):active {
-    transform: scale(0.98);
+    transform: scale(0.97);
+    transition: transform 100ms ease-out;
   }
 
   [data-slot='table'] tr {
@@ -610,5 +737,46 @@ For commercial licensing, please contact support@quantumnous.com
   .terminal-demo-spin,
   .terminal-demo-pulse {
     animation: none !important;
+  }
+}
+
+/* Frost materials when user prefers reduced transparency */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --material-chrome: oklch(1 0 0 / 96%);
+    --material-sidebar: oklch(0.985 0 0 / 98%);
+    --material-elevated: oklch(1 0 0 / 98%);
+    --material-blur: 0px;
+    --material-saturate: 100%;
+  }
+
+  .dark {
+    --material-chrome: oklch(0.22 0 0 / 96%);
+    --material-sidebar: oklch(0.21 0 0 / 98%);
+    --material-elevated: oklch(0.28 0 0 / 98%);
+  }
+
+  .material-chrome,
+  .material-sidebar,
+  .material-elevated {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --material-chrome: oklch(1 0 0);
+    --material-sidebar: oklch(0.985 0 0);
+    --material-elevated: oklch(1 0 0);
+    --material-blur: 0px;
+    --hairline: oklch(0 0 0 / 35%);
+  }
+
+  .dark {
+    --material-chrome: oklch(0.18 0 0);
+    --material-sidebar: oklch(0.16 0 0);
+    --material-elevated: oklch(0.24 0 0);
+    --hairline: oklch(1 0 0 / 35%);
   }
 }

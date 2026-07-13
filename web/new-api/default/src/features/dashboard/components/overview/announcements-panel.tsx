@@ -81,23 +81,23 @@ export function AnnouncementsPanel() {
                 type='button'
                 onClick={() => handleAnnouncementClick(item)}
                 className={cn(
-                  'group hover:bg-muted/40 w-full px-3 py-3 text-left transition-colors sm:px-5 sm:py-3.5',
-                  idx < list.length - 1 && 'border-border/60 border-b'
+                  'group hover:bg-muted/35 w-full px-3 py-3 text-left transition-colors sm:px-5 sm:py-3.5',
+                  idx < list.length - 1 && 'border-border/50 border-b'
                 )}
               >
                 <div className='flex items-start gap-2.5'>
                   <AnnouncementStatusDot type={item.type} />
                   <div className='flex min-w-0 flex-1 flex-col gap-1'>
-                    <p className='line-clamp-1 text-sm font-medium'>
+                    <p className='line-clamp-1 text-sm font-medium tracking-tight'>
                       {getPreviewText(item.content)}
                     </p>
-                    <div className='flex items-center justify-between'>
+                    <div className='flex items-center justify-between gap-2'>
                       {item.publishDate && (
-                        <time className='text-muted-foreground/60 text-xs'>
+                        <time className='text-muted-foreground/65 text-xs leading-relaxed'>
                           {formatDateTimeObject(new Date(item.publishDate))}
                         </time>
                       )}
-                      <span className='text-muted-foreground/40 text-xs opacity-0 transition-opacity group-hover:opacity-100'>
+                      <span className='text-muted-foreground/45 text-xs opacity-0 transition-opacity group-hover:opacity-100'>
                         {t('Click for details')}
                       </span>
                     </div>

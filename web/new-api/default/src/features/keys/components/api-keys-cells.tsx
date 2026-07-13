@@ -111,7 +111,7 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
                 value={resolvedFullKey || maskedKey}
                 autoFocus
                 onFocus={(e) => e.target.select()}
-                className='bg-muted/50 w-full min-w-[280px] rounded-md border px-3 py-2 font-mono text-xs outline-none'
+                className='bg-muted/50 ring-foreground/6 w-full min-w-[280px] rounded-xl px-3 py-2 font-mono text-xs shadow-[0_1px_0_0_var(--hairline)] ring-1 outline-none'
               />
             )}
           </div>

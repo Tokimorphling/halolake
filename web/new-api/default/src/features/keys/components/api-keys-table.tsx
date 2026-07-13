@@ -67,15 +67,12 @@ function isDisabledApiKeyRow(apiKey: ApiKey) {
 
 function ApiKeysMobileSkeleton() {
   return (
-    <div className='divide-border overflow-hidden rounded-lg border'>
+    <div className='bg-card/40 ring-foreground/6 divide-[color:var(--hairline)] overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 divide-y dark:shadow-[0_1px_0_0_var(--hairline)]'>
       {Array.from({ length: 5 }).map((_, index) => (
-        <div
-          key={index}
-          className='space-y-2 border-b px-3 py-2.5 last:border-b-0'
-        >
+        <div key={index} className='space-y-2 px-3.5 py-3'>
           <div className='flex items-center justify-between'>
             <Skeleton className='h-4 w-32' />
-            <Skeleton className='h-5 w-16 rounded-md' />
+            <Skeleton className='h-5 w-16 rounded-full' />
           </div>
           <div className='flex items-center justify-between gap-3'>
             <Skeleton className='h-7 w-44' />
@@ -102,26 +99,24 @@ function ApiKeysMobileList({
 
   if (!rows.length) {
     return (
-      <div className='rounded-lg border p-8'>
-        <Empty className='border-none p-0'>
-          <EmptyHeader>
-            <EmptyMedia variant='icon'>
-              <Database className='size-6' />
-            </EmptyMedia>
-            <EmptyTitle>{t('No API Keys Found')}</EmptyTitle>
-            <EmptyDescription>
-              {t(
-                'No API keys available. Create your first API key to get started.'
-              )}
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      </div>
+      <Empty className='bg-card/40 ring-foreground/6 shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 dark:shadow-[0_1px_0_0_var(--hairline)]'>
+        <EmptyHeader>
+          <EmptyMedia variant='icon'>
+            <Database className='size-6' />
+          </EmptyMedia>
+          <EmptyTitle>{t('No API Keys Found')}</EmptyTitle>
+          <EmptyDescription>
+            {t(
+              'No API keys available. Create your first API key to get started.'
+            )}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     )
   }
 
   return (
-    <div className='divide-border overflow-hidden rounded-lg border'>
+    <div className='bg-card/40 ring-foreground/6 divide-[color:var(--hairline)] overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 divide-y dark:shadow-[0_1px_0_0_var(--hairline)]'>
       {rows.map((row) => {
         const apiKey = row.original
         const statusConfig = API_KEY_STATUSES[apiKey.status]
@@ -131,7 +126,7 @@ function ApiKeysMobileList({
           <div
             key={row.id}
             className={cn(
-              'bg-card space-y-2.5 border-b px-3 py-2.5 last:border-b-0',
+              'bg-card/60 space-y-2.5 px-3.5 py-3',
               isDisabledApiKeyRow(apiKey) && DISABLED_ROW_MOBILE
             )}
           >
