@@ -101,7 +101,7 @@ function FilterChip(props: {
       type='button'
       onClick={props.onClick}
       className={cn(
-        'group inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-all',
+        'group inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)] active:scale-[0.97]',
         props.active
           ? 'border-foreground/30 bg-foreground/5 text-foreground shadow-sm'
           : 'border-border/70 bg-background text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground'

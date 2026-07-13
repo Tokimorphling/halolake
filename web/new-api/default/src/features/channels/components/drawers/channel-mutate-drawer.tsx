@@ -56,6 +56,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import {
+  sideDrawerAlertClassName,
+  sideDrawerBodyGridClassName,
   sideDrawerContentClassName,
   sideDrawerFooterClassName,
   sideDrawerFormClassName,
@@ -283,6 +285,7 @@ const SENSITIVE_FORM_FIELDS = [
   'aws_key_type',
   'azure_responses_version',
   'force_format',
+  'upstream_endpoint_type',
   'thinking_to_content',
   'proxy',
   'pass_through_body_enabled',
@@ -372,11 +375,13 @@ function CardHeading({ title, icon }: { title: string; icon?: ReactNode }) {
   return (
     <div className='flex items-center gap-3'>
       {icon && (
-        <span className='bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md'>
+        <span className='bg-muted/80 text-muted-foreground ring-foreground/6 flex size-8 shrink-0 items-center justify-center rounded-lg ring-1'>
           {icon}
         </span>
       )}
-      <h3 className='text-sm font-semibold tracking-tight'>{title}</h3>
+      <h3 className='text-title text-sm font-semibold tracking-[var(--tracking-title)]'>
+        {title}
+      </h3>
     </div>
   )
 }
@@ -385,7 +390,7 @@ function SubHeading({ title, icon }: { title: string; icon?: ReactNode }) {
   return (
     <div className='flex items-center gap-2'>
       {icon && <span className='text-muted-foreground'>{icon}</span>}
-      <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
+      <h4 className='text-muted-foreground text-[11px] font-medium tracking-[var(--tracking-caption)] uppercase'>
         {title}
       </h4>
     </div>
@@ -398,8 +403,9 @@ function configuredAdvancedSectionClassName(
 ) {
   return cn(
     className,
-    'border-border/60 rounded-lg border p-3 transition-colors',
-    configured && 'border-primary/35 ring-primary/20 ring-1'
+    'border-border/50 bg-background/40 rounded-xl border p-3.5 transition-[background-color,border-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+    configured &&
+      'border-primary/30 bg-primary/[0.03] ring-primary/15 shadow-[0_1px_0_0_var(--hairline)] ring-1'
   )
 }
 
@@ -472,15 +478,15 @@ function ChannelEditorNav(props: {
   onNavigate: (targetId: string) => void
 }) {
   return (
-    <aside className='hidden self-start lg:sticky lg:top-4 lg:z-20 lg:block'>
-      <div className='flex max-h-[calc(100dvh-12rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-1'>
-        <div className='border-border/60 bg-muted/20 rounded-lg border p-3'>
-          <div className='flex min-w-0 items-center gap-2'>
-            <span className='bg-background flex size-8 shrink-0 items-center justify-center rounded-md border'>
+    <aside className='hidden self-start lg:sticky lg:top-3 lg:z-20 lg:block'>
+      <div className='flex max-h-[calc(100dvh-11rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-0.5'>
+        <div className='bg-card/80 ring-foreground/6 rounded-2xl p-3 shadow-[0_1px_0_0_var(--hairline)] ring-1'>
+          <div className='flex min-w-0 items-center gap-2.5'>
+            <span className='bg-background ring-foreground/8 flex size-9 shrink-0 items-center justify-center rounded-xl ring-1'>
               {props.providerLogo}
             </span>
             <div className='min-w-0'>
-              <p className='truncate text-sm font-medium'>
+              <p className='truncate text-sm font-semibold tracking-tight'>
                 {props.providerLabel}
               </p>
               <p className='text-muted-foreground truncate text-xs'>
@@ -491,7 +497,7 @@ function ChannelEditorNav(props: {
         </div>
 
         <nav
-          className='border-border/60 bg-background rounded-lg border p-1'
+          className='bg-card/80 ring-foreground/6 rounded-2xl p-1.5 shadow-[0_1px_0_0_var(--hairline)] ring-1'
           aria-label={props.navigationLabel}
         >
           {props.items.map((item) => {
@@ -506,8 +512,8 @@ function ChannelEditorNav(props: {
                 <button
                   type='button'
                   className={cn(
-                    'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
-                    isActive && 'bg-muted/70',
+                    'hover:bg-muted/55 flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
+                    isActive && 'bg-muted/75 shadow-[inset_0_0_0_1px_var(--hairline)]',
                     isConfigured && !isError && 'text-primary',
                     isError && 'text-destructive hover:bg-destructive/10'
                   )}
@@ -516,7 +522,7 @@ function ChannelEditorNav(props: {
                 >
                   <span
                     className={cn(
-                      'bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md',
+                      'bg-muted/80 text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg',
                       isConfigured && !isError && 'bg-primary/10 text-primary',
                       isError && 'bg-destructive/10 text-destructive',
                       isDone && !isError && 'text-primary'
@@ -529,7 +535,7 @@ function ChannelEditorNav(props: {
                       {item.title}
                     </span>
                     {item.description && (
-                      <span className='text-muted-foreground block truncate text-xs'>
+                      <span className='text-muted-foreground block truncate text-xs leading-snug'>
                         {item.description}
                       </span>
                     )}
@@ -554,13 +560,13 @@ function ChannelEditorNav(props: {
                   </span>
                 </button>
                 {item.children && isExpanded && (
-                  <div className='border-border/60 ml-5 flex flex-col gap-0.5 border-l py-1 pl-3'>
+                  <div className='border-border/50 ml-5 flex flex-col gap-0.5 border-l py-1 pl-3'>
                     {item.children.map((child) => (
                       <button
                         key={child.id}
                         type='button'
                         className={cn(
-                          'text-muted-foreground hover:bg-muted/50 hover:text-foreground flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors',
+                          'text-muted-foreground hover:bg-muted/50 hover:text-foreground flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-[background-color,color] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                           child.configured && 'text-primary'
                         )}
                         onClick={() => props.onNavigate(child.id)}
@@ -1838,17 +1844,19 @@ export function ChannelMutateDrawer({
             <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
               <div className='min-w-0'>
                 <SheetTitle className='flex items-center gap-3'>
-                  <span className='bg-muted flex size-9 shrink-0 items-center justify-center rounded-md'>
+                  <span className='bg-muted/80 ring-foreground/6 flex size-10 shrink-0 items-center justify-center rounded-xl ring-1'>
                     <ChannelTypeLogo type={currentType} size={22} />
                   </span>
-                  <span>
-                    {isEditing ? t('Edit Channel') : t('Create Channel')}
-                    <span className='text-muted-foreground ml-2 text-sm font-normal'>
+                  <span className='min-w-0'>
+                    <span className='block truncate'>
+                      {isEditing ? t('Edit Channel') : t('Create Channel')}
+                    </span>
+                    <span className='text-muted-foreground mt-0.5 block truncate text-sm font-normal'>
                       {t(currentTypeLabel)}
                     </span>
                   </span>
                 </SheetTitle>
-                <SheetDescription className='mt-1'>
+                <SheetDescription className='mt-2 max-w-2xl text-xs leading-relaxed sm:text-sm'>
                   {isEditing
                     ? t(
                         "Update channel configuration and click save when you're done."
@@ -1874,7 +1882,11 @@ export function ChannelMutateDrawer({
           </SheetHeader>
 
           {sensitiveLocked && (
-            <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+            <Alert
+              className={sideDrawerAlertClassName(
+                'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'
+              )}
+            >
               <AlertDescription>
                 {t(
                   'Sensitive channel settings are read-only for your account.'
@@ -1887,7 +1899,7 @@ export function ChannelMutateDrawer({
           )}
 
           {!isEditing && clipboardConnectionInfo && (
-            <Alert>
+            <Alert className={sideDrawerAlertClassName()}>
               <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                 <span>{t('Connection info detected in clipboard')}</span>
                 <span className='flex shrink-0 gap-2'>
@@ -1916,12 +1928,12 @@ export function ChannelMutateDrawer({
               id='channel-form'
               ref={channelFormRef}
               onSubmit={form.handleSubmit(onSubmit, onInvalid)}
-              className={sideDrawerFormClassName('gap-5')}
+              className={sideDrawerFormClassName()}
             >
               {isChannelDetailLoading ? (
                 <ChannelEditorLoadingState />
               ) : (
-                <div className='grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start'>
+                <div className={sideDrawerBodyGridClassName()}>
                   <ChannelEditorNav
                     providerLogo={
                       <ChannelTypeLogo type={currentType} size={18} />
@@ -1935,7 +1947,7 @@ export function ChannelMutateDrawer({
                     expandedItemId={expandedEditorNavItemId}
                     onNavigate={handleEditorNavNavigate}
                   />
-                  <div className='flex min-w-0 flex-col gap-5'>
+                  <div className='flex min-w-0 flex-col gap-4 sm:gap-5'>
                     {/* ── Basic Information ── */}
                     <div
                       id={CHANNEL_EDITOR_SECTION_IDS.identity}
@@ -2986,7 +2998,7 @@ export function ChannelMutateDrawer({
                                         </div>
                                       </FormDescription>
                                       {isEditing && canRevealChannelKey && (
-                                        <div className='border-border/60 mt-4 flex flex-col gap-3 border-y border-dashed py-4'>
+                                        <div className='border-border/50 bg-muted/15 mt-4 flex flex-col gap-3 rounded-xl border border-dashed p-3.5'>
                                           <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
                                             <div>
                                               <p className='text-sm font-medium'>
@@ -3052,7 +3064,7 @@ export function ChannelMutateDrawer({
                               />
 
                               {currentType === 57 && (
-                                <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
+                                <div className='border-border/50 bg-muted/10 flex flex-col gap-3 rounded-xl border p-3.5'>
                                   <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
                                     <div className='text-muted-foreground text-xs'>
                                       {t(
@@ -3709,7 +3721,7 @@ export function ChannelMutateDrawer({
                           <div
                             id={ADVANCED_SETTINGS_SECTION_IDS.internalNotes}
                             className={configuredAdvancedSectionClassName(
-                              'flex scroll-mt-4 flex-col gap-4 border-t pt-4',
+                              'flex scroll-mt-4 flex-col gap-4',
                               internalNotesConfigured
                             )}
                           >
@@ -3766,7 +3778,7 @@ export function ChannelMutateDrawer({
                           <div
                             id={ADVANCED_SETTINGS_SECTION_IDS.overrideRules}
                             className={configuredAdvancedSectionClassName(
-                              'flex scroll-mt-4 flex-col gap-4 border-t pt-4',
+                              'flex scroll-mt-4 flex-col gap-4',
                               overrideRulesConfigured
                             )}
                           >
@@ -4079,6 +4091,54 @@ export function ChannelMutateDrawer({
                                 />
                               )}
 
+
+                              {(currentType === 1 ||
+                                currentType === 8 ||
+                                currentType === 48 ||
+                                currentType === 57) && (
+                                <FormField
+                                  control={form.control}
+                                  name='upstream_endpoint_type'
+                                  render={({ field }) => (
+                                    <FormItem className='flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Upstream Endpoint Type')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Force upstream OpenAI text API path: auto (client path), openai (/v1/chat/completions), or openai-response (/v1/responses). Body is converted when needed.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Select
+                                          value={field.value || 'auto'}
+                                          onValueChange={field.onChange}
+                                        >
+                                          <SelectTrigger className='w-full sm:w-[220px]'>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value='auto'>
+                                              {t('Auto (client path)')}
+                                            </SelectItem>
+                                            <SelectItem value='openai'>
+                                              openai (/v1/chat/completions)
+                                            </SelectItem>
+                                            <SelectItem value='openai-response'>
+                                              openai-response (/v1/responses)
+                                            </SelectItem>
+                                            <SelectItem value='openai-response-compact'>
+                                              openai-response-compact
+                                            </SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
                               <FormField
                                 control={form.control}
                                 name='thinking_to_content'
@@ -4721,11 +4781,22 @@ export function ChannelMutateDrawer({
 
           <SheetFooter className={sideDrawerFooterClassName()}>
             <SheetClose
-              render={<Button variant='outline' disabled={isSubmitting} />}
+              render={
+                <Button
+                  variant='outline'
+                  disabled={isSubmitting}
+                  className='min-w-24'
+                />
+              }
             >
               {t('Cancel')}
             </SheetClose>
-            <Button form='channel-form' type='submit' disabled={isSubmitting}>
+            <Button
+              form='channel-form'
+              type='submit'
+              disabled={isSubmitting}
+              className='min-w-32'
+            >
               {isSubmitting && (
                 <Loader2 className='mr-2 h-4 w-4 animate-spin' />
               )}

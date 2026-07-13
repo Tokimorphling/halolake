@@ -92,7 +92,7 @@ function ChannelCardComponent({
     <ChannelRowActionsLayoutContext.Provider value='card'>
       <div
         data-state={isSelected ? 'selected' : undefined}
-        className='flex flex-col gap-3.5'
+        className='flex flex-col gap-3.5 transition-[opacity,transform] duration-[var(--duration-fast)] ease-[var(--ease-out)]'
       >
         {/* Row 1: selection + type, with status badge + actions menu */}
         <div className='flex items-center justify-between gap-2'>

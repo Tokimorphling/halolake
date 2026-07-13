@@ -186,6 +186,7 @@ export const channelFormSchema = z
     key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
     // Channel extra settings (stored in setting JSON, not sent directly)
     force_format: z.boolean().optional(),
+    upstream_endpoint_type: z.string().optional(),
     thinking_to_content: z.boolean().optional(),
     proxy: z.string().optional(),
     pass_through_body_enabled: z.boolean().optional(),
@@ -326,6 +327,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   key_mode: 'append',
   // Channel extra settings
   force_format: false,
+  upstream_endpoint_type: 'auto',
   thinking_to_content: false,
   proxy: '',
   pass_through_body_enabled: false,
@@ -364,6 +366,7 @@ export function transformChannelToFormDefaults(
   // Parse channel extra settings from setting field
   let extraSettings = {
     force_format: false,
+    upstream_endpoint_type: 'auto',
     thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
@@ -376,6 +379,7 @@ export function transformChannelToFormDefaults(
       const parsed = JSON.parse(channel.setting)
       extraSettings = {
         force_format: parsed.force_format || false,
+        upstream_endpoint_type: parsed.upstream_endpoint_type || 'auto',
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
@@ -504,6 +508,8 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     }
   }
   settingObj.force_format = formData.force_format || false
+  settingObj.upstream_endpoint_type =
+    formData.upstream_endpoint_type || 'auto'
   settingObj.thinking_to_content = formData.thinking_to_content || false
   settingObj.proxy = formData.proxy || ''
   settingObj.pass_through_body_enabled =

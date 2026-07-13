@@ -118,6 +118,16 @@ For commercial licensing, please contact support@quantumnous.com
     0 1px 2px oklch(0 0 0 / 4%), 0 8px 24px oklch(0 0 0 / 6%);
   --shadow-sheet:
     0 0 0 0.5px oklch(0 0 0 / 4%), 0 12px 40px oklch(0 0 0 / 12%);
+  /* Motion tokens — Emil/Apple fluid UI (ease-out default; no ease-in on UI). */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-out-soft: cubic-bezier(0.33, 1, 0.68, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-press: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-panel: 250ms;
+  --duration-sheet: 300ms;
   --tracking-display: -0.022em;
   --tracking-title: -0.015em;
   --tracking-body: 0em;

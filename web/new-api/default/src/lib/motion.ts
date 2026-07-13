@@ -39,22 +39,38 @@ const SPRING = {
   momentum: { type: 'spring', bounce: 0.2, duration: 0.4 } as const,
 } as const
 
-const EASE_OUT_CUBIC = [0.33, 1, 0.68, 1] as const
-const EASE_IN_CUBIC = [0.32, 0, 0.67, 0] as const
+/** Strong ease-out (Emil) — instant response, soft settle. */
+const EASE_OUT = [0.23, 1, 0.32, 1] as const
+/** Softer ease-out for larger surfaces / page travel. */
+const EASE_OUT_SOFT = [0.33, 1, 0.68, 1] as const
+/** On-screen morph / reposition (ease-in-out). */
+const EASE_IN_OUT = [0.77, 0, 0.175, 1] as const
+/** Inverse of soft ease-out for reversible exit paths. */
+const EASE_IN_MIRROR = [0.32, 0, 0.67, 0] as const
 
 const DURATION = {
   instant: 0,
   press: 0.1,
   fast: 0.15,
-  normal: 0.25,
-  slow: 0.35,
+  normal: 0.2,
+  panel: 0.25,
+  slow: 0.3,
 } as const
 
 /** Cross-fade for prefers-reduced-motion (no slides / springs). */
 const REDUCED: Transition = {
-  duration: 0.2,
-  ease: EASE_OUT_CUBIC,
+  duration: DURATION.normal,
+  ease: EASE_OUT,
 }
+
+export const MOTION_EASING = {
+  out: EASE_OUT,
+  outSoft: EASE_OUT_SOFT,
+  inOut: EASE_IN_OUT,
+  inMirror: EASE_IN_MIRROR,
+} as const
+
+export const MOTION_DURATION = DURATION
 
 export const MOTION_TRANSITION: Record<string, Transition> = {
   default: SPRING.default,
@@ -63,12 +79,13 @@ export const MOTION_TRANSITION: Record<string, Transition> = {
   spring: SPRING.default,
   sheet: SPRING.sheet,
   momentum: SPRING.momentum,
-  press: { duration: DURATION.press, ease: EASE_OUT_CUBIC },
-  fade: { duration: DURATION.normal, ease: EASE_OUT_CUBIC },
+  press: { duration: DURATION.press, ease: EASE_OUT },
+  fade: { duration: DURATION.normal, ease: EASE_OUT },
+  panel: { duration: DURATION.panel, ease: EASE_OUT },
   reduced: REDUCED,
   none: { duration: DURATION.instant },
   /** Inverse easing for reversible exit paths (spatial consistency). */
-  exitEase: { duration: DURATION.normal, ease: EASE_IN_CUBIC },
+  exitEase: { duration: DURATION.fast, ease: EASE_IN_MIRROR },
 }
 
 /**

@@ -25,21 +25,23 @@ export function ChannelEditorLoadingState() {
 
   return (
     <div
-      className='border-border/60 flex flex-col gap-4 rounded-lg border p-4'
+      className='bg-card/70 ring-foreground/6 flex flex-col gap-4 rounded-2xl p-4 shadow-[0_1px_0_0_var(--hairline)] ring-1 sm:p-5'
       aria-live='polite'
     >
       <div>
-        <p className='text-sm font-medium'>{t('Loading channel details')}</p>
-        <p className='text-muted-foreground mt-1 text-xs'>
+        <p className='text-title text-sm font-semibold tracking-[var(--tracking-title)]'>
+          {t('Loading channel details')}
+        </p>
+        <p className='text-muted-foreground mt-1.5 text-xs leading-relaxed'>
           {t('Please wait before editing to avoid overwriting saved values.')}
         </p>
       </div>
       <div className='grid gap-4 sm:grid-cols-2'>
-        <Skeleton className='h-10 w-full' />
-        <Skeleton className='h-10 w-full' />
+        <Skeleton className='h-10 w-full rounded-lg' />
+        <Skeleton className='h-10 w-full rounded-lg' />
       </div>
-      <Skeleton className='h-24 w-full' />
-      <Skeleton className='h-32 w-full' />
+      <Skeleton className='h-24 w-full rounded-xl' />
+      <Skeleton className='h-32 w-full rounded-xl' />
     </div>
   )
 }

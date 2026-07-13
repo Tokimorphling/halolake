@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Radio as RadioPrimitive } from '@base-ui/react/radio'
 import { RadioGroup as Radio } from '@base-ui/react/radio-group'
 import { CircleCheck, Palette, RotateCcw } from 'lucide-react'
-import { type SVGProps } from 'react'
+import type { SVGProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { IconDir } from '@/assets/custom/icon-dir'
@@ -170,7 +170,10 @@ function RadioGroupItem(props: {
   return (
     <Item
       value={props.item.value}
-      className={cn('group outline-none', 'transition duration-200 ease-in')}
+      className={cn(
+        'group outline-none',
+        'transition-[transform,box-shadow,opacity] duration-[var(--duration-normal)] ease-[var(--ease-out)]'
+      )}
       aria-label={`Select ${props.item.label.toLowerCase()}`}
       aria-describedby={`${props.item.value}-description`}
     >
@@ -469,13 +472,15 @@ function ScalePreview(props: { rows: number; rowGap: string }) {
       className='absolute inset-2.5 flex flex-col justify-center'
       style={{ gap: props.rowGap }}
     >
-      {Array.from({ length: props.rows }).map((_, i) => (
-        <span
-          key={i}
-          className='bg-foreground/60 block h-[2px] rounded-full'
-          style={{ width: `${85 - i * 10}%` }}
-        />
-      ))}
+      {Array.from({ length: props.rows }, (_, i) => 85 - i * 10).map(
+        (width) => (
+          <span
+            key={`preview-bar-${width}`}
+            className='bg-foreground/60 block h-[2px] rounded-full'
+            style={{ width: `${width}%` }}
+          />
+        )
+      )}
     </div>
   )
 }

@@ -241,7 +241,7 @@ export function SummaryCards() {
         <div className='flex flex-col gap-4 p-4 sm:p-5'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
             <div className='flex flex-col gap-0.5'>
-              <h3 className='text-base leading-snug font-semibold tracking-tight'>
+              <h3 className='text-title text-base leading-snug font-semibold tracking-[var(--tracking-title)]'>
                 {t('Usage at a glance')}
               </h3>
               <p className='text-muted-foreground text-sm leading-relaxed'>
@@ -253,7 +253,7 @@ export function SummaryCards() {
             {items.map((it) => (
               <StaggerItem
                 key={it.key}
-                className='bg-background/50 ring-foreground/5 rounded-2xl p-3.5 ring-1'
+                className='bg-background/50 ring-foreground/5 rounded-2xl p-3.5 ring-1 transition-[transform,box-shadow,background-color] duration-[var(--duration-normal)] ease-[var(--ease-out-soft)] hover:bg-background/70'
               >
                 <StatCard
                   title={it.title}
@@ -323,15 +323,15 @@ export function SummaryCards() {
                     healthLevel === 'caution' && 'text-warning'
                   )}
                 >
-                  {runwayDays !== null
-                    ? runwayDays < 1
-                      ? t('Less than 1 day left')
-                      : runwayDays > 999
-                        ? `999+ ${t('days')}`
-                        : `~${formatNumber(Math.floor(runwayDays))} ${t('days')}`
-                    : remainQuota <= 0
-                      ? t('Balance depleted')
-                      : t('No recent usage')}
+                  {(() => {
+                    if (runwayDays !== null) {
+                      if (runwayDays < 1) return t('Less than 1 day left')
+                      if (runwayDays > 999) return `999+ ${t('days')}`
+                      return `~${formatNumber(Math.floor(runwayDays))} ${t('days')}`
+                    }
+                    if (remainQuota <= 0) return t('Balance depleted')
+                    return t('No recent usage')
+                  })()}
                 </div>
               </div>
             </div>

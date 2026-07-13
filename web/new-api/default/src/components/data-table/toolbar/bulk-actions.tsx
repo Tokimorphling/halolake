@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type Table } from '@tanstack/react-table'
+import type { Table } from '@tanstack/react-table'
 import { X } from 'lucide-react'
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -84,31 +84,32 @@ export function DataTableBulkActions<TData>({
     const buttons = buttonsRef.current
     if (!buttons) return
 
-    const currentIndex = Array.from(buttons).findIndex(
-      (button) => button === document.activeElement
+    const buttonList = [...buttons]
+    const currentIndex = buttonList.indexOf(
+      document.activeElement as HTMLButtonElement
     )
 
     switch (event.key) {
       case 'ArrowRight': {
         event.preventDefault()
-        const nextIndex = (currentIndex + 1) % buttons.length
-        buttons[nextIndex]?.focus()
+        const nextIndex = (currentIndex + 1) % buttonList.length
+        buttonList.at(nextIndex)?.focus()
         break
       }
       case 'ArrowLeft': {
         event.preventDefault()
         const prevIndex =
-          currentIndex === 0 ? buttons.length - 1 : currentIndex - 1
-        buttons[prevIndex]?.focus()
+          currentIndex === 0 ? buttonList.length - 1 : currentIndex - 1
+        buttonList.at(prevIndex)?.focus()
         break
       }
       case 'Home':
         event.preventDefault()
-        buttons[0]?.focus()
+        buttonList.at(0)?.focus()
         break
       case 'End':
         event.preventDefault()
-        buttons[buttons.length - 1]?.focus()
+        buttonList.at(-1)?.focus()
         break
       case 'Escape': {
         // Check if the Escape key came from a dropdown trigger or content
@@ -167,7 +168,7 @@ export function DataTableBulkActions<TData>({
         onKeyDown={handleKeyDown}
         className={cn(
           'fixed bottom-6 left-1/2 z-50 -translate-x-1/2',
-          'transition-all delay-100 duration-300 ease-out hover:scale-[1.02]',
+          'transition-[transform,opacity] delay-100 duration-[var(--duration-panel)] ease-[var(--ease-out)] hover:scale-[1.02]',
           'focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:outline-none'
         )}
       >

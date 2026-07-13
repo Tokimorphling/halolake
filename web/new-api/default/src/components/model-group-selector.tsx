@@ -265,7 +265,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = React.memo(
                       onSelect={handleModelChange}
                       className={cn(
                         'mb-0.5 flex items-center justify-between rounded-lg px-2 py-1.5 text-xs',
-                        'transition-all duration-200',
+                        'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                         'hover:bg-accent',
                         'data-[selected=true]:bg-accent'
                       )}
@@ -410,7 +410,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                 onSelect={handleGroupChange}
                 className={cn(
                   'mb-0.5 flex items-center justify-between rounded-lg px-2 py-2 text-xs',
-                  'transition-all duration-200',
+                  'transition-[background-color,color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)]',
                   'hover:bg-accent',
                   'data-[selected=true]:bg-accent'
                 )}

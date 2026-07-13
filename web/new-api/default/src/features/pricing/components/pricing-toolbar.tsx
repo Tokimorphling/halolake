@@ -116,7 +116,7 @@ function SegmentedControl(props: {
             onClick={() => props.onChange(option.value)}
             aria-pressed={isActive}
             className={cn(
-              'inline-flex h-full items-center justify-center rounded-md text-xs font-medium transition-all',
+              'inline-flex h-full items-center justify-center rounded-md text-xs font-medium transition-[background-color,color,box-shadow,transform] duration-[var(--duration-press)] ease-[var(--ease-out)] active:scale-[0.96]',
               Icon && !option.label ? 'w-7' : 'gap-1.5 px-3',
               isActive
                 ? 'bg-primary text-primary-foreground shadow-sm'
@@ -134,7 +134,7 @@ function SegmentedControl(props: {
 
         return (
           <Tooltip key={option.value}>
-            <TooltipTrigger render={button}></TooltipTrigger>
+            <TooltipTrigger render={button} />
             <TooltipContent side='bottom' className='text-xs'>
               {option.tooltip}
             </TooltipContent>

@@ -1,4 +1,3 @@
-import { ChevronDown, Settings } from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { ChevronDown, Settings } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -43,20 +43,20 @@ export function ChannelAdvancedSection(props: ChannelAdvancedSectionProps) {
         render={
           <button
             type='button'
-            className='hover:bg-muted/40 border-border/60 flex w-full items-center justify-between rounded-lg border px-3 py-3 text-left transition-colors'
+            className='bg-card/70 ring-foreground/6 hover:bg-muted/35 flex w-full items-center justify-between rounded-2xl p-4 text-left shadow-[0_1px_0_0_var(--hairline)] ring-1 transition-[background-color,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out)] sm:p-5'
             aria-expanded={props.open}
           />
         }
       >
-        <div className='flex items-start gap-3'>
-          <span className='bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md'>
+        <div className='flex min-w-0 items-start gap-3'>
+          <span className='bg-muted/80 text-muted-foreground ring-foreground/6 flex size-8 shrink-0 items-center justify-center rounded-lg ring-1'>
             <Settings className='h-4 w-4' aria-hidden='true' />
           </span>
-          <div className='flex flex-col gap-0.5'>
-            <div className='text-[13px] font-semibold'>
+          <div className='flex min-w-0 flex-col gap-1'>
+            <div className='text-title text-sm font-semibold tracking-[var(--tracking-title)]'>
               {t('Advanced Settings')}
             </div>
-            <div className='text-muted-foreground text-xs'>
+            <div className='text-muted-foreground text-xs leading-relaxed'>
               {props.summary ??
                 t(
                   'Request overrides, routing behavior, and upstream model automation'
@@ -66,14 +66,14 @@ export function ChannelAdvancedSection(props: ChannelAdvancedSectionProps) {
         </div>
         <ChevronDown
           className={cn(
-            'text-muted-foreground h-4 w-4 shrink-0 transition-transform',
+            'text-muted-foreground h-4 w-4 shrink-0 transition-transform duration-[var(--duration-panel)] ease-[var(--ease-out)]',
             props.open && 'rotate-180'
           )}
           aria-hidden='true'
         />
       </CollapsibleTrigger>
 
-      <CollapsibleContent className='mt-5 flex flex-col gap-5'>
+      <CollapsibleContent className='mt-4 flex flex-col gap-4 sm:mt-5 sm:gap-5'>
         {props.children}
       </CollapsibleContent>
     </Collapsible>

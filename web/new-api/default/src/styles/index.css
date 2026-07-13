@@ -149,6 +149,15 @@ For commercial licensing, please contact support@quantumnous.com
     animation: none !important;
     background: var(--skeleton-base) !important;
   }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @utility container {
@@ -228,10 +237,10 @@ For commercial licensing, please contact support@quantumnous.com
 }
 @media (prefers-reduced-motion: no-preference) {
   .CollapsibleContent[data-open] {
-    animation: slideDown 300ms ease-out;
+    animation: slideDown var(--duration-sheet) var(--ease-out);
   }
   .CollapsibleContent:not([data-open]) {
-    animation: slideUp 300ms ease-out;
+    animation: slideUp var(--duration-panel) var(--ease-out);
   }
 }
 
@@ -335,7 +344,9 @@ For commercial licensing, please contact support@quantumnous.com
   .app-header-control {
     @apply text-muted-foreground hover:text-foreground size-8 shrink-0 rounded-full;
     @apply bg-transparent hover:bg-foreground/5 active:bg-foreground/[0.08];
-    @apply transition-[transform,background-color,color,box-shadow] duration-150 ease-out;
+    @apply transition-[transform,background-color,color,box-shadow];
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--ease-out);
     @apply active:scale-[0.94];
     @apply aria-expanded:bg-foreground/5 aria-expanded:text-foreground;
   }
@@ -584,19 +595,19 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .landing-animate-fade-up {
-  animation: landing-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: landing-fade-up 0.45s var(--ease-out) both;
 }
 .landing-animate-fade-in {
-  animation: landing-fade-in 0.6s ease-out both;
+  animation: landing-fade-in 0.35s var(--ease-out) both;
 }
 .landing-animate-scale-in {
-  animation: landing-scale-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: landing-scale-in 0.45s var(--ease-out) both;
 }
 .landing-animate-fade-left {
-  animation: landing-fade-left 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: landing-fade-left 0.45s var(--ease-out) both;
 }
 .landing-animate-fade-right {
-  animation: landing-fade-right 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: landing-fade-right 0.45s var(--ease-out) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -615,11 +626,11 @@ For commercial licensing, please contact support@quantumnous.com
 @media (prefers-reduced-motion: no-preference) {
   [data-slot='card']:not([data-card-hover='false']) {
     transition:
-      transform 200ms cubic-bezier(0.33, 1, 0.68, 1),
-      box-shadow 200ms cubic-bezier(0.33, 1, 0.68, 1);
+      transform var(--duration-normal) var(--ease-out-soft),
+      box-shadow var(--duration-normal) var(--ease-out-soft);
   }
 
-  @media (min-width: 641px) {
+  @media (hover: hover) and (pointer: fine) and (min-width: 641px) {
     [data-slot='card']:not([data-card-hover='false']):hover {
       transform: translateY(-1px);
       box-shadow: var(--shadow-elevated);
@@ -630,16 +641,16 @@ For commercial licensing, please contact support@quantumnous.com
   button:not(:disabled):active,
   [role='button']:not(:disabled):active {
     transform: scale(0.97);
-    transition: transform 100ms ease-out;
+    transition: transform var(--duration-press) var(--ease-out);
   }
 
   [data-slot='table'] tr {
-    transition: background-color 120ms ease;
+    transition: background-color var(--duration-press) var(--ease-out);
   }
 
   /* Table row stagger-in animation */
   [data-slot='table'] tbody tr {
-    animation: tableRowEnter 0.2s cubic-bezier(0.33, 1, 0.68, 1) both;
+    animation: tableRowEnter var(--duration-normal) var(--ease-out-soft) both;
   }
   [data-slot='table'] tbody tr:nth-child(2) {
     animation-delay: 25ms;

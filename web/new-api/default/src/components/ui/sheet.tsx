@@ -47,7 +47,7 @@ function SheetOverlay({ className, ...props }: SheetPrimitive.Backdrop.Props) {
     <SheetPrimitive.Backdrop
       data-slot='sheet-overlay'
       className={cn(
-        'fixed inset-0 z-50 bg-[var(--material-scrim)] transition-opacity duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0 supports-backdrop-filter:backdrop-blur-sm',
+        'fixed inset-0 z-50 bg-[var(--material-scrim)] transition-opacity duration-[var(--duration-normal)] ease-[var(--ease-out)] data-ending-style:opacity-0 data-starting-style:opacity-0 supports-backdrop-filter:backdrop-blur-sm',
         className
       )}
       {...props}
@@ -77,7 +77,7 @@ function SheetContent({
         data-slot='sheet-content'
         data-side={side}
         className={cn(
-          'material-sheet bg-background text-foreground fixed z-50 flex flex-col gap-4 overflow-hidden bg-clip-padding text-sm transition duration-300 ease-[cubic-bezier(0.33,1,0.68,1)] data-ending-style:opacity-0 data-starting-style:opacity-0',
+          'material-sheet bg-background text-foreground fixed z-50 flex flex-col gap-4 overflow-hidden bg-clip-padding text-sm transition-[transform,opacity] duration-[var(--duration-sheet)] ease-[var(--ease-drawer)] data-ending-style:opacity-0 data-starting-style:opacity-0',
           side === 'right' &&
             'inset-y-0 right-0 h-full w-3/4 border-l data-ending-style:translate-x-[2.5rem] data-starting-style:translate-x-[2.5rem] sm:max-w-sm',
           side === 'left' &&

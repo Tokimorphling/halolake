@@ -28,31 +28,48 @@ export const sideDrawerContentClassName = (className?: string) =>
 
 export const sideDrawerHeaderClassName = (className?: string) =>
   cn(
-    'border-border/70 bg-background/95 border-b px-4 py-3 text-start backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6 sm:py-4',
+    'app-material-chrome shrink-0 border-b border-[color:var(--material-chrome-border)] px-4 py-3.5 text-start sm:px-6 sm:py-4',
     className
   )
 
 export const sideDrawerFormClassName = (className?: string) =>
   cn(
-    'flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5',
+    'flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-4 py-4 sm:gap-6 sm:px-6 sm:py-5',
     className
   )
 
 export const sideDrawerFooterClassName = (className?: string) =>
   cn(
-    'border-border/70 bg-background/95 grid grid-cols-2 gap-2 border-t px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:flex sm:flex-row sm:justify-end sm:px-6 sm:py-4',
+    'app-material-chrome shrink-0 grid grid-cols-2 gap-2 border-t border-[color:var(--material-chrome-border)] px-4 py-3 sm:flex sm:flex-row sm:justify-end sm:gap-2.5 sm:px-6 sm:py-3.5',
     className
   )
 
+/** Primary form section — elevated card surface for long editors. */
 export const sideDrawerSectionClassName = (className?: string) =>
   cn(
-    'border-border/60 flex flex-col gap-4 border-b pb-6 last:border-b-0 last:pb-0',
+    'bg-card/70 ring-foreground/6 flex flex-col gap-4 rounded-2xl p-4 shadow-[0_1px_0_0_var(--hairline)] ring-1 sm:p-5',
+    className
+  )
+
+/** Nested subsection inside a primary section (no extra outer chrome). */
+export const sideDrawerNestedSectionClassName = (className?: string) =>
+  cn(
+    'border-border/50 flex flex-col gap-3 border-t pt-4 first:border-t-0 first:pt-0',
     className
   )
 
 export const sideDrawerSwitchItemClassName = (className?: string) =>
   cn(
-    'border-border/60 flex min-h-16 flex-row items-center justify-between gap-3 border-y py-3',
+    'border-border/50 bg-muted/20 flex min-h-14 flex-row items-center justify-between gap-3 rounded-xl border px-3 py-3',
+    className
+  )
+
+export const sideDrawerAlertClassName = (className?: string) =>
+  cn('mx-4 shrink-0 sm:mx-6', className)
+
+export const sideDrawerBodyGridClassName = (className?: string) =>
+  cn(
+    'grid gap-5 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start xl:grid-cols-[15rem_minmax(0,1fr)]',
     className
   )
 
@@ -75,13 +92,18 @@ export function SideDrawerSectionHeader(props: {
 }) {
   return createElement(
     'div',
-    { className: cn('flex items-start gap-3', props.className) },
+    {
+      className: cn(
+        'flex items-start gap-3 border-b border-[color:var(--hairline)] pb-3.5',
+        props.className
+      ),
+    },
     props.icon
       ? createElement(
           'span',
           {
             className:
-              'bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md',
+              'bg-muted/80 text-muted-foreground ring-foreground/6 flex size-8 shrink-0 items-center justify-center rounded-lg ring-1',
           },
           props.icon
         )
@@ -91,13 +113,19 @@ export function SideDrawerSectionHeader(props: {
       { className: 'min-w-0 flex-1' },
       createElement(
         'h3',
-        { className: 'text-sm leading-none font-semibold tracking-tight' },
+        {
+          className:
+            'text-title text-sm leading-none font-semibold tracking-[var(--tracking-title)]',
+        },
         props.title
       ),
       props.description
         ? createElement(
             'p',
-            { className: 'text-muted-foreground mt-1 text-xs leading-5' },
+            {
+              className:
+                'text-muted-foreground mt-1.5 text-xs leading-relaxed',
+            },
             props.description
           )
         : null
