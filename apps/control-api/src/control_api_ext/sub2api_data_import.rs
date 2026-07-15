@@ -4,12 +4,12 @@
 //! (same as sub2api default `skip_default_group_bind`). Existing proxies are
 //! reused by fingerprint; accounts always create new channels.
 
+use super::codex_auth_import::{
+    CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
+};
 use crate::{
     proxy::{CreateProxyRequest, ListProxiesRequest, ProxyRecord, ProxyStore, UpdateProxyRequest},
     storage::ManagementStore,
-};
-use super::codex_auth_import::{
-    CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
 };
 use halolake_control_plane::{CreateChannelRequest, ManagementError};
 use halolake_domain::{ChannelRecord, STATUS_ENABLED};
@@ -25,6 +25,18 @@ const DATA_VERSION: i32 = 1;
 const CHANNEL_TYPE_OPENAI: i32 = 1;
 const CHANNEL_TYPE_ANTHROPIC: i32 = 14;
 const CHANNEL_TYPE_GEMINI: i32 = 24;
+const OPENAI_DEFAULT_MODELS: &str = "gpt-5.1,gpt-5,o3,o4-mini";
+const CLAUDE_DEFAULT_MODELS: &str =
+    "claude-haiku-4-5-20251001,claude-sonnet-4-5-20250929,claude-sonnet-4-6,claude-opus-4-6,\
+     claude-opus-4-7,claude-opus-4-8,claude-sonnet-5,claude-fable-5,claude-opus-4-5-20251101,\
+     claude-opus-4-1-20250805,claude-opus-4-20250514,claude-sonnet-4-20250514,\
+     claude-3-7-sonnet-20250219,claude-3-5-haiku-20241022";
+const GEMINI_DEFAULT_MODELS: &str = "gemini-2.5-pro,gemini-2.5-flash";
+const CLAUDE_OAUTH_BETA: &str =
+    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,\
+     context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15,\
+     fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28";
+const CLAUDE_API_VERSION: &str = "2023-06-01";
 const PROXY_STATUS_ENABLED: i32 = 1;
 const PROXY_STATUS_DISABLED: i32 = 0;
 
@@ -152,13 +164,12 @@ pub(crate) async fn import_sub2api_data(
         .filter(|g| !g.is_empty())
         .unwrap_or("default")
         .to_string();
-    let default_models = req
+    let models_override = req
         .models
         .as_deref()
         .map(str::trim)
         .filter(|m| !m.is_empty())
-        .unwrap_or("gpt-5.1,gpt-5,o3,o4-mini")
-        .to_string();
+        .map(str::to_string);
 
     // --- proxies ---
     let existing_proxies = proxies.call(ListProxiesRequest).await.unwrap_or_default();
@@ -190,7 +201,7 @@ pub(crate) async fn import_sub2api_data(
             result.errors.push(DataImportError {
                 kind: "proxy".into(),
                 name: item.name.clone(),
-                proxy_key: key,
+                proxy_key: public_proxy_key(&key),
                 message,
             });
             continue;
@@ -203,7 +214,7 @@ pub(crate) async fn import_sub2api_data(
                 result.errors.push(DataImportError {
                     kind: "proxy".into(),
                     name: item.name.clone(),
-                    proxy_key: key,
+                    proxy_key: public_proxy_key(&key),
                     message,
                 });
                 continue;
@@ -253,7 +264,7 @@ pub(crate) async fn import_sub2api_data(
                 result.errors.push(DataImportError {
                     kind:      "proxy".into(),
                     name:      item.name.clone(),
-                    proxy_key: key,
+                    proxy_key: public_proxy_key(&key),
                     message:   err.to_string(),
                 });
             }
@@ -287,7 +298,7 @@ pub(crate) async fn import_sub2api_data(
                     result.errors.push(DataImportError {
                         kind:      "account".into(),
                         name:      item.name.clone(),
-                        proxy_key: pk.to_string(),
+                        proxy_key: public_proxy_key(pk),
                         message:   "proxy_key not found".into(),
                     });
                     continue;
@@ -295,19 +306,20 @@ pub(crate) async fn import_sub2api_data(
             }
         }
 
-        let mapped = match map_account_to_channel(item, &group, &default_models, proxy_id) {
-            Ok(channel) => channel,
-            Err(message) => {
-                result.account_failed = result.account_failed.saturating_add(1);
-                result.errors.push(DataImportError {
-                    kind: "account".into(),
-                    name: item.name.clone(),
-                    proxy_key: item.proxy_key.clone().unwrap_or_default(),
-                    message,
-                });
-                continue;
-            }
-        };
+        let mapped =
+            match map_account_to_channel(item, &group, models_override.as_deref(), proxy_id) {
+                Ok(channel) => channel,
+                Err(message) => {
+                    result.account_failed = result.account_failed.saturating_add(1);
+                    result.errors.push(DataImportError {
+                        kind: "account".into(),
+                        name: item.name.clone(),
+                        proxy_key: public_proxy_key(item.proxy_key.as_deref().unwrap_or_default()),
+                        message,
+                    });
+                    continue;
+                }
+            };
 
         match management
             .call(CreateChannelRequest { channel: mapped })
@@ -321,7 +333,7 @@ pub(crate) async fn import_sub2api_data(
                 result.errors.push(DataImportError {
                     kind:      "account".into(),
                     name:      item.name.clone(),
-                    proxy_key: item.proxy_key.clone().unwrap_or_default(),
+                    proxy_key: public_proxy_key(item.proxy_key.as_deref().unwrap_or_default()),
                     message:   err.to_string(),
                 });
             }
@@ -432,6 +444,14 @@ fn build_proxy_key(
     )
 }
 
+fn public_proxy_key(proxy_key: &str) -> String {
+    if proxy_key.trim().is_empty() {
+        String::new()
+    } else {
+        "[redacted]".to_string()
+    }
+}
+
 fn build_proxy_url(item: &DataProxy) -> Result<String, String> {
     let mut protocol = item.protocol.trim().to_ascii_lowercase();
     if protocol == "socks5" {
@@ -494,11 +514,12 @@ fn normalize_proxy_status(status: &str) -> i32 {
 fn map_account_to_channel(
     item: &DataAccount,
     group: &str,
-    default_models: &str,
+    models_override: Option<&str>,
     proxy_id: Option<u64>,
 ) -> Result<ChannelRecord, String> {
     let platform = item.platform.trim().to_ascii_lowercase();
     let account_type = item.account_type.trim().to_ascii_lowercase();
+    let is_anthropic = matches!(platform.as_str(), "anthropic" | "claude");
     let (channel_type, key) = match platform.as_str() {
         "openai" => map_openai_account(&account_type, &item.credentials)?,
         "anthropic" | "claude" => map_anthropic_account(&account_type, &item.credentials)?,
@@ -513,7 +534,13 @@ fn map_account_to_channel(
 
     let models = cred_string(&item.credentials, "models")
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| default_models.to_string());
+        .or_else(|| {
+            models_override
+                .map(str::trim)
+                .filter(|models| !models.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| provider_default_models(&platform).to_string());
     let base_url = cred_string(&item.credentials, "base_url")
         .or_else(|| cred_string(&item.extra, "base_url"))
         .filter(|s| !s.is_empty());
@@ -522,7 +549,7 @@ fn map_account_to_channel(
     if let Some(proxy_url) = cred_string(&item.credentials, "proxy") {
         setting_map.insert("proxy".into(), JsonValue::String(proxy_url));
     }
-    // Preserve raw credentials meta for debugging (no secrets beyond key field).
+    // Preserve import provenance plus refresh metadata needed by OAuth channels.
     setting_map.insert(
         "import_source".into(),
         JsonValue::String("sub2api-data".into()),
@@ -535,9 +562,23 @@ fn map_account_to_channel(
         "import_account_type".into(),
         JsonValue::String(account_type.clone()),
     );
+    if is_anthropic {
+        append_anthropic_auth_setting(
+            &mut setting_map,
+            &account_type,
+            &item.credentials,
+            item.expires_at,
+        );
+    }
     if item.concurrency > 0 {
         setting_map.insert("concurrency".into(), json!(item.concurrency));
     }
+
+    let header_override = if is_anthropic {
+        build_anthropic_header_override(&account_type)?
+    } else {
+        None
+    };
 
     let priority = if item.priority > 0 {
         Some(i64::from(item.priority))
@@ -568,7 +609,7 @@ fn map_account_to_channel(
         tag: None,
         setting: Some(serde_json::to_string(&JsonValue::Object(setting_map)).unwrap_or_default()),
         param_override: None,
-        header_override: None,
+        header_override,
         remark: item.notes.clone().or_else(|| {
             Some(format!(
                 "imported from sub2api-data ({platform}/{account_type})"
@@ -604,25 +645,122 @@ fn map_anthropic_account(
     account_type: &str,
     credentials: &JsonMap<String, JsonValue>,
 ) -> Result<(i32, String), String> {
-    let key = cred_string(credentials, "api_key")
-        .or_else(|| cred_string(credentials, "access_token"))
-        .or_else(|| cred_string(credentials, "token"))
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "anthropic credentials missing api_key/access_token".to_string())?;
-    let _ = account_type;
+    let key = match account_type {
+        "oauth" | "setup-token" | "setup_token" => cred_string(credentials, "access_token")
+            .or_else(|| cred_string(credentials, "token"))
+            .or_else(|| cred_string(credentials, "setup_token"))
+            .or_else(|| cred_string(credentials, "api_key"))
+            .ok_or_else(|| "anthropic oauth credentials missing access_token".to_string())?,
+        "apikey" | "api_key" | "api-key" | "upstream" => cred_string(credentials, "api_key")
+            .or_else(|| cred_string(credentials, "token"))
+            .or_else(|| cred_string(credentials, "access_token"))
+            .ok_or_else(|| "anthropic api key credentials missing api_key".to_string())?,
+        other => return Err(format!("unsupported anthropic account type: {other}")),
+    };
     Ok((CHANNEL_TYPE_ANTHROPIC, key))
+}
+
+fn append_anthropic_auth_setting(
+    setting: &mut JsonMap<String, JsonValue>,
+    account_type: &str,
+    credentials: &JsonMap<String, JsonValue>,
+    account_expires_at: Option<i64>,
+) {
+    setting.insert("provider".into(), JsonValue::String("claude".into()));
+    let auth_kind = match account_type {
+        "oauth" => "oauth",
+        "setup-token" | "setup_token" => "setup-token",
+        _ => "api_key",
+    };
+    setting.insert("auth_kind".into(), JsonValue::String(auth_kind.to_string()));
+    if !is_anthropic_oauth_account_type(account_type) {
+        return;
+    }
+
+    for (target, aliases) in [
+        ("refresh_token", &["refresh_token", "refreshToken"][..]),
+        ("token_type", &["token_type", "tokenType"][..]),
+        ("id_token", &["id_token", "idToken"][..]),
+        ("scope", &["scope"][..]),
+        ("token_endpoint", &["token_endpoint", "tokenEndpoint"][..]),
+        ("last_refresh", &["last_refresh", "lastRefresh"][..]),
+        ("org_uuid", &["org_uuid", "organization_id"][..]),
+        ("account_uuid", &["account_uuid", "account_id"][..]),
+    ] {
+        if let Some(value) = first_credential_string(credentials, aliases) {
+            setting.insert(target.into(), JsonValue::String(value));
+        }
+    }
+    if let Some(email) = first_credential_string(credentials, &["email", "email_address"]) {
+        setting.insert("email".into(), JsonValue::String(email));
+    }
+    let token_expired = first_credential_string(credentials, &[
+        "expired",
+        "expire",
+        "expires_at",
+        "expiresAt",
+        "expiry",
+    ])
+    .or_else(|| account_expires_at.map(|value| value.to_string()));
+    if let Some(expired) = token_expired {
+        setting.insert("expired".into(), JsonValue::String(expired));
+    }
+    if let Some(expires_at) = account_expires_at {
+        setting.insert("account_expires_at".into(), json!(expires_at));
+    }
+}
+
+fn build_anthropic_header_override(account_type: &str) -> Result<Option<String>, String> {
+    if !is_anthropic_oauth_account_type(account_type) {
+        return Ok(None);
+    }
+    let map = json!({
+        "Authorization": "Bearer {api_key}",
+        "Anthropic-Beta": CLAUDE_OAUTH_BETA,
+        "Anthropic-Version": CLAUDE_API_VERSION,
+        "X-App": "cli"
+    });
+    serde_json::to_string(&map)
+        .map(Some)
+        .map_err(|error| format!("failed to serialize anthropic header override: {error}"))
+}
+
+fn is_anthropic_oauth_account_type(account_type: &str) -> bool {
+    matches!(account_type, "oauth" | "setup-token" | "setup_token")
+}
+
+fn first_credential_string(
+    credentials: &JsonMap<String, JsonValue>,
+    aliases: &[&str],
+) -> Option<String> {
+    aliases.iter().find_map(|key| cred_string(credentials, key))
+}
+
+fn provider_default_models(platform: &str) -> &'static str {
+    match platform {
+        "anthropic" | "claude" => CLAUDE_DEFAULT_MODELS,
+        "gemini" | "google" => GEMINI_DEFAULT_MODELS,
+        _ => OPENAI_DEFAULT_MODELS,
+    }
 }
 
 fn map_gemini_account(
     account_type: &str,
     credentials: &JsonMap<String, JsonValue>,
 ) -> Result<(i32, String), String> {
+    if matches!(account_type, "oauth" | "setup-token" | "setup_token") {
+        return Err(
+            "gemini OAuth import is unsupported without the CLIProxyAPI PluginAuthParser runtime"
+                .to_string(),
+        );
+    }
+    if !matches!(account_type, "apikey" | "api_key" | "api-key" | "upstream") {
+        return Err(format!("unsupported gemini account type: {account_type}"));
+    }
     let key = cred_string(credentials, "api_key")
-        .or_else(|| cred_string(credentials, "access_token"))
         .or_else(|| cred_string(credentials, "token"))
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "gemini credentials missing api_key/access_token".to_string())?;
-    let _ = account_type;
+        .ok_or_else(|| "gemini api key credentials missing api_key".to_string())?;
     Ok((CHANNEL_TYPE_GEMINI, key))
 }
 
@@ -647,6 +785,8 @@ fn credentials_to_codex_key(
                 access_token:  Some(access),
                 refresh_token: cred_string(credentials, "refresh_token")
                     .or_else(|| cred_string(credentials, "refreshToken")),
+                client_id:     cred_string(credentials, "client_id")
+                    .or_else(|| cred_string(credentials, "clientId")),
                 account_id:    cred_string(credentials, "chatgpt_account_id")
                     .or_else(|| cred_string(credentials, "account_id"))
                     .or_else(|| cred_string(credentials, "accountId")),
@@ -682,6 +822,7 @@ use serde_json::json;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use halolake_control_plane::ManagementData;
 
     #[test]
     fn builds_proxy_url_and_upgrades_socks5() {
@@ -700,6 +841,121 @@ mod tests {
     }
 
     #[test]
+    fn proxy_error_identity_never_exposes_username_or_password() {
+        let key = build_proxy_key("http", "127.0.0.1", 8080, "admin", "proxy-secret");
+        let public = public_proxy_key(&key);
+
+        assert_eq!(public, "[redacted]");
+        assert!(!public.contains("admin"));
+        assert!(!public.contains("proxy-secret"));
+        assert!(public_proxy_key("").is_empty());
+    }
+
+    #[tokio::test]
+    async fn proxy_import_error_response_redacts_exported_proxy_key() {
+        let secret = "proxy-secret";
+        let username = "proxy-admin";
+        let payload = DataPayload {
+            data_type: DATA_TYPE.to_string(),
+            version: DATA_VERSION,
+            proxies: vec![DataProxy {
+                proxy_key: build_proxy_key("http", "127.0.0.1", 0, username, secret),
+                name:      "broken-proxy".into(),
+                protocol:  "http".into(),
+                host:      "127.0.0.1".into(),
+                port:      0,
+                username:  username.into(),
+                password:  secret.into(),
+                status:    "active".into(),
+            }],
+            ..DataPayload::default()
+        };
+        let management = ManagementStore::memory(ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+
+        let result = import_sub2api_data(
+            &management,
+            &ProxyStore::memory(),
+            Sub2apiDataImportRequest {
+                data:    Some(payload),
+                content: String::new(),
+                group:   None,
+                models:  None,
+            },
+        )
+        .await
+        .expect("invalid proxy should be reported per item");
+        let encoded = serde_json::to_string(&result).expect("result should serialize");
+
+        assert_eq!(result.proxy_failed, 1);
+        assert_eq!(result.errors[0].proxy_key, "[redacted]");
+        assert!(!encoded.contains(username));
+        assert!(!encoded.contains(secret));
+    }
+
+    #[tokio::test]
+    async fn invalid_account_is_item_scoped_and_does_not_rollback_neighbors() {
+        let valid_openai = DataAccount {
+            name: "openai-valid".into(),
+            platform: "openai".into(),
+            account_type: "apikey".into(),
+            credentials: JsonMap::from_iter([("api_key".into(), json!("sk-valid"))]),
+            ..DataAccount::default()
+        };
+        let invalid = DataAccount {
+            name: "broken".into(),
+            platform: "anthropic".into(),
+            account_type: "oauth".into(),
+            credentials: JsonMap::new(),
+            ..DataAccount::default()
+        };
+        let valid_gemini = DataAccount {
+            name: "gemini-valid".into(),
+            platform: "gemini".into(),
+            account_type: "apikey".into(),
+            credentials: JsonMap::from_iter([("api_key".into(), json!("gemini-valid"))]),
+            ..DataAccount::default()
+        };
+        let management = ManagementStore::memory(ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+
+        let result = import_sub2api_data(
+            &management,
+            &ProxyStore::memory(),
+            Sub2apiDataImportRequest {
+                data:    Some(DataPayload {
+                    data_type: DATA_TYPE.into(),
+                    version: DATA_VERSION,
+                    accounts: vec![valid_openai, invalid, valid_gemini],
+                    ..DataPayload::default()
+                }),
+                content: String::new(),
+                group:   None,
+                models:  None,
+            },
+        )
+        .await
+        .expect("partial import remains successful");
+
+        assert_eq!(result.account_created, 2);
+        assert_eq!(result.account_failed, 1);
+        let channels = management.current_data().unwrap().channels;
+        assert_eq!(channels.len(), 2);
+        assert!(channels.iter().any(|channel| channel.key == "sk-valid"));
+        assert!(channels.iter().any(|channel| channel.key == "gemini-valid"));
+    }
+
+    #[test]
     fn maps_openai_oauth_to_codex_channel() {
         let mut creds = JsonMap::new();
         creds.insert("access_token".into(), json!("at-1"));
@@ -713,7 +969,7 @@ mod tests {
             priority: 50,
             ..DataAccount::default()
         };
-        let channel = map_account_to_channel(&item, "default", "gpt-5", None).unwrap();
+        let channel = map_account_to_channel(&item, "default", Some("gpt-5"), None).unwrap();
         assert_eq!(channel.channel_type, CHANNEL_TYPE_CODEX);
         assert!(channel.key.contains("at-1"));
         assert!(channel.key.contains("rt-1"));
@@ -730,9 +986,141 @@ mod tests {
             credentials: creds,
             ..DataAccount::default()
         };
-        let channel = map_account_to_channel(&item, "default", "gpt-5", None).unwrap();
+        let channel = map_account_to_channel(&item, "default", Some("gpt-5"), None).unwrap();
         assert_eq!(channel.channel_type, CHANNEL_TYPE_OPENAI);
         assert_eq!(channel.key, "sk-test");
+    }
+
+    #[test]
+    fn maps_anthropic_oauth_with_refresh_metadata_and_bearer_headers() {
+        let mut creds = JsonMap::new();
+        creds.insert("access_token".into(), json!("sk-ant-oat01-test"));
+        creds.insert("refresh_token".into(), json!("rt-claude"));
+        creds.insert("token_type".into(), json!("Bearer"));
+        creds.insert("idToken".into(), json!("id-claude"));
+        creds.insert("expires_at".into(), json!(1893456000_i64));
+        creds.insert("email_address".into(), json!("claude@example.com"));
+        let item = DataAccount {
+            name: "claude-oauth".into(),
+            platform: "anthropic".into(),
+            account_type: "oauth".into(),
+            credentials: creds,
+            expires_at: Some(1924992000),
+            ..DataAccount::default()
+        };
+        let channel = map_account_to_channel(&item, "default", None, None).unwrap();
+        assert_eq!(channel.channel_type, CHANNEL_TYPE_ANTHROPIC);
+        assert_eq!(channel.key, "sk-ant-oat01-test");
+        assert_eq!(channel.models, CLAUDE_DEFAULT_MODELS);
+
+        let setting: JsonValue =
+            serde_json::from_str(channel.setting.as_deref().expect("setting")).unwrap();
+        assert_eq!(
+            setting.get("auth_kind").and_then(JsonValue::as_str),
+            Some("oauth")
+        );
+        assert_eq!(
+            setting.get("refresh_token").and_then(JsonValue::as_str),
+            Some("rt-claude")
+        );
+        assert_eq!(
+            setting.get("expired").and_then(JsonValue::as_str),
+            Some("1893456000")
+        );
+        assert_eq!(
+            setting.get("email").and_then(JsonValue::as_str),
+            Some("claude@example.com")
+        );
+        assert_eq!(
+            setting.get("id_token").and_then(JsonValue::as_str),
+            Some("id-claude")
+        );
+        assert_eq!(
+            setting
+                .get("account_expires_at")
+                .and_then(JsonValue::as_i64),
+            Some(1924992000)
+        );
+
+        let headers: JsonValue = serde_json::from_str(
+            channel
+                .header_override
+                .as_deref()
+                .expect("oauth header override"),
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get("Authorization").and_then(JsonValue::as_str),
+            Some("Bearer {api_key}")
+        );
+        assert_eq!(
+            headers.get("Anthropic-Beta").and_then(JsonValue::as_str),
+            Some(CLAUDE_OAUTH_BETA)
+        );
+    }
+
+    #[test]
+    fn maps_anthropic_api_key_without_oauth_authorization_override() {
+        let mut creds = JsonMap::new();
+        creds.insert("api_key".into(), json!("sk-ant-api03-test"));
+        let item = DataAccount {
+            name: "claude-api-key".into(),
+            platform: "claude".into(),
+            account_type: "apikey".into(),
+            credentials: creds,
+            ..DataAccount::default()
+        };
+        let channel = map_account_to_channel(&item, "default", None, None).unwrap();
+        assert_eq!(channel.key, "sk-ant-api03-test");
+        assert_eq!(channel.models, CLAUDE_DEFAULT_MODELS);
+        assert!(channel.header_override.is_none());
+        let setting: JsonValue =
+            serde_json::from_str(channel.setting.as_deref().expect("setting")).unwrap();
+        assert_eq!(
+            setting.get("auth_kind").and_then(JsonValue::as_str),
+            Some("api_key")
+        );
+    }
+
+    #[test]
+    fn provider_defaults_prevent_model_cross_contamination() {
+        let mut gemini_credentials = JsonMap::new();
+        gemini_credentials.insert("api_key".into(), json!("gemini-key"));
+        let gemini = DataAccount {
+            name: "gemini".into(),
+            platform: "gemini".into(),
+            account_type: "apikey".into(),
+            credentials: gemini_credentials,
+            ..DataAccount::default()
+        };
+        let channel = map_account_to_channel(&gemini, "default", None, None).unwrap();
+        assert_eq!(channel.models, GEMINI_DEFAULT_MODELS);
+
+        let overridden =
+            map_account_to_channel(&gemini, "default", Some("global-model"), None).unwrap();
+        assert_eq!(overridden.models, "global-model");
+
+        let mut gemini_oauth = gemini.clone();
+        gemini_oauth.account_type = "oauth".into();
+        gemini_oauth.credentials = JsonMap::from_iter([
+            ("access_token".into(), json!("oauth-access")),
+            ("refresh_token".into(), json!("oauth-refresh")),
+        ]);
+        let error = map_account_to_channel(&gemini_oauth, "default", None, None)
+            .expect_err("Gemini OAuth must fail closed without its plugin runtime");
+        assert!(error.contains("PluginAuthParser"));
+
+        let mut openai_credentials = JsonMap::new();
+        openai_credentials.insert("api_key".into(), json!("openai-key"));
+        let openai = DataAccount {
+            name: "openai".into(),
+            platform: "openai".into(),
+            account_type: "apikey".into(),
+            credentials: openai_credentials,
+            ..DataAccount::default()
+        };
+        let channel = map_account_to_channel(&openai, "default", None, None).unwrap();
+        assert_eq!(channel.models, OPENAI_DEFAULT_MODELS);
     }
 
     #[test]

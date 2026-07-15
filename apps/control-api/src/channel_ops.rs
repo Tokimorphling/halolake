@@ -1,11 +1,15 @@
 use crate::{
+    channel_http::ChannelHttpClientFactory,
     channel_probe::{ChannelProbeService, FetchModelsRequest},
+    proxy::ProxyStore,
     storage::ManagementStore,
 };
-use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
+use halolake_control_plane::{
+    CreateChannelRequest, ManagementError, PatchChannelBalanceRequest,
+    PatchChannelModelStateRequest, PatchChannelProbeMetricsRequest,
+};
 use halolake_domain::{
-    CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord,
-    STATUS_AUTO_DISABLED, STATUS_ENABLED,
+    CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, STATUS_ENABLED,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -65,14 +69,14 @@ impl ChannelOpsProgress for NoopChannelOpsProgress {
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelOpsService {
     management: ManagementStore,
-    client:     reqwest::Client,
+    http:       ChannelHttpClientFactory,
 }
 
 impl ChannelOpsService {
-    pub(crate) fn new(management: ManagementStore) -> Self {
+    pub(crate) fn new(management: ManagementStore, proxies: ProxyStore) -> Self {
         Self {
             management,
-            client: reqwest::Client::new(),
+            http: ChannelHttpClientFactory::new(proxies),
         }
     }
 
@@ -85,13 +89,6 @@ impl ChannelOpsService {
             .ok_or(ManagementError::NotFound)
     }
 
-    async fn update_channel(
-        &self,
-        channel: ChannelRecord,
-    ) -> Result<ChannelRecord, ManagementError> {
-        self.management.call(UpdateChannelRequest { channel }).await
-    }
-
     async fn create_channel(
         &self,
         channel: ChannelRecord,
@@ -101,7 +98,7 @@ impl ChannelOpsService {
 
     async fn update_channel_balance(
         &self,
-        mut channel: ChannelRecord,
+        channel: ChannelRecord,
         price: f64,
         disable_empty: bool,
     ) -> Result<f64, ManagementError> {
@@ -111,13 +108,15 @@ impl ChannelOpsService {
             ));
         }
         let balance = self.query_channel_balance(&channel, price).await?;
-        channel.balance = balance;
-        channel.balance_updated_time = now_unix();
-        if disable_empty && balance <= 0.0 && channel.auto_ban.unwrap_or(1) != 0 {
-            // Align with new-api auto-ban: status 3 = auto disabled (not 0).
-            channel.status = STATUS_AUTO_DISABLED;
-        }
-        self.update_channel(channel).await?;
+        self.management
+            .call(PatchChannelBalanceRequest {
+                id: channel.id,
+                expected_key: channel.key,
+                balance,
+                balance_updated_time: now_unix(),
+                auto_disable_if_empty: disable_empty,
+            })
+            .await?;
         Ok(balance)
     }
 
@@ -130,13 +129,15 @@ impl ChannelOpsService {
         if key.is_empty() {
             return Err(ManagementError::InvalidRequest("channel key is required"));
         }
+        let client = self.http.client_for_channel(channel)?;
         match channel.channel_type {
             CHANNEL_TYPE_OPENAI | CHANNEL_TYPE_CUSTOM => {
-                self.query_openai_balance(channel, &key).await
+                self.query_openai_balance(&client, channel, &key).await
             }
-            CHANNEL_TYPE_AI_PROXY => self.query_aiproxy_balance(&key).await,
+            CHANNEL_TYPE_AI_PROXY => self.query_aiproxy_balance(&client, &key).await,
             CHANNEL_TYPE_API2GPT => {
                 self.query_credit_grants_balance(
+                    &client,
                     "https://api.api2gpt.com/dashboard/billing/credit_grants",
                     &key,
                     "total_remaining",
@@ -145,28 +146,31 @@ impl ChannelOpsService {
             }
             CHANNEL_TYPE_AIGC2D => {
                 self.query_credit_grants_balance(
+                    &client,
                     "https://api.aigc2d.com/dashboard/billing/credit_grants",
                     &key,
                     "total_available",
                 )
                 .await
             }
-            CHANNEL_TYPE_SILICON_FLOW => self.query_siliconflow_balance(&key).await,
-            CHANNEL_TYPE_DEEPSEEK => self.query_deepseek_balance(&key).await,
-            CHANNEL_TYPE_OPENROUTER => self.query_openrouter_balance(&key).await,
-            CHANNEL_TYPE_MOONSHOT => self.query_moonshot_balance(&key, price).await,
+            CHANNEL_TYPE_SILICON_FLOW => self.query_siliconflow_balance(&client, &key).await,
+            CHANNEL_TYPE_DEEPSEEK => self.query_deepseek_balance(&client, &key).await,
+            CHANNEL_TYPE_OPENROUTER => self.query_openrouter_balance(&client, &key).await,
+            CHANNEL_TYPE_MOONSHOT => self.query_moonshot_balance(&client, &key, price).await,
             _ => Err(ManagementError::InvalidRequest("尚未实现")),
         }
     }
 
     async fn query_openai_balance(
         &self,
+        client: &reqwest::Client,
         channel: &ChannelRecord,
         key: &str,
     ) -> Result<f64, ManagementError> {
         let base_url = channel_base_url(channel);
         let subscription = self
             .get_json_bearer(
+                client,
                 &format!("{}/v1/dashboard/billing/subscription", base_url),
                 key,
             )
@@ -188,6 +192,7 @@ impl ChannelOpsService {
         let end_date = ymd_string_from_days(today_days);
         let usage = self
             .get_json_bearer(
+                client,
                 &format!(
                     "{}/v1/dashboard/billing/usage?start_date={start_date}&end_date={end_date}",
                     base_url
@@ -199,9 +204,12 @@ impl ChannelOpsService {
         Ok(hard_limit - total_usage / 100.0)
     }
 
-    async fn query_aiproxy_balance(&self, key: &str) -> Result<f64, ManagementError> {
-        let value = self
-            .client
+    async fn query_aiproxy_balance(
+        &self,
+        client: &reqwest::Client,
+        key: &str,
+    ) -> Result<f64, ManagementError> {
+        let value = client
             .get("https://aiproxy.io/api/report/getUserOverview")
             .header("Api-Key", key)
             .send()
@@ -221,18 +229,23 @@ impl ChannelOpsService {
 
     async fn query_credit_grants_balance(
         &self,
+        client: &reqwest::Client,
         url: &str,
         key: &str,
         field: &str,
     ) -> Result<f64, ManagementError> {
-        let value = self.get_json_bearer(url, key).await?;
+        let value = self.get_json_bearer(client, url, key).await?;
         json_f64(&value, &[field])
             .ok_or_else(|| ManagementError::Storage(format!("missing {field}")))
     }
 
-    async fn query_siliconflow_balance(&self, key: &str) -> Result<f64, ManagementError> {
+    async fn query_siliconflow_balance(
+        &self,
+        client: &reqwest::Client,
+        key: &str,
+    ) -> Result<f64, ManagementError> {
         let value = self
-            .get_json_bearer("https://api.siliconflow.cn/v1/user/info", key)
+            .get_json_bearer(client, "https://api.siliconflow.cn/v1/user/info", key)
             .await?;
         if json_i64(&value, &["code"]) != Some(20000) {
             return Err(ManagementError::Storage(format!(
@@ -245,9 +258,13 @@ impl ChannelOpsService {
             .ok_or_else(|| ManagementError::Storage("missing totalBalance".to_string()))
     }
 
-    async fn query_deepseek_balance(&self, key: &str) -> Result<f64, ManagementError> {
+    async fn query_deepseek_balance(
+        &self,
+        client: &reqwest::Client,
+        key: &str,
+    ) -> Result<f64, ManagementError> {
         let value = self
-            .get_json_bearer("https://api.deepseek.com/user/balance", key)
+            .get_json_bearer(client, "https://api.deepseek.com/user/balance", key)
             .await?;
         let Some(items) = value.get("balance_infos").and_then(JsonValue::as_array) else {
             return Err(ManagementError::Storage(
@@ -261,18 +278,27 @@ impl ChannelOpsService {
             .ok_or_else(|| ManagementError::Storage("currency CNY not found".to_string()))
     }
 
-    async fn query_openrouter_balance(&self, key: &str) -> Result<f64, ManagementError> {
+    async fn query_openrouter_balance(
+        &self,
+        client: &reqwest::Client,
+        key: &str,
+    ) -> Result<f64, ManagementError> {
         let value = self
-            .get_json_bearer("https://openrouter.ai/api/v1/credits", key)
+            .get_json_bearer(client, "https://openrouter.ai/api/v1/credits", key)
             .await?;
         let total_credits = json_f64(&value, &["data", "total_credits"]).unwrap_or_default();
         let total_usage = json_f64(&value, &["data", "total_usage"]).unwrap_or_default();
         Ok(total_credits - total_usage)
     }
 
-    async fn query_moonshot_balance(&self, key: &str, price: f64) -> Result<f64, ManagementError> {
+    async fn query_moonshot_balance(
+        &self,
+        client: &reqwest::Client,
+        key: &str,
+        price: f64,
+    ) -> Result<f64, ManagementError> {
         let value = self
-            .get_json_bearer("https://api.moonshot.cn/v1/users/me/balance", key)
+            .get_json_bearer(client, "https://api.moonshot.cn/v1/users/me/balance", key)
             .await?;
         let status = json_bool(&value, &["status"]).unwrap_or_default();
         let code = json_i64(&value, &["code"]).unwrap_or_default();
@@ -290,9 +316,13 @@ impl ChannelOpsService {
         Ok(cny / price)
     }
 
-    async fn get_json_bearer(&self, url: &str, key: &str) -> Result<JsonValue, ManagementError> {
-        let response = self
-            .client
+    async fn get_json_bearer(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        key: &str,
+    ) -> Result<JsonValue, ManagementError> {
+        let response = client
             .get(url)
             .bearer_auth(key)
             .send()
@@ -303,7 +333,7 @@ impl ChannelOpsService {
 
     async fn test_channel(
         &self,
-        mut channel: ChannelRecord,
+        channel: ChannelRecord,
         req: TestChannelRequest,
     ) -> Result<TestChannelResponse, ManagementError> {
         if unsupported_channel_test_type(channel.channel_type) {
@@ -318,9 +348,13 @@ impl ChannelOpsService {
         self.send_test_request(&channel, &model, &endpoint, req.stream)
             .await?;
         let elapsed = started.elapsed();
-        channel.response_time = elapsed.as_millis().min(i32::MAX as u128) as i32;
-        channel.test_time = now_unix();
-        self.update_channel(channel).await?;
+        self.management
+            .call(PatchChannelProbeMetricsRequest {
+                id:            channel.id,
+                response_time: elapsed.as_millis().min(i32::MAX as u128) as i32,
+                test_time:     now_unix(),
+            })
+            .await?;
         Ok(TestChannelResponse {
             time: elapsed.as_secs_f64(),
         })
@@ -338,7 +372,7 @@ impl ChannelOpsService {
         let (url, body, auth) =
             build_test_http_request(channel, &base_url, &key, model, endpoint, stream);
         let request_body = serde_json::to_vec(&body).map_err(storage_err)?;
-        let client = http_client_for_channel(channel)?;
+        let client = self.http.client_for_channel(channel)?;
         let mut request = client
             .post(url)
             .header("content-type", "application/json")
@@ -386,17 +420,20 @@ impl ChannelOpsService {
         allow_auto_apply: bool,
     ) -> Result<DetectChannelUpstreamModelUpdatesResponse, ManagementError> {
         let mut channel = self.full_channel(channel_id)?;
+        let expected_models = channel.models.clone();
         let mut settings = channel_settings(&channel);
-        let upstream_models = ChannelProbeService::new(self.management.clone())
-            .call(FetchModelsRequest {
-                channel_id:      Some(channel_id),
-                base_url:        String::new(),
-                channel_type:    CHANNEL_TYPE_OPENAI,
-                key:             String::new(),
-                header_override: None,
-                setting:         None,
-            })
-            .await?;
+        let upstream_models =
+            ChannelProbeService::with_http(self.management.clone(), self.http.clone())
+                .call(FetchModelsRequest {
+                    channel_id:      Some(channel_id),
+                    base_url:        String::new(),
+                    channel_type:    CHANNEL_TYPE_OPENAI,
+                    key:             String::new(),
+                    header_override: None,
+                    setting:         None,
+                    proxy_id:        None,
+                })
+                .await?;
         let (pending_add, pending_remove) = collect_pending_upstream_model_changes(
             channel.model_list(),
             upstream_models,
@@ -419,7 +456,14 @@ impl ChannelOpsService {
         settings.upstream_model_update_last_removed_models = pending_remove;
         settings.upstream_model_update_last_check_time = now_unix();
         write_channel_settings(&mut channel, &settings)?;
-        self.update_channel(channel.clone()).await?;
+        self.management
+            .call(PatchChannelModelStateRequest {
+                id: channel.id,
+                expected_models,
+                models: channel.models.clone(),
+                setting_patch: Some(model_sync_setting_patch(&settings)?),
+            })
+            .await?;
         Ok(DetectChannelUpstreamModelUpdatesResponse {
             channel_id: channel.id,
             channel_name: channel.name,
@@ -534,6 +578,7 @@ impl ChannelOpsService {
             return Err(ManagementError::InvalidRequest("invalid channel id"));
         }
         let mut channel = self.full_channel(req.id)?;
+        let expected_models = channel.models.clone();
         let before_settings = channel_settings(&channel);
         let ignored_models = intersect_model_names(
             req.ignore_models.clone(),
@@ -544,7 +589,14 @@ impl ChannelOpsService {
         let (added_models, removed_models, remaining_models, remaining_remove_models) =
             apply_channel_upstream_model_updates(&mut channel, req)?;
         let settings = channel_settings(&channel);
-        self.update_channel(channel.clone()).await?;
+        self.management
+            .call(PatchChannelModelStateRequest {
+                id: channel.id,
+                expected_models,
+                models: channel.models.clone(),
+                setting_patch: Some(model_sync_setting_patch(&settings)?),
+            })
+            .await?;
         Ok(ApplyChannelUpstreamModelUpdatesResponse {
             id: channel.id,
             added_models,
@@ -1114,6 +1166,27 @@ fn write_channel_settings(
     Ok(())
 }
 
+/// Only persist fields owned by the upstream-model synchronizer. Serializing
+/// the entire stale setting object after a network request could otherwise
+/// restore old OAuth, proxy, or manual-disable metadata.
+fn model_sync_setting_patch(settings: &ChannelOtherSettings) -> Result<String, ManagementError> {
+    serde_json::to_string(&json!({
+        "upstream_model_update_check_enabled":
+            settings.upstream_model_update_check_enabled,
+        "upstream_model_update_auto_sync_enabled":
+            settings.upstream_model_update_auto_sync_enabled,
+        "upstream_model_update_last_check_time":
+            settings.upstream_model_update_last_check_time,
+        "upstream_model_update_last_detected_models":
+            settings.upstream_model_update_last_detected_models,
+        "upstream_model_update_last_removed_models":
+            settings.upstream_model_update_last_removed_models,
+        "upstream_model_update_ignored_models":
+            settings.upstream_model_update_ignored_models,
+    }))
+    .map_err(storage_err)
+}
+
 fn normalize_model_names(models: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::with_capacity(models.len());
     let mut normalized = Vec::with_capacity(models.len());
@@ -1322,32 +1395,6 @@ fn channel_base_url(channel: &ChannelRecord) -> String {
         .unwrap_or_else(|| default_channel_base_url(channel.channel_type))
         .trim_end_matches('/')
         .to_string()
-}
-
-/// Build an HTTP client that honors channel `setting.proxy` (same URL the gateway uses).
-fn http_client_for_channel(channel: &ChannelRecord) -> Result<reqwest::Client, ManagementError> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .connect_timeout(std::time::Duration::from_secs(15));
-    if let Some(proxy_url) = channel_setting_proxy_url(channel) {
-        let proxy = reqwest::Proxy::all(&proxy_url)
-            .map_err(|err| ManagementError::Storage(format!("invalid channel proxy URL: {err}")))?;
-        builder = builder.proxy(proxy);
-    }
-    builder.build().map_err(storage_err)
-}
-
-fn channel_setting_proxy_url(channel: &ChannelRecord) -> Option<String> {
-    let raw = channel.setting.as_deref()?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let v: JsonValue = serde_json::from_str(raw).ok()?;
-    v.get("proxy")?
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 fn default_channel_base_url(channel_type: i32) -> &'static str {

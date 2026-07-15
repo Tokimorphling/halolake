@@ -13,9 +13,10 @@ pub(crate) use auth_import::{AuthImportRequest, import_auth};
 pub(crate) use codex_auth_import::{
     CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
     CodexAuthImportResult, codex_key_to_json, collect_entries, find_existing_channel_id,
-    parse_flexible_codex_key,
+    merge_codex_oauth_key, parse_flexible_codex_key,
 };
 pub(crate) use http::mount;
+pub(crate) use openai_oauth::AuthMethod;
 pub(crate) use sub2api_data_import::{
     Sub2apiDataImportRequest, import_sub2api_data as run_sub2api_data_import,
 };

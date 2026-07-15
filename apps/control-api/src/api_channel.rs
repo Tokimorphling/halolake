@@ -1,5 +1,11 @@
 //! Channel and proxy management HTTP handlers.
 
+#[cfg(feature = "admin-extras")]
+use crate::channel_special::{
+    ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
+    MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
+    OllamaPullModelRequest, OllamaVersionRequest,
+};
 use crate::{
     AppState, BatchIds, ChannelBatchTagPayload, ChannelListQuery, ChannelSearchQuery,
     ChannelTagPayload, StatusUpdate,
@@ -19,7 +25,7 @@ use crate::{
         api_error_status, api_ok, api_success, api_success_with_extra, api_success_with_message,
         management_error, system_task_conflict,
     },
-    now_unix, option_f64, option_i64,
+    option_f64, option_i64,
     proxy::{
         CreateProxyRequest, DeleteProxyRequest, GetProxyRequest, ListProxiesRequest, ProxyRecord,
         UpdateProxyRequest,
@@ -29,12 +35,6 @@ use crate::{
         EnqueueSystemTaskRequest, SYSTEM_TASK_TYPE_CHANNEL_TEST, SYSTEM_TASK_TYPE_MODEL_UPDATE,
     },
 };
-#[cfg(feature = "admin-extras")]
-use crate::channel_special::{
-    ChannelSpecialService, CodexRefreshCredentialRequest, CodexWhamKind, CodexWhamRequest,
-    MultiKeyManageRequest, OllamaDeleteModelRequest, OllamaModelRequestBody,
-    OllamaPullModelRequest, OllamaVersionRequest,
-};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -42,13 +42,15 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use halolake_control_plane::{
-    BatchSetChannelTagRequest, ChannelStatusUpdateRequest, ChannelTagPatch, CreateChannelRequest,
-    DeleteChannelRequest, DeleteDisabledChannelsRequest, GetChannelRequest, ListChannelsRequest,
-    ManagementError, RevealChannelKeyRequest, SearchChannelsRequest, UpdateChannelRequest,
+    BatchSetChannelTagRequest, BatchUpdateChannelStatusRequest, ChannelStatusUpdateRequest,
+    ChannelTagPatch, CreateChannelRequest, DeleteChannelRequest, DeleteChannelsBatchRequest,
+    DeleteDisabledChannelsRequest, GetChannelRequest, ListChannelsRequest, ManagementError,
+    RevealChannelKeyRequest, SearchChannelsRequest, UpdateChannelRequest,
     UpdateChannelsByTagRequest,
 };
 use halolake_domain::{
-    ChannelRecord, PageRequest, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED, SearchRequest,
+    ChannelRecord, PageRequest, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED,
+    STATUS_MANUALLY_DISABLED, SearchRequest,
 };
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
@@ -66,6 +68,12 @@ fn normalize_group_filter(group: &str) -> Option<&str> {
 
 fn channel_in_group(channel: &ChannelRecord, group: &str) -> bool {
     channel.group_list().iter().any(|item| item == group)
+}
+
+fn proxy_is_referenced(channels: &[ChannelRecord], proxy_id: u64) -> bool {
+    channels
+        .iter()
+        .any(|channel| channel.proxy_id == Some(proxy_id))
 }
 
 fn channel_matches_status(channel: &ChannelRecord, status: Option<i32>) -> bool {
@@ -108,6 +116,36 @@ fn parse_channel_status_filter(status: &str) -> Option<i32> {
         "enabled" | "1" => Some(STATUS_ENABLED),
         "disabled" | "0" => Some(0),
         _ => None,
+    }
+}
+
+/// Accept the current new-api shape `{ ids, status }` while keeping the older
+/// per-item array wire-compatible during rolling upgrades.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+pub(crate) enum BatchChannelStatusPayload {
+    Unified { ids: Vec<u64>, status: i32 },
+    Legacy(Vec<ChannelStatusUpdateRequest>),
+}
+
+impl BatchChannelStatusPayload {
+    fn normalize(self) -> Result<(Vec<u64>, i32), ManagementError> {
+        match self {
+            Self::Unified { ids, status } => Ok((ids, status)),
+            Self::Legacy(items) => {
+                let Some(first) = items.first() else {
+                    return Err(ManagementError::InvalidRequest(
+                        "channel status updates are required",
+                    ));
+                };
+                if items.iter().any(|item| item.status != first.status) {
+                    return Err(ManagementError::InvalidRequest(
+                        "batch channel status must be uniform",
+                    ));
+                }
+                Ok((items.iter().map(|item| item.id).collect(), first.status))
+            }
+        }
     }
 }
 
@@ -261,7 +299,12 @@ pub(crate) async fn create_channel(
     }
 
     let mut created = 0usize;
-    for channel in channels {
+    for mut channel in channels {
+        // Management ids and snapshot aliases are server-owned identities.
+        // Ignoring client supplied values prevents a create payload from
+        // colliding with a legacy auth-file route id.
+        channel.id = 0;
+        channel.snapshot_id = None;
         match state
             .management
             .call(CreateChannelRequest { channel })
@@ -321,6 +364,8 @@ fn expand_create_channel_body(body: JsonValue) -> Result<Vec<ChannelRecord>, Str
         flat
     };
     let mut channel = channel_record_from_json(channel_json)?;
+    channel.id = 0;
+    channel.snapshot_id = None;
     if channel.created_time == 0 {
         channel.created_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -598,6 +643,54 @@ mod create_channel_tests {
     }
 
     #[test]
+    fn create_ignores_client_supplied_channel_identity() {
+        let body = json!({
+            "mode": "single",
+            "channel": {
+                "id": 99,
+                "name": "demo",
+                "type": 1,
+                "key": "sk-test",
+                "models": "gpt-4o",
+                "group": "default"
+            }
+        });
+        let channels = expand_create_channel_body(body).expect("parse");
+        assert_eq!(channels[0].id, 0);
+        assert!(channels[0].snapshot_id.is_none());
+    }
+
+    #[test]
+    fn batch_status_accepts_new_api_and_legacy_shapes() {
+        let unified: BatchChannelStatusPayload = serde_json::from_value(json!({
+            "ids": [1, 2],
+            "status": STATUS_MANUALLY_DISABLED
+        }))
+        .expect("unified payload");
+        assert_eq!(
+            unified.normalize().expect("normalize"),
+            (vec![1, 2], STATUS_MANUALLY_DISABLED)
+        );
+
+        let legacy: BatchChannelStatusPayload = serde_json::from_value(json!([
+            {"id": 1, "status": 1},
+            {"id": 2, "status": 1}
+        ]))
+        .expect("legacy payload");
+        assert_eq!(legacy.normalize().expect("normalize"), (vec![1, 2], 1));
+
+        let mixed: BatchChannelStatusPayload = serde_json::from_value(json!([
+            {"id": 1, "status": 1},
+            {"id": 2, "status": 2}
+        ]))
+        .expect("legacy payload");
+        assert!(matches!(
+            mixed.normalize(),
+            Err(ManagementError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
     fn batch_splits_keys_and_prefixes_name() {
         let body = json!({
             "mode": "batch",
@@ -678,6 +771,23 @@ mod create_channel_tests {
         assert_eq!(updated.header_override, existing.header_override);
         assert_eq!(updated.auto_ban, existing.auto_ban);
     }
+
+    #[test]
+    fn detects_proxy_references_before_delete() {
+        let channel = channel_record_from_json(json!({
+            "id": 7,
+            "type": 1,
+            "key": "sk-test",
+            "name": "proxied",
+            "models": "gpt-test",
+            "group": "default",
+            "proxy_id": 42
+        }))
+        .expect("channel");
+
+        assert!(proxy_is_referenced(&[channel], 42));
+        assert!(!proxy_is_referenced(&[], 42));
+    }
 }
 
 pub(crate) async fn update_channel(
@@ -689,6 +799,15 @@ pub(crate) async fn update_channel(
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    if body
+        .as_object()
+        .is_some_and(|object| object.contains_key("status"))
+    {
+        return api_error_status(
+            StatusCode::BAD_REQUEST,
+            "channel status must be changed through the status endpoint",
+        );
+    }
     // Parse once to validate the payload and extract its id, then apply the raw
     // JSON as a patch over the stored record. The web UI deliberately uses
     // sparse updates for models, priority, weight, and test-dialog actions.
@@ -750,13 +869,15 @@ pub(crate) async fn delete_channel_batch(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    for id in req.ids {
-        if let Err(err) = state.management.call(DeleteChannelRequest { id }).await {
-            return management_error(err);
-        }
-    }
-    match publish_management_snapshot(&state).await {
-        Ok(()) => api_ok(),
+    match state
+        .management
+        .call(DeleteChannelsBatchRequest { ids: req.ids })
+        .await
+    {
+        Ok(deleted) => match publish_management_snapshot(&state).await {
+            Ok(()) => api_success(deleted),
+            Err(err) => management_error(err),
+        },
         Err(err) => management_error(err),
     }
 }
@@ -779,8 +900,8 @@ pub(crate) async fn update_channel_status(
         })
         .await
     {
-        Ok(_) => match publish_management_snapshot(&state).await {
-            Ok(()) => api_ok(),
+        Ok(changed) => match publish_management_snapshot(&state).await {
+            Ok(()) => api_success(changed),
             Err(err) => management_error(err),
         },
         Err(err) => management_error(err),
@@ -790,19 +911,25 @@ pub(crate) async fn update_channel_status(
 pub(crate) async fn update_channel_status_batch(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<Vec<ChannelStatusUpdateRequest>>,
+    Json(req): Json<BatchChannelStatusPayload>,
 ) -> Response {
     let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    for item in req {
-        if let Err(err) = state.management.call(item).await {
-            return management_error(err);
-        }
-    }
-    match publish_management_snapshot(&state).await {
-        Ok(()) => api_ok(),
+    let (ids, status) = match req.normalize() {
+        Ok(normalized) => normalized,
+        Err(err) => return management_error(err),
+    };
+    match state
+        .management
+        .call(BatchUpdateChannelStatusRequest { ids, status })
+        .await
+    {
+        Ok(updated) => match publish_management_snapshot(&state).await {
+            Ok(()) => api_success(updated),
+            Err(err) => management_error(err),
+        },
         Err(err) => management_error(err),
     }
 }
@@ -846,7 +973,7 @@ pub(crate) async fn fetch_models_for_channel(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelProbeService::new(state.management.clone());
+    let service = ChannelProbeService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(FetchModelsRequest {
             channel_id:      Some(id),
@@ -855,6 +982,7 @@ pub(crate) async fn fetch_models_for_channel(
             key:             String::new(),
             header_override: None,
             setting:         None,
+            proxy_id:        None,
         })
         .await
     {
@@ -872,7 +1000,7 @@ pub(crate) async fn fetch_models_for_channel_payload(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelProbeService::new(state.management.clone());
+    let service = ChannelProbeService::new(state.management.clone(), state.proxies.clone());
     match service.call(payload).await {
         Ok(models) => api_success(models),
         Err(err) => api_error_status(StatusCode::OK, &err.to_string()),
@@ -889,7 +1017,7 @@ pub(crate) async fn copy_channel(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(CopyChannelRequest {
             id,
@@ -915,7 +1043,7 @@ pub(crate) async fn update_channel_balance(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(UpdateChannelBalanceRequest {
             id,
@@ -939,7 +1067,7 @@ pub(crate) async fn update_all_channel_balances(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(UpdateAllChannelBalancesRequest {
             price: channel_balance_price(&state),
@@ -964,7 +1092,7 @@ pub(crate) async fn test_channel(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(TestChannelRequest {
             id,
@@ -1036,7 +1164,7 @@ pub(crate) async fn fix_channel_abilities(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service.call(FixChannelAbilitiesRequest).await {
         Ok(data) => match publish_management_snapshot(&state).await {
             Ok(()) => api_success(data),
@@ -1056,7 +1184,7 @@ pub(crate) async fn detect_channel_upstream_model_updates(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service.call(req).await {
         Ok(data) => match publish_management_snapshot(&state).await {
             Ok(()) => api_success(data),
@@ -1117,7 +1245,7 @@ pub(crate) async fn apply_channel_upstream_model_updates(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service.call(req).await {
         Ok(data) => match publish_management_snapshot(&state).await {
             Ok(()) => api_success(data),
@@ -1136,7 +1264,7 @@ pub(crate) async fn apply_all_channel_upstream_model_updates(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelOpsService::new(state.management.clone());
+    let service = ChannelOpsService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(ApplyAllChannelUpstreamModelUpdatesRequest)
         .await
@@ -1159,7 +1287,7 @@ pub(crate) async fn manage_multi_keys(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service.call(req).await {
         Ok(data) => match publish_management_snapshot(&state).await {
             Ok(()) => Json(data).into_response(),
@@ -1179,7 +1307,7 @@ pub(crate) async fn ollama_pull_model(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(OllamaPullModelRequest {
             channel_id: req.channel_id,
@@ -1203,7 +1331,7 @@ pub(crate) async fn ollama_pull_model_stream(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(OllamaPullModelRequest {
             channel_id: req.channel_id,
@@ -1243,7 +1371,7 @@ pub(crate) async fn ollama_delete_model(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service
         .call(OllamaDeleteModelRequest {
             channel_id: req.channel_id,
@@ -1266,7 +1394,7 @@ pub(crate) async fn ollama_version(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service.call(OllamaVersionRequest { id }).await {
         Ok(data) => api_success(data),
         Err(err) => api_error_status(StatusCode::OK, &format!("获取Ollama版本失败: {err}")),
@@ -1283,7 +1411,7 @@ pub(crate) async fn refresh_codex_channel_credential(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service.call(CodexRefreshCredentialRequest { id }).await {
         Ok(data) => match publish_management_snapshot(&state).await {
             Ok(()) => api_success_with_message("refreshed", data),
@@ -1334,7 +1462,7 @@ pub(crate) async fn codex_wham_response(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = ChannelSpecialService::new(state.management.clone());
+    let service = ChannelSpecialService::new(state.management.clone(), state.proxies.clone());
     match service.call(CodexWhamRequest { id, kind }).await {
         Ok(data) => {
             let _ = publish_management_snapshot(state).await;
@@ -1406,7 +1534,7 @@ pub(crate) async fn disable_tag_channels(
     Json(req): Json<ChannelTagPayload>,
 ) -> Response {
     update_channels_by_tag(&state, &headers, req.tag, ChannelTagPatch {
-        status: Some(0),
+        status: Some(STATUS_MANUALLY_DISABLED),
         ..ChannelTagPatch::default()
     })
     .await
@@ -1563,6 +1691,9 @@ pub(crate) async fn create_proxy(
     };
     match state.proxies.call(CreateProxyRequest { proxy }).await {
         Ok(item) => {
+            if let Err(err) = state.management.bump_version().await {
+                return management_error(err);
+            }
             if let Err(err) = publish_management_snapshot(&state).await {
                 return management_error(err);
             }
@@ -1584,6 +1715,9 @@ pub(crate) async fn update_proxy(
     };
     match state.proxies.call(UpdateProxyRequest { proxy }).await {
         Ok(item) => {
+            if let Err(err) = state.management.bump_version().await {
+                return management_error(err);
+            }
             if let Err(err) = publish_management_snapshot(&state).await {
                 return management_error(err);
             }
@@ -1603,8 +1737,20 @@ pub(crate) async fn delete_proxy(
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    let management = match state.management.current_data() {
+        Ok(data) => data,
+        Err(err) => return management_error(err),
+    };
+    if proxy_is_referenced(&management.channels, id) {
+        return management_error(ManagementError::InvalidRequest(
+            "proxy is still referenced by a channel",
+        ));
+    }
     match state.proxies.call(DeleteProxyRequest { id }).await {
         Ok(()) => {
+            if let Err(err) = state.management.bump_version().await {
+                return management_error(err);
+            }
             if let Err(err) = publish_management_snapshot(&state).await {
                 return management_error(err);
             }

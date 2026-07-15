@@ -307,7 +307,7 @@ impl ChannelTestTaskRunner {
             task.task_id.clone(),
             self.runner_id.clone(),
         );
-        let service = ChannelOpsService::new(self.management.clone());
+        let service = ChannelOpsService::new(self.management.clone(), self.proxies.clone());
         let result = service
             .test_all_channels_with_progress(
                 TestAllChannelsRequest {
@@ -423,7 +423,7 @@ impl ModelUpdateTaskRunner {
             task.task_id.clone(),
             self.runner_id.clone(),
         );
-        let service = ChannelOpsService::new(self.management.clone());
+        let service = ChannelOpsService::new(self.management.clone(), self.proxies.clone());
         let result = service
             .detect_all_upstream_model_updates_with_progress(
                 DetectAllChannelUpstreamModelUpdatesRequest,

@@ -124,32 +124,44 @@ impl GroupRoutingConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChannelConfig {
-    pub id:              String,
-    pub provider:        Provider,
-    pub base_url:        String,
-    #[serde(default)]
-    pub api_key:         String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub api_keys:        Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub api_key_indexes: Vec<usize>,
-    #[serde(default)]
-    pub api_key_env:     Option<String>,
-    #[serde(default)]
-    pub enabled:         bool,
-    #[serde(default = "default_weight")]
-    pub weight:          u32,
-    #[serde(default)]
-    pub models:          Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub groups:          Vec<String>,
+    pub id:                     String,
+    /// Stable management-store id used for feedback, usage settlement, and
+    /// channel-scoped runtime state. `id` remains the route/model-mapping key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proxy:           Option<String>,
+    pub management_id:          Option<u64>,
+    pub provider:               Provider,
+    pub base_url:               String,
+    #[serde(default)]
+    pub api_key:                String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_keys:               Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_key_indexes:        Vec<usize>,
+    #[serde(default)]
+    pub api_key_env:            Option<String>,
+    #[serde(default)]
+    pub enabled:                bool,
+    #[serde(default = "default_weight")]
+    pub weight:                 u32,
+    #[serde(default)]
+    pub models:                 Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups:                 Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy:                  Option<String>,
+    /// Whether this channel must use a configured proxy.
+    ///
+    /// `proxy = None` with `proxy_required = true` means the referenced proxy
+    /// could not be resolved and must fail closed instead of falling back to a
+    /// direct upstream connection. The separate flag keeps older snapshots
+    /// that only contain `proxy: <url>` wire-compatible.
+    #[serde(default)]
+    pub proxy_required:         bool,
     /// Channel-level request header overrides (new-api `header_override` JSON map).
     /// Keys are header names; values support `{api_key}` and `{client_header:Name}`.
     /// Passthrough rules (`*`, `re:…`) are ignored until gateway implements them.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub header_override: std::collections::BTreeMap<String, String>,
+    pub header_override:        std::collections::BTreeMap<String, String>,
     /// new-api style: how to call OpenAI-compatible upstream text APIs.
     /// `auto` | `openai` (chat/completions) | `openai-response` (/v1/responses)
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -852,15 +864,16 @@ impl TryFrom<GatewaySnapshot> for IndexedSnapshot {
                 (indexed.config.token.clone(), indexed)
             })
             .collect();
-        let channels = snapshot
-            .channels
-            .into_iter()
-            .map(|mut channel| {
-                channel.normalize_api_keys();
-                channel.normalize_groups();
-                (channel.id.clone(), channel)
-            })
-            .collect();
+        let mut channels = HashMap::with_capacity(snapshot.channels.len());
+        for mut channel in snapshot.channels {
+            channel.normalize_api_keys();
+            channel.normalize_groups();
+            let channel_id = channel.id.clone();
+            if channels.contains_key(&channel_id) {
+                return Err(SnapshotError::DuplicateChannelId { channel_id });
+            }
+            channels.insert(channel_id, channel);
+        }
         let mut mappings = HashMap::<String, Vec<ModelMapping>>::new();
         for mapping in snapshot.model_mappings {
             mappings
@@ -895,7 +908,10 @@ pub struct RouteDecision<'a> {
 }
 
 #[derive(Debug, Error)]
-pub enum SnapshotError {}
+pub enum SnapshotError {
+    #[error("duplicate channel route id: {channel_id}")]
+    DuplicateChannelId { channel_id: String },
+}
 
 #[derive(Debug, Error)]
 pub enum RouteError {
@@ -1092,21 +1108,74 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_channel_snapshot_defaults_proxy_requirement_to_false() {
+        let channel: ChannelConfig = serde_json::from_value(serde_json::json!({
+            "id": "legacy-channel",
+            "provider": "open_ai",
+            "base_url": "https://example.com",
+            "proxy": "http://proxy.example:8080"
+        }))
+        .expect("legacy channel snapshot should deserialize");
+
+        assert_eq!(channel.proxy.as_deref(), Some("http://proxy.example:8080"));
+        assert!(!channel.proxy_required);
+    }
+
+    #[test]
+    fn indexed_snapshot_rejects_duplicate_channel_route_ids() {
+        let channel = ChannelConfig {
+            id:                     "channel-a".to_string(),
+            management_id:          Some(1),
+            provider:               Provider::OpenAi,
+            base_url:               "https://a.example.com".to_string(),
+            api_key:                "key-a".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 Vec::new(),
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
+            upstream_endpoint_type: String::new(),
+        };
+        let mut duplicate = channel.clone();
+        duplicate.management_id = Some(2);
+        duplicate.base_url = "https://b.example.com".to_string();
+        let mut snapshot = snapshot_with_channel(channel);
+        snapshot.channels.push(duplicate);
+
+        let error = snapshot
+            .index()
+            .expect_err("duplicate route ids must be rejected");
+
+        assert!(matches!(
+            &error,
+            SnapshotError::DuplicateChannelId { channel_id } if channel_id == "channel-a"
+        ));
+        assert_eq!(error.to_string(), "duplicate channel route id: channel-a");
+    }
+
+    #[test]
     fn indexed_snapshot_normalizes_single_api_key() {
         let snapshot = snapshot_with_channel(ChannelConfig {
-            id:              "channel-a".to_string(),
-            provider:        Provider::OpenAi,
-            base_url:        "https://example.com".to_string(),
-            api_key:         " key-a ".to_string(),
-            api_keys:        Vec::new(),
-            api_key_indexes: Vec::new(),
-            api_key_env:     None,
-            enabled:         true,
-            weight:          1,
-            models:          vec!["gpt-4o".to_string()],
-            groups:          Vec::new(),
-            proxy:           None,
-            header_override: Default::default(),
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                " key-a ".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 Vec::new(),
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
             upstream_endpoint_type: String::new(),
         });
 
@@ -1121,24 +1190,26 @@ mod tests {
     #[test]
     fn channel_selects_api_keys_by_seed() {
         let snapshot = snapshot_with_channel(ChannelConfig {
-            id:              "channel-a".to_string(),
-            provider:        Provider::OpenAi,
-            base_url:        "https://example.com".to_string(),
-            api_key:         String::new(),
-            api_keys:        vec![
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                String::new(),
+            api_keys:               vec![
                 " key-a ".to_string(),
                 String::new(),
                 "key-b".to_string(),
                 "key-c".to_string(),
             ],
-            api_key_indexes: Vec::new(),
-            api_key_env:     None,
-            enabled:         true,
-            weight:          1,
-            models:          vec!["gpt-4o".to_string()],
-            groups:          Vec::new(),
-            proxy:           None,
-            header_override: Default::default(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 Vec::new(),
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
             upstream_endpoint_type: String::new(),
         });
 
@@ -1174,35 +1245,39 @@ mod tests {
             }],
             channels:         vec![
                 ChannelConfig {
-                    id:              "channel-a".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://a.example.com".to_string(),
-                    api_key:         "key-a".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          Vec::new(),
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "channel-a".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://a.example.com".to_string(),
+                    api_key:                "key-a".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 Vec::new(),
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
-                    id:              "channel-b".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://b.example.com".to_string(),
-                    api_key:         "key-b".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          2,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          Vec::new(),
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "channel-b".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://b.example.com".to_string(),
+                    api_key:                "key-b".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 2,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 Vec::new(),
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
             ],
@@ -1275,35 +1350,39 @@ mod tests {
             }],
             channels:         vec![
                 ChannelConfig {
-                    id:              "channel-a".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://a.example.com".to_string(),
-                    api_key:         "key-a".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          Vec::new(),
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "channel-a".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://a.example.com".to_string(),
+                    api_key:                "key-a".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 Vec::new(),
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
-                    id:              "channel-b".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://b.example.com".to_string(),
-                    api_key:         "key-b".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          Vec::new(),
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "channel-b".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://b.example.com".to_string(),
+                    api_key:                "key-b".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 Vec::new(),
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
             ],
@@ -1400,19 +1479,21 @@ mod tests {
     #[test]
     fn token_ip_allowlist_accepts_exact_ip_and_cidr() {
         let mut snapshot = snapshot_with_channel(ChannelConfig {
-            id:              "channel-a".to_string(),
-            provider:        Provider::OpenAi,
-            base_url:        "https://example.com".to_string(),
-            api_key:         "key-a".to_string(),
-            api_keys:        Vec::new(),
-            api_key_indexes: Vec::new(),
-            api_key_env:     None,
-            enabled:         true,
-            weight:          1,
-            models:          vec!["gpt-4o".to_string()],
-            groups:          Vec::new(),
-            proxy:           None,
-            header_override: Default::default(),
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                "key-a".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 Vec::new(),
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
             upstream_endpoint_type: String::new(),
         });
         snapshot.tokens[0].allowed_ips =
@@ -1435,19 +1516,21 @@ mod tests {
     #[test]
     fn token_ip_allowlist_with_only_invalid_rules_denies() {
         let mut snapshot = snapshot_with_channel(ChannelConfig {
-            id:              "channel-a".to_string(),
-            provider:        Provider::OpenAi,
-            base_url:        "https://example.com".to_string(),
-            api_key:         "key-a".to_string(),
-            api_keys:        Vec::new(),
-            api_key_indexes: Vec::new(),
-            api_key_env:     None,
-            enabled:         true,
-            weight:          1,
-            models:          vec!["gpt-4o".to_string()],
-            groups:          Vec::new(),
-            proxy:           None,
-            header_override: Default::default(),
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                "key-a".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 Vec::new(),
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
             upstream_endpoint_type: String::new(),
         });
         snapshot.tokens[0].allowed_ips = vec!["not-an-ip".to_string()];
@@ -1477,35 +1560,39 @@ mod tests {
             }],
             channels:         vec![
                 ChannelConfig {
-                    id:              "default-channel".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://default.example.com".to_string(),
-                    api_key:         "key-a".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          100,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          vec!["default".to_string()],
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "default-channel".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://default.example.com".to_string(),
+                    api_key:                "key-a".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 100,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 vec!["default".to_string()],
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
-                    id:              "paid-channel".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://paid.example.com".to_string(),
-                    api_key:         "key-b".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          vec!["paid".to_string()],
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "paid-channel".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://paid.example.com".to_string(),
+                    api_key:                "key-b".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 vec!["paid".to_string()],
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
             ],
@@ -1546,35 +1633,39 @@ mod tests {
             }],
             channels:         vec![
                 ChannelConfig {
-                    id:              "default-channel".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://default.example.com".to_string(),
-                    api_key:         "key-a".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          100,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          vec!["default".to_string()],
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "default-channel".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://default.example.com".to_string(),
+                    api_key:                "key-a".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 100,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 vec!["default".to_string()],
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
                 ChannelConfig {
-                    id:              "paid-channel".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://paid.example.com".to_string(),
-                    api_key:         "key-b".to_string(),
-                    api_keys:        Vec::new(),
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          vec!["paid".to_string()],
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "paid-channel".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://paid.example.com".to_string(),
+                    api_key:                "key-b".to_string(),
+                    api_keys:               Vec::new(),
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 vec!["paid".to_string()],
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 },
             ],
@@ -1612,19 +1703,21 @@ mod tests {
     #[test]
     fn token_group_override_must_be_user_usable() {
         let mut snapshot = snapshot_with_channel(ChannelConfig {
-            id:              "channel-a".to_string(),
-            provider:        Provider::OpenAi,
-            base_url:        "https://example.com".to_string(),
-            api_key:         "key-a".to_string(),
-            api_keys:        Vec::new(),
-            api_key_indexes: Vec::new(),
-            api_key_env:     None,
-            enabled:         true,
-            weight:          1,
-            models:          vec!["gpt-4o".to_string()],
-            groups:          vec!["paid".to_string()],
-            proxy:           None,
-            header_override: Default::default(),
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                "key-a".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 vec!["paid".to_string()],
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
             upstream_endpoint_type: String::new(),
         });
         snapshot.tokens[0].user_group = "default".to_string();
@@ -1646,19 +1739,21 @@ mod tests {
     #[test]
     fn authenticate_accepts_new_api_sk_prefix() {
         let snapshot = snapshot_with_channel(ChannelConfig {
-            id:              "channel-a".to_string(),
-            provider:        Provider::OpenAi,
-            base_url:        "https://example.com".to_string(),
-            api_key:         "key-a".to_string(),
-            api_keys:        Vec::new(),
-            api_key_indexes: Vec::new(),
-            api_key_env:     None,
-            enabled:         true,
-            weight:          1,
-            models:          vec!["gpt-4o".to_string()],
-            groups:          vec!["default".to_string()],
-            proxy:           None,
-            header_override: Default::default(),
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                "key-a".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["gpt-4o".to_string()],
+            groups:                 vec!["default".to_string()],
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
             upstream_endpoint_type: String::new(),
         });
         let indexed = snapshot.index().expect("snapshot should index");

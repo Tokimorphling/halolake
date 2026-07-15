@@ -1,7 +1,14 @@
 use super::*;
-use crate::gateway::{
-    ClaudeVersion, ConnectTimeout, GeminiApiVersion, PassAnthropicBeta, UpstreamReadTimeout,
+use crate::{
+    gateway::{
+        ClaudeVersion, ConnectTimeout, GeminiApiVersion, PassAnthropicBeta, UpstreamReadTimeout,
+    },
+    upstream_proxy::{ProxyTransportRequest, ProxyTransportService, parse_proxy_endpoint},
 };
+
+const CODEX_DEFAULT_ORIGINATOR: &str = "codex-tui";
+const CODEX_DEFAULT_USER_AGENT: &str =
+    "codex-tui/0.135.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.135.0)";
 
 #[derive(Clone)]
 pub(crate) struct RelayService {
@@ -9,8 +16,10 @@ pub(crate) struct RelayService {
     pass_anthropic_beta: bool,
     gemini_api_version:  Arc<str>,
     connect_timeout:     Option<Duration>,
+    read_timeout:        Option<Duration>,
     http:                HttpUpstream,
     https:               HttpsUpstream,
+    proxy_transport:     ProxyTransportService,
 }
 
 impl RelayService {
@@ -20,7 +29,8 @@ impl RelayService {
             + Param<GeminiApiVersion>
             + Param<PassAnthropicBeta>
             + Param<ConnectTimeout>
-            + Param<UpstreamReadTimeout>,
+            + Param<UpstreamReadTimeout>
+            + Param<ProxyTransportService>,
     {
         let read_timeout = <C as Param<UpstreamReadTimeout>>::param(params).0;
         let mut http = HttpUpstream::build_tcp_http1_only();
@@ -33,16 +43,19 @@ impl RelayService {
             pass_anthropic_beta: <C as Param<PassAnthropicBeta>>::param(params).0,
             gemini_api_version: <C as Param<GeminiApiVersion>>::param(params).0,
             connect_timeout: <C as Param<ConnectTimeout>>::param(params).0,
+            read_timeout,
             http,
             https,
+            proxy_transport: <C as Param<ProxyTransportService>>::param(params),
         }
     }
 
     async fn send_upstream(
         &self,
+        channel_identity: &str,
         uri: Uri,
         req: Request<HttpBody>,
-        proxy: Option<&str>,
+        proxy: &ProxyRoute,
     ) -> Result<Response<HttpBody>> {
         let method = req.method().clone();
         let path = req.uri().to_string();
@@ -59,13 +72,23 @@ impl RelayService {
             %path,
             ?version,
             ?body_hint,
-            proxy = proxy.unwrap_or(""),
+            %channel_identity,
+            proxy = proxy.redacted_label(),
             connect_timeout_ms = ?self.connect_timeout.map(|d| d.as_millis()),
+            read_timeout_ms = ?self.read_timeout.map(|d| d.as_millis()),
             "upstream request prepared"
         );
 
-        if let Some(proxy_url) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
-            return self.send_upstream_via_proxy(uri, req, proxy_url).await;
+        match proxy {
+            ProxyRoute::Required(proxy_url) => {
+                return self
+                    .send_upstream_via_proxy(channel_identity, uri, req, proxy_url)
+                    .await;
+            }
+            ProxyRoute::Unavailable => {
+                anyhow::bail!("configured upstream proxy is unavailable");
+            }
+            ProxyRoute::Direct => {}
         }
 
         if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
@@ -155,11 +178,12 @@ impl RelayService {
 
     async fn send_upstream_via_proxy(
         &self,
+        channel_identity: &str,
         uri: Uri,
         req: Request<HttpBody>,
         proxy_url: &str,
     ) -> Result<Response<HttpBody>> {
-        let proxy = crate::upstream_proxy::parse_proxy_endpoint(proxy_url)?;
+        let proxy = parse_proxy_endpoint(proxy_url)?;
         let target_host = uri.host().context("upstream uri missing host")?.to_string();
         let target_port =
             uri.port_u16()
@@ -170,90 +194,25 @@ impl RelayService {
                 });
 
         debug!(
-            proxy = %proxy.canonical,
+            %channel_identity,
+            proxy = %proxy.redacted_label(),
             %target_host,
             target_port,
             "connecting upstream via proxy"
         );
 
-        let stream = crate::upstream_proxy::dial_via_proxy(
-            &proxy,
-            &target_host,
-            target_port,
-            self.connect_timeout,
-        )
-        .await?;
-
-        let path = req.uri().to_string();
-        if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
-            let native = native_tls::TlsConnector::new().context("build native-tls connector")?;
-            let tls_connector = monoio_native_tls::TlsConnector::from(native);
-            let tls_stream = tls_connector
-                .connect(&target_host, stream)
-                .await
-                .context("TLS handshake through proxy")?;
-            proxy_send_request(tls_stream, req)
-                .await
-                .with_context(|| format!("send https via proxy {target_host}{path}"))
-        } else {
-            proxy_send_request(stream, req)
-                .await
-                .with_context(|| format!("send http via proxy {target_host}{path}"))
-        }
-    }
-}
-
-async fn proxy_send_request<IO>(stream: IO, req: Request<HttpBody>) -> Result<Response<HttpBody>>
-where
-    IO: AsyncReadRent + AsyncWriteRent + monoio::io::Split + Unpin + 'static,
-{
-    use monoio_http::{
-        common::body::Body as MonoioBodyTrait,
-        h1::{
-            codec::decoder::PayloadDecoder,
-            payload::{Payload, fixed_payload_pair, stream_payload_pair},
-        },
-    };
-
-    let mut codec = ClientCodec::new(stream);
-    if let Err(err) = codec.send_and_flush(req).await {
-        anyhow::bail!("send upstream request via proxy: {err:?}");
-    }
-    match codec.next().await {
-        Some(Ok(resp)) => {
-            let (parts, payload_decoder) = resp.into_parts();
-            let body = match payload_decoder {
-                PayloadDecoder::None => HttpBody::from(Payload::None),
-                PayloadDecoder::Fixed(_) => {
-                    let mut framed_payload = payload_decoder.with_io(&mut codec);
-                    let (payload, payload_sender) = fixed_payload_pair();
-                    if let Some(data) = MonoioBodyTrait::next_data(&mut framed_payload).await {
-                        payload_sender.feed(data);
-                    }
-                    HttpBody::from(Payload::Fixed(payload))
-                }
-                PayloadDecoder::Streamed(_) => {
-                    let mut framed_payload = payload_decoder.with_io(&mut codec);
-                    let (payload, mut payload_sender) = stream_payload_pair();
-                    loop {
-                        match MonoioBodyTrait::next_data(&mut framed_payload).await {
-                            Some(Ok(data)) => payload_sender.feed_data(Some(data)),
-                            Some(Err(err)) => {
-                                anyhow::bail!("decode streamed upstream body via proxy: {err}");
-                            }
-                            None => {
-                                payload_sender.feed_data(None);
-                                break;
-                            }
-                        }
-                    }
-                    HttpBody::from(Payload::Stream(payload))
-                }
-            };
-            Ok(Response::from_parts(parts, body))
-        }
-        Some(Err(err)) => anyhow::bail!("decode upstream response via proxy: {err}"),
-        None => anyhow::bail!("proxy upstream closed without response"),
+        self.proxy_transport
+            .call(ProxyTransportRequest {
+                channel_identity: channel_identity.to_string(),
+                proxy,
+                target_host: target_host.clone(),
+                target_port,
+                target_tls: uri.scheme() == Some(&http::uri::Scheme::HTTPS),
+                request: req,
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("send request via proxy to {target_host}:{target_port}"))
     }
 }
 
@@ -320,7 +279,7 @@ where
                 }
             }
             Provider::OpenAi => {
-                let (upstream_path, body) = match prepare_openai_text_upstream(
+                let prepared = match prepare_openai_text_upstream(
                     "/v1/chat/completions",
                     &req.raw_body,
                     &route.upstream_model,
@@ -335,7 +294,11 @@ where
                         ));
                     }
                 };
-                self.openai_passthrough(route, &upstream_path, body, &req.downstream_headers)
+                let target = OpenAiResponseTarget::ChatCompletions {
+                    stream:          req.request.is_stream(),
+                    requested_model: route.requested_model.clone(),
+                };
+                self.openai_passthrough(route, prepared, &req.downstream_headers, target)
                     .await
             }
             Provider::Gemini => {
@@ -472,7 +435,7 @@ where
                         ));
                     }
                 };
-                let (upstream_path, body) = match prepare_openai_text_upstream(
+                let prepared = match prepare_openai_text_upstream(
                     "/v1/chat/completions",
                     &chat_body,
                     &route.upstream_model,
@@ -488,7 +451,12 @@ where
                     }
                 };
                 let upstream = match self
-                    .send_openai_body(&route, &req.downstream_headers, body, &upstream_path)
+                    .send_openai_body(
+                        &route,
+                        &req.downstream_headers,
+                        prepared.body,
+                        &prepared.path,
+                    )
                     .await
                 {
                     Ok(resp) => resp,
@@ -505,6 +473,27 @@ where
                 };
                 if !upstream.status().is_success() {
                     return Ok(upstream_error_response(upstream).await);
+                }
+                let upstream = if prepared.protocol == OpenAiTextProtocol::Responses {
+                    if openai_req.is_stream() {
+                        stream_responses_as_openai_chat(
+                            upstream,
+                            route.requested_model.clone(),
+                            prepared.tool_name_reverse,
+                        )
+                    } else {
+                        buffered_responses_as_openai_chat(
+                            upstream,
+                            route.requested_model.clone(),
+                            prepared.tool_name_reverse,
+                        )
+                        .await
+                    }
+                } else {
+                    upstream
+                };
+                if !upstream.status().is_success() {
+                    return Ok(upstream);
                 }
                 if openai_req.is_stream() {
                     Ok(stream_openai_as_claude(upstream, route.requested_model))
@@ -757,7 +746,7 @@ where
                 "raw OpenAI passthrough requires an OpenAI provider channel",
             ));
         }
-        let (upstream_path, body) = match prepare_openai_text_upstream(
+        let prepared = match prepare_openai_text_upstream(
             &req.path,
             &req.body,
             &route.upstream_model,
@@ -772,8 +761,13 @@ where
                 ));
             }
         };
-        self.openai_passthrough(route, &upstream_path, body, &req.downstream_headers)
-            .await
+        self.openai_passthrough(
+            route,
+            prepared,
+            &req.downstream_headers,
+            OpenAiResponseTarget::Passthrough,
+        )
+        .await
     }
 }
 
@@ -845,7 +839,7 @@ where
                         ));
                     }
                 };
-                let (upstream_path, body) = match prepare_openai_text_upstream(
+                let prepared = match prepare_openai_text_upstream(
                     "/v1/chat/completions",
                     &chat_body,
                     &route.upstream_model,
@@ -861,7 +855,12 @@ where
                     }
                 };
                 let upstream = match self
-                    .send_openai_body(&route, &req.downstream_headers, body, &upstream_path)
+                    .send_openai_body(
+                        &route,
+                        &req.downstream_headers,
+                        prepared.body,
+                        &prepared.path,
+                    )
                     .await
                 {
                     Ok(resp) => resp,
@@ -878,6 +877,27 @@ where
                 };
                 if !upstream.status().is_success() {
                     return Ok(upstream_error_response(upstream).await);
+                }
+                let upstream = if prepared.protocol == OpenAiTextProtocol::Responses {
+                    if req.stream {
+                        stream_responses_as_openai_chat(
+                            upstream,
+                            route.requested_model.clone(),
+                            prepared.tool_name_reverse,
+                        )
+                    } else {
+                        buffered_responses_as_openai_chat(
+                            upstream,
+                            route.requested_model.clone(),
+                            prepared.tool_name_reverse,
+                        )
+                        .await
+                    }
+                } else {
+                    upstream
+                };
+                if !upstream.status().is_success() {
+                    return Ok(upstream);
                 }
                 if req.stream {
                     Ok(stream_openai_as_gemini(upstream))
@@ -914,6 +934,8 @@ impl RelayService {
         body: Bytes,
         path: &str,
     ) -> Result<Response<HttpBody>> {
+        let oauth = has_explicit_header_override(&route.header_override, "authorization");
+        let path = claude_upstream_path(path, oauth);
         let uri = upstream_uri(&route.base_url, path)?;
         debug!(
             channel_id = %route.channel_id,
@@ -935,8 +957,10 @@ impl RelayService {
             .header(
                 "anthropic-version",
                 anthropic_version(downstream_headers, &self.claude_version),
-            )
-            .header("x-api-key", route.api_key.as_str());
+            );
+        if !oauth {
+            builder = builder.header("x-api-key", route.api_key.as_str());
+        }
 
         if self.pass_anthropic_beta {
             if let Some(beta) = downstream_headers.get("anthropic-beta") {
@@ -968,18 +992,9 @@ impl RelayService {
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Claude upstream request")?;
         apply_channel_header_override(req.headers_mut(), route, downstream_headers);
-        self.send_upstream(uri, req, route.proxy.as_deref()).await
-    }
-
-    async fn send_openai_json<T: Serialize>(
-        &self,
-        route: &RouteContext,
-        downstream_headers: &HeaderMap,
-        payload: &T,
-        path: &str,
-    ) -> Result<Response<HttpBody>> {
-        let body = serde_json::to_vec(payload).context("serialize OpenAI request")?;
-        self.send_openai_body(route, downstream_headers, Bytes::from(body), path)
+        let channel_identity =
+            proxy_circuit_channel_identity(route.management_channel_id, &route.channel_id);
+        self.send_upstream(&channel_identity, uri, req, &route.proxy)
             .await
     }
 
@@ -1025,17 +1040,28 @@ impl RelayService {
         if let Some(accept) = downstream_headers.get(header::ACCEPT) {
             builder = builder.header(header::ACCEPT, accept);
         }
+        let codex_identity = uses_codex_identity(&route.upstream_endpoint_type);
         // Preserve client identity headers. new-api does not rewrite User-Agent by
         // default; affinity rules and Codex/Claude CLIs also rely on the original UA.
-        if let Some(user_agent) = downstream_headers.get(header::USER_AGENT) {
+        if let Some(user_agent) = downstream_or_fallback_header(
+            downstream_headers,
+            header::USER_AGENT.as_str(),
+            codex_identity.then_some(CODEX_DEFAULT_USER_AGENT),
+        ) {
             builder = builder.header(header::USER_AGENT, user_agent);
         }
         if let Some(beta) = downstream_headers.get("OpenAI-Beta") {
             builder = builder.header("OpenAI-Beta", beta);
         }
+        if let Some(originator) = downstream_or_fallback_header(
+            downstream_headers,
+            "Originator",
+            codex_identity.then_some(CODEX_DEFAULT_ORIGINATOR),
+        ) {
+            builder = builder.header("Originator", originator);
+        }
         // Common Codex / OpenAI client headers (allowlisted; credentials never forwarded).
         for name in [
-            "Originator",
             "Session_id",
             "X-Codex-Beta-Features",
             "X-Codex-Turn-Metadata",
@@ -1050,7 +1076,11 @@ impl RelayService {
             .body(HttpBody::fixed_body(Some(body)))
             .context("build OpenAI upstream request")?;
         apply_channel_header_override(req.headers_mut(), route, downstream_headers);
-        self.send_upstream(uri, req, route.proxy.as_deref()).await
+        ensure_codex_session_header(req.headers_mut(), codex_identity);
+        let channel_identity =
+            proxy_circuit_channel_identity(route.management_channel_id, &route.channel_id);
+        self.send_upstream(&channel_identity, uri, req, &route.proxy)
+            .await
     }
 
     fn gemini_generate_content_path(&self, model: &str, stream: bool) -> String {
@@ -1105,8 +1135,10 @@ impl RelayService {
             .uri(path_and_query(&uri, path))
             .header(header::HOST, authority(&uri)?)
             .header(header::CONTENT_TYPE, "application/json")
-            .header(header::ACCEPT, "application/json, text/event-stream")
-            .header("x-goog-api-key", route.api_key.as_str());
+            .header(header::ACCEPT, "application/json, text/event-stream");
+        if !has_explicit_header_override(&route.header_override, "authorization") {
+            builder = builder.header("x-goog-api-key", route.api_key.as_str());
+        }
         if let Some(accept) = downstream_headers.get(header::ACCEPT) {
             builder = builder.header(header::ACCEPT, accept);
         }
@@ -1117,21 +1149,52 @@ impl RelayService {
             .body(HttpBody::fixed_body(Some(body)))
             .context("build Gemini upstream request")?;
         apply_channel_header_override(req.headers_mut(), route, downstream_headers);
-        self.send_upstream(uri, req, route.proxy.as_deref()).await
+        let channel_identity =
+            proxy_circuit_channel_identity(route.management_channel_id, &route.channel_id);
+        self.send_upstream(&channel_identity, uri, req, &route.proxy)
+            .await
     }
 
     async fn openai_passthrough(
         &self,
         route: RouteContext,
-        path: &str,
-        body: Bytes,
+        prepared: PreparedOpenAiText,
         downstream_headers: &HeaderMap,
+        target: OpenAiResponseTarget,
     ) -> Result<Response<GatewayBody>, Infallible> {
         match self
-            .send_openai_body(&route, downstream_headers, body, path)
+            .send_openai_body(&route, downstream_headers, prepared.body, &prepared.path)
             .await
         {
-            Ok(resp) => Ok(upstream_to_response_with_usage(resp).await),
+            Ok(resp) if !resp.status().is_success() => {
+                Ok(upstream_to_response_with_usage(resp).await)
+            }
+            Ok(resp) => match (prepared.protocol, target) {
+                (
+                    OpenAiTextProtocol::Responses,
+                    OpenAiResponseTarget::ChatCompletions {
+                        stream: true,
+                        requested_model,
+                    },
+                ) => Ok(stream_responses_as_openai_chat(
+                    resp,
+                    requested_model,
+                    prepared.tool_name_reverse,
+                )),
+                (
+                    OpenAiTextProtocol::Responses,
+                    OpenAiResponseTarget::ChatCompletions {
+                        stream: false,
+                        requested_model,
+                    },
+                ) => Ok(buffered_responses_as_openai_chat(
+                    resp,
+                    requested_model,
+                    prepared.tool_name_reverse,
+                )
+                .await),
+                _ => Ok(upstream_to_response_with_usage(resp).await),
+            },
             Err(err) => {
                 error!(
                     ?err,
@@ -1146,22 +1209,50 @@ impl RelayService {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiTextProtocol {
+    ChatCompletions,
+    Responses,
+}
+
+struct PreparedOpenAiText {
+    path:              String,
+    body:              Bytes,
+    protocol:          OpenAiTextProtocol,
+    tool_name_reverse: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiResponsesProfile {
+    Generic,
+    Codex,
+}
+
+enum OpenAiResponseTarget {
+    Passthrough,
+    ChatCompletions {
+        stream:          bool,
+        requested_model: String,
+    },
+}
 
 /// new-api-compatible upstream path selection for OpenAI text APIs.
 /// Channel setting `upstream_endpoint_type`:
 /// - empty/auto: keep client path (rewrite model only for chat)
 /// - openai: force `/v1/chat/completions` (+ convert responses body → chat if needed)
 /// - openai-response / openai-response-compact: force responses path (+ convert chat → responses)
+/// - xai-response: force xAI-compatible `/responses` (+ convert chat → responses)
+/// - codex: force ChatGPT Codex `/responses` (+ convert chat → responses)
 fn prepare_openai_text_upstream(
     client_path: &str,
     raw_body: &[u8],
     upstream_model: &str,
     endpoint_type: &str,
-) -> Result<(String, Bytes)> {
+) -> Result<PreparedOpenAiText> {
     let client_path = client_path.split('?').next().unwrap_or(client_path);
     let mode = normalize_upstream_endpoint_type(endpoint_type);
-    let client_is_responses = client_path.ends_with("/responses")
-        || client_path.ends_with("/responses/compact");
+    let client_is_responses =
+        client_path.ends_with("/responses") || client_path.ends_with("/responses/compact");
     let client_is_chat = client_path.ends_with("/chat/completions");
 
     match mode.as_str() {
@@ -1171,37 +1262,108 @@ fn prepare_openai_text_upstream(
             } else {
                 rewrite_openai_chat_model_body(raw_body, upstream_model)?
             };
-            Ok(("/v1/chat/completions".to_string(), body))
+            Ok(PreparedOpenAiText {
+                path: "/v1/chat/completions".to_string(),
+                body,
+                protocol: OpenAiTextProtocol::ChatCompletions,
+                tool_name_reverse: std::collections::BTreeMap::new(),
+            })
+        }
+        "codex" | "xai-response" => {
+            let (body, tool_name_reverse) = if client_is_chat || !client_is_responses {
+                convert_chat_body_to_responses(
+                    raw_body,
+                    upstream_model,
+                    false,
+                    if mode == "codex" {
+                        OpenAiResponsesProfile::Codex
+                    } else {
+                        OpenAiResponsesProfile::Generic
+                    },
+                )?
+            } else {
+                (
+                    rewrite_openai_responses_model_body(raw_body, upstream_model)?,
+                    std::collections::BTreeMap::new(),
+                )
+            };
+            Ok(PreparedOpenAiText {
+                path: "/responses".to_string(),
+                body,
+                protocol: OpenAiTextProtocol::Responses,
+                tool_name_reverse,
+            })
         }
         "openai-response" => {
-            let body = if client_is_chat || !client_is_responses {
-                convert_chat_body_to_responses(raw_body, upstream_model, false)?
+            let (body, tool_name_reverse) = if client_is_chat || !client_is_responses {
+                convert_chat_body_to_responses(
+                    raw_body,
+                    upstream_model,
+                    false,
+                    OpenAiResponsesProfile::Generic,
+                )?
             } else {
-                rewrite_openai_responses_model_body(raw_body, upstream_model)?
+                (
+                    rewrite_openai_responses_model_body(raw_body, upstream_model)?,
+                    std::collections::BTreeMap::new(),
+                )
             };
-            Ok(("/v1/responses".to_string(), body))
+            Ok(PreparedOpenAiText {
+                path: "/v1/responses".to_string(),
+                body,
+                protocol: OpenAiTextProtocol::Responses,
+                tool_name_reverse,
+            })
         }
         "openai-response-compact" => {
-            let body = if client_is_chat || !client_is_responses {
-                convert_chat_body_to_responses(raw_body, upstream_model, true)?
+            let (body, tool_name_reverse) = if client_is_chat || !client_is_responses {
+                convert_chat_body_to_responses(
+                    raw_body,
+                    upstream_model,
+                    true,
+                    OpenAiResponsesProfile::Generic,
+                )?
             } else {
-                rewrite_openai_responses_model_body(raw_body, upstream_model)?
+                (
+                    rewrite_openai_responses_model_body(raw_body, upstream_model)?,
+                    std::collections::BTreeMap::new(),
+                )
             };
-            Ok(("/v1/responses/compact".to_string(), body))
+            Ok(PreparedOpenAiText {
+                path: "/v1/responses/compact".to_string(),
+                body,
+                protocol: OpenAiTextProtocol::Responses,
+                tool_name_reverse,
+            })
         }
         _ => {
             // auto: preserve client path; still rewrite model id
             if client_is_chat {
                 let body = rewrite_openai_chat_model_body(raw_body, upstream_model)?;
-                Ok((client_path.to_string(), body))
+                Ok(PreparedOpenAiText {
+                    path: client_path.to_string(),
+                    body,
+                    protocol: OpenAiTextProtocol::ChatCompletions,
+                    tool_name_reverse: std::collections::BTreeMap::new(),
+                })
             } else if client_is_responses {
                 let body = rewrite_openai_responses_model_body(raw_body, upstream_model)?;
-                Ok((client_path.to_string(), body))
+                Ok(PreparedOpenAiText {
+                    path: client_path.to_string(),
+                    body,
+                    protocol: OpenAiTextProtocol::Responses,
+                    tool_name_reverse: std::collections::BTreeMap::new(),
+                })
             } else {
                 // other openai paths (embeddings/completions): pass through, try model rewrite
                 let body = rewrite_openai_any_model_body(raw_body, upstream_model)
                     .unwrap_or_else(|_| Bytes::copy_from_slice(raw_body));
-                Ok((client_path.to_string(), body))
+                Ok(PreparedOpenAiText {
+                    path: client_path.to_string(),
+                    body,
+                    protocol: OpenAiTextProtocol::ChatCompletions,
+                    tool_name_reverse: std::collections::BTreeMap::new(),
+                })
             }
         }
     }
@@ -1218,7 +1380,30 @@ fn normalize_upstream_endpoint_type(raw: &str) -> String {
         "openai-response-compact" | "openai_response_compact" | "responses-compact" => {
             "openai-response-compact".to_string()
         }
+        "xai-response" | "xai_response" => "xai-response".to_string(),
+        "codex" | "chatgpt-codex" | "chatgpt_codex" => "codex".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn uses_codex_identity(endpoint_type: &str) -> bool {
+    normalize_upstream_endpoint_type(endpoint_type) == "codex"
+}
+
+fn ensure_codex_session_header(headers: &mut HeaderMap, codex_identity: bool) {
+    if !codex_identity
+        || !headers
+            .get(header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|user_agent| user_agent.contains("Mac OS"))
+        || ["Session_id", "session_id", "Session-Id"]
+            .iter()
+            .any(|name| headers.get(*name).is_some())
+    {
+        return;
+    }
+    if let Ok(session_id) = HeaderValue::from_str(&Uuid::new_v4().to_string()) {
+        headers.insert("Session_id", session_id);
     }
 }
 
@@ -1242,60 +1427,488 @@ fn rewrite_openai_any_model_body(raw_body: &[u8], upstream_model: &str) -> Resul
     ))
 }
 
-/// Minimal chat → responses conversion (new-api ChatCompletionsRequestToResponsesRequest subset).
+/// Chat Completions → Responses conversion aligned with the pinned CLIProxyAPI Codex
+/// translator for typed messages and function-call transcripts.
 fn convert_chat_body_to_responses(
     raw_body: &[u8],
     upstream_model: &str,
     compact: bool,
-) -> Result<Bytes> {
+    profile: OpenAiResponsesProfile,
+) -> Result<(Bytes, std::collections::BTreeMap<String, String>)> {
     let chat: JsonValue =
         serde_json::from_slice(raw_body).context("parse chat request for responses convert")?;
-    let messages = chat
-        .get("messages")
-        .cloned()
-        .unwrap_or_else(|| JsonValue::Array(vec![]));
+    let tool_names = codex_tool_name_map(&chat, profile);
+    let tool_name_reverse = tool_names
+        .iter()
+        .map(|(original, shortened)| (shortened.clone(), original.clone()))
+        .collect();
     let mut out = serde_json::Map::new();
-    out.insert("model".into(), JsonValue::String(upstream_model.to_string()));
-    out.insert("input".into(), messages);
-    if let Some(stream) = chat.get("stream") {
-        out.insert("stream".into(), stream.clone());
+    out.insert(
+        "model".into(),
+        JsonValue::String(upstream_model.to_string()),
+    );
+    out.insert(
+        "input".into(),
+        chat_messages_to_responses_input(&chat, &tool_names),
+    );
+    match profile {
+        OpenAiResponsesProfile::Codex => {
+            out.insert("instructions".into(), JsonValue::String(String::new()));
+            out.insert(
+                "stream".into(),
+                JsonValue::Bool(
+                    chat.get("stream")
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false),
+                ),
+            );
+            out.insert(
+                "reasoning".into(),
+                serde_json::json!({
+                    "effort": chat
+                        .get("reasoning_effort")
+                        .cloned()
+                        .unwrap_or_else(|| JsonValue::String("medium".into())),
+                    "summary": "auto",
+                }),
+            );
+            out.insert("parallel_tool_calls".into(), JsonValue::Bool(true));
+            out.insert(
+                "include".into(),
+                serde_json::json!(["reasoning.encrypted_content"]),
+            );
+        }
+        OpenAiResponsesProfile::Generic => {
+            if let Some(stream) = chat.get("stream") {
+                out.insert("stream".into(), stream.clone());
+            }
+            if let Some(temp) = chat.get("temperature") {
+                out.insert("temperature".into(), temp.clone());
+            }
+            if let Some(top_p) = chat.get("top_p") {
+                out.insert("top_p".into(), top_p.clone());
+            }
+            if let Some(max_out) = chat
+                .get("max_completion_tokens")
+                .or_else(|| chat.get("max_tokens"))
+            {
+                out.insert("max_output_tokens".into(), max_out.clone());
+            }
+            if let Some(parallel) = chat.get("parallel_tool_calls") {
+                out.insert("parallel_tool_calls".into(), parallel.clone());
+            }
+            if let Some(effort) = chat.get("reasoning_effort") {
+                out.insert("reasoning".into(), serde_json::json!({"effort": effort}));
+            }
+        }
     }
-    if let Some(temp) = chat.get("temperature") {
-        out.insert("temperature".into(), temp.clone());
-    }
-    if let Some(top_p) = chat.get("top_p") {
-        out.insert("top_p".into(), top_p.clone());
-    }
-    // max_tokens → max_output_tokens
-    if let Some(max_out) = chat
-        .get("max_completion_tokens")
-        .or_else(|| chat.get("max_tokens"))
-    {
-        out.insert("max_output_tokens".into(), max_out.clone());
-    }
-    if let Some(tools) = chat.get("tools") {
-        out.insert("tools".into(), tools.clone());
+    if let Some(tools) = chat.get("tools").and_then(JsonValue::as_array) {
+        out.insert(
+            "tools".into(),
+            JsonValue::Array(
+                tools
+                    .iter()
+                    .map(|tool| chat_tool_to_responses_tool(tool, &tool_names))
+                    .collect(),
+            ),
+        );
     }
     if let Some(tool_choice) = chat.get("tool_choice") {
-        out.insert("tool_choice".into(), tool_choice.clone());
+        out.insert(
+            "tool_choice".into(),
+            chat_tool_choice_to_responses(tool_choice, &tool_names),
+        );
+    }
+    if let Some(response_format) = chat.get("response_format") {
+        out.insert(
+            "text".into(),
+            serde_json::json!({"format": chat_response_format_to_responses(response_format)}),
+        );
     }
     if let Some(user) = chat.get("user") {
         out.insert("user".into(), user.clone());
     }
+    out.insert("store".into(), JsonValue::Bool(false));
     if compact {
         // compact API is non-stream in new-api tests
         out.remove("stream");
     }
-    Ok(Bytes::from(
-        serde_json::to_vec(&JsonValue::Object(out)).context("serialize responses body")?,
+    Ok((
+        Bytes::from(
+            serde_json::to_vec(&JsonValue::Object(out)).context("serialize responses body")?,
+        ),
+        tool_name_reverse,
     ))
+}
+
+fn chat_messages_to_responses_input(
+    chat: &JsonValue,
+    tool_names: &std::collections::BTreeMap<String, String>,
+) -> JsonValue {
+    let mut input = Vec::new();
+    for message in chat
+        .get("messages")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let role = message
+            .get("role")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("user");
+        if role == "tool" {
+            input.push(serde_json::json!({
+                "type": "function_call_output",
+                "call_id": message
+                    .get("tool_call_id")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default(),
+                "output": chat_tool_output_to_responses(message.get("content")),
+            }));
+            continue;
+        }
+
+        let content = chat_message_content_to_responses(role, message.get("content"));
+        if role != "assistant" || !content.is_empty() {
+            input.push(serde_json::json!({
+                "type": "message",
+                "role": if role == "system" { "developer" } else { role },
+                "content": content,
+            }));
+        }
+        if role == "assistant" {
+            for call in message
+                .get("tool_calls")
+                .and_then(JsonValue::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if call.get("type").and_then(JsonValue::as_str) != Some("function") {
+                    continue;
+                }
+                input.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": call.get("id").and_then(JsonValue::as_str).unwrap_or_default(),
+                    "name": mapped_tool_name(
+                        call.get("function")
+                            .and_then(|function| function.get("name"))
+                            .and_then(JsonValue::as_str)
+                            .unwrap_or_default(),
+                        tool_names,
+                    ),
+                    "arguments": call
+                        .get("function")
+                        .and_then(|function| function.get("arguments"))
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or_default(),
+                }));
+            }
+        }
+    }
+    JsonValue::Array(input)
+}
+
+fn chat_message_content_to_responses(role: &str, content: Option<&JsonValue>) -> Vec<JsonValue> {
+    let part_type = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
+    match content {
+        Some(JsonValue::String(text)) if !text.is_empty() => {
+            vec![serde_json::json!({"type": part_type, "text": text})]
+        }
+        Some(JsonValue::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| chat_content_part_to_responses(role, part_type, part))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn chat_content_part_to_responses(
+    role: &str,
+    text_part_type: &str,
+    part: &JsonValue,
+) -> Option<JsonValue> {
+    match part.get("type").and_then(JsonValue::as_str) {
+        Some("text") => Some(serde_json::json!({
+            "type": text_part_type,
+            "text": part.get("text").and_then(JsonValue::as_str).unwrap_or_default(),
+        })),
+        Some("image_url") if role == "user" => {
+            let image = part.get("image_url")?;
+            let mut out = serde_json::json!({"type": "input_image"});
+            if let Some(url) = image.get("url").and_then(JsonValue::as_str) {
+                out["image_url"] = JsonValue::String(url.to_string());
+            }
+            if let Some(file_id) = image.get("file_id").and_then(JsonValue::as_str) {
+                out["file_id"] = JsonValue::String(file_id.to_string());
+            }
+            if let Some(detail) = image.get("detail").and_then(JsonValue::as_str) {
+                out["detail"] = JsonValue::String(detail.to_string());
+            }
+            Some(out)
+        }
+        Some("file") if role == "user" => {
+            let file = part.get("file")?;
+            let mut out = serde_json::json!({"type": "input_file"});
+            for key in ["file_id", "file_data", "file_url", "filename"] {
+                if let Some(value) = file.get(key).and_then(JsonValue::as_str) {
+                    out[key] = JsonValue::String(value.to_string());
+                }
+            }
+            Some(out)
+        }
+        Some("input_audio") if role == "user" => {
+            let audio = part.get("input_audio")?;
+            let data = audio.get("data").and_then(JsonValue::as_str)?;
+            let mut out = serde_json::json!({"type": "input_audio", "data": data});
+            if let Some(format) = audio.get("format").and_then(JsonValue::as_str) {
+                out["format"] = JsonValue::String(format.to_string());
+            }
+            Some(out)
+        }
+        Some("input_text" | "output_text" | "input_image" | "input_file") => Some(part.clone()),
+        _ => None,
+    }
+}
+
+fn chat_tool_output_to_responses(content: Option<&JsonValue>) -> JsonValue {
+    match content {
+        Some(JsonValue::String(text)) => JsonValue::String(text.clone()),
+        Some(JsonValue::Array(parts)) => JsonValue::Array(
+            parts
+                .iter()
+                .map(chat_tool_output_part_to_responses)
+                .collect(),
+        ),
+        Some(value) => {
+            JsonValue::String(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()))
+        }
+        None => JsonValue::String(String::new()),
+    }
+}
+
+fn chat_tool_output_part_to_responses(part: &JsonValue) -> JsonValue {
+    match part.get("type").and_then(JsonValue::as_str) {
+        Some("text") => serde_json::json!({
+            "type": "input_text",
+            "text": part.get("text").and_then(JsonValue::as_str).unwrap_or_default(),
+        }),
+        Some("image_url") => {
+            let image = part.get("image_url").unwrap_or(&JsonValue::Null);
+            let mut out = serde_json::json!({"type": "input_image"});
+            let mut valid = false;
+            if let Some(url) = image.get("url").and_then(JsonValue::as_str) {
+                out["image_url"] = JsonValue::String(url.to_string());
+                valid = true;
+            }
+            if let Some(file_id) = image.get("file_id").and_then(JsonValue::as_str) {
+                out["file_id"] = JsonValue::String(file_id.to_string());
+                valid = true;
+            }
+            if let Some(detail) = image.get("detail").and_then(JsonValue::as_str) {
+                out["detail"] = JsonValue::String(detail.to_string());
+            }
+            if valid {
+                out
+            } else {
+                chat_tool_output_fallback(part)
+            }
+        }
+        Some("file") => {
+            let file = part.get("file").unwrap_or(&JsonValue::Null);
+            let mut out = serde_json::json!({"type": "input_file"});
+            let mut valid = false;
+            for key in ["file_id", "file_data", "file_url"] {
+                if let Some(value) = file.get(key).and_then(JsonValue::as_str) {
+                    out[key] = JsonValue::String(value.to_string());
+                    valid = true;
+                }
+            }
+            if let Some(filename) = file.get("filename").and_then(JsonValue::as_str) {
+                out["filename"] = JsonValue::String(filename.to_string());
+            }
+            if valid {
+                out
+            } else {
+                chat_tool_output_fallback(part)
+            }
+        }
+        _ => chat_tool_output_fallback(part),
+    }
+}
+
+fn chat_tool_output_fallback(part: &JsonValue) -> JsonValue {
+    serde_json::json!({
+        "type": "input_text",
+        "text": serde_json::to_string(part).unwrap_or_else(|_| part.to_string()),
+    })
+}
+
+fn chat_tool_to_responses_tool(
+    tool: &JsonValue,
+    tool_names: &std::collections::BTreeMap<String, String>,
+) -> JsonValue {
+    if tool.get("type").and_then(JsonValue::as_str) != Some("function") {
+        return tool.clone();
+    }
+    let function = tool.get("function").unwrap_or(&JsonValue::Null);
+    let mut out = serde_json::json!({"type": "function"});
+    for key in ["name", "description", "parameters", "strict"] {
+        if let Some(value) = function.get(key) {
+            out[key] = if key == "name" {
+                JsonValue::String(mapped_tool_name(
+                    value.as_str().unwrap_or_default(),
+                    tool_names,
+                ))
+            } else {
+                value.clone()
+            };
+        }
+    }
+    out
+}
+
+fn chat_tool_choice_to_responses(
+    tool_choice: &JsonValue,
+    tool_names: &std::collections::BTreeMap<String, String>,
+) -> JsonValue {
+    if tool_choice.get("type").and_then(JsonValue::as_str) != Some("function") {
+        return tool_choice.clone();
+    }
+    serde_json::json!({
+        "type": "function",
+        "name": mapped_tool_name(
+            tool_choice
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default(),
+            tool_names,
+        ),
+    })
+}
+
+fn codex_tool_name_map(
+    chat: &JsonValue,
+    profile: OpenAiResponsesProfile,
+) -> std::collections::BTreeMap<String, String> {
+    if profile != OpenAiResponsesProfile::Codex {
+        return std::collections::BTreeMap::new();
+    }
+    let mut mapped = std::collections::BTreeMap::new();
+    let mut used = std::collections::BTreeSet::new();
+    let mut names: Vec<&str> = chat
+        .get("tools")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("function"))
+        .filter_map(|function| function.get("name"))
+        .filter_map(JsonValue::as_str)
+        .collect();
+    names.extend(
+        chat.get("messages")
+            .and_then(JsonValue::as_array)
+            .into_iter()
+            .flatten()
+            .flat_map(|message| {
+                message
+                    .get("tool_calls")
+                    .and_then(JsonValue::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|call| call.get("function"))
+            .filter_map(|function| function.get("name"))
+            .filter_map(JsonValue::as_str),
+    );
+    if let Some(choice_name) = chat
+        .get("tool_choice")
+        .and_then(|choice| choice.get("function"))
+        .and_then(|function| function.get("name"))
+        .and_then(JsonValue::as_str)
+    {
+        names.push(choice_name);
+    }
+    for name in names {
+        if mapped.contains_key(name) {
+            continue;
+        }
+        let base = shorten_codex_tool_name(name);
+        let mut candidate = base.clone();
+        let mut suffix = 1usize;
+        while used.contains(&candidate) {
+            let tail = format!("~{suffix}");
+            candidate = format!("{}{}", truncate_utf8_bytes(&base, 64 - tail.len()), tail);
+            suffix += 1;
+        }
+        used.insert(candidate.clone());
+        mapped.insert(name.to_string(), candidate);
+    }
+    mapped
+}
+
+fn mapped_tool_name(name: &str, tool_names: &std::collections::BTreeMap<String, String>) -> String {
+    tool_names
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn shorten_codex_tool_name(name: &str) -> String {
+    if name.len() <= 64 {
+        return name.to_string();
+    }
+    if let Some(last) = name
+        .strip_prefix("mcp__")
+        .and_then(|rest| rest.rsplit("__").next())
+    {
+        return format!("mcp__{}", truncate_utf8_bytes(last, 59));
+    }
+    truncate_utf8_bytes(name, 64).to_string()
+}
+
+fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> &str {
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn chat_response_format_to_responses(response_format: &JsonValue) -> JsonValue {
+    match response_format.get("type").and_then(JsonValue::as_str) {
+        Some("json_schema") => {
+            let schema = response_format
+                .get("json_schema")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let mut out = serde_json::json!({"type": "json_schema"});
+            if let Some(object) = schema.as_object() {
+                for key in ["name", "strict", "schema"] {
+                    if let Some(value) = object.get(key) {
+                        out[key] = value.clone();
+                    }
+                }
+            }
+            out
+        }
+        Some(kind) => serde_json::json!({"type": kind}),
+        None => response_format.clone(),
+    }
 }
 
 /// Minimal responses → chat conversion for forced openai upstream.
 fn convert_responses_body_to_chat(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {
     let resp: JsonValue =
         serde_json::from_slice(raw_body).context("parse responses request for chat convert")?;
-    let input = resp.get("input").cloned().unwrap_or(JsonValue::Array(vec![]));
+    let input = resp
+        .get("input")
+        .cloned()
+        .unwrap_or(JsonValue::Array(vec![]));
     // If input is a string, wrap as user message
     let messages = match input {
         JsonValue::String(s) => serde_json::json!([{"role": "user", "content": s}]),
@@ -1303,7 +1916,10 @@ fn convert_responses_body_to_chat(raw_body: &[u8], upstream_model: &str) -> Resu
         other => serde_json::json!([{"role": "user", "content": other}]),
     };
     let mut out = serde_json::Map::new();
-    out.insert("model".into(), JsonValue::String(upstream_model.to_string()));
+    out.insert(
+        "model".into(),
+        JsonValue::String(upstream_model.to_string()),
+    );
     out.insert("messages".into(), messages);
     if let Some(stream) = resp.get("stream") {
         out.insert("stream".into(), stream.clone());
@@ -1327,7 +1943,10 @@ fn convert_responses_body_to_chat(raw_body: &[u8], upstream_model: &str) -> Resu
         out.insert("user".into(), user.clone());
     }
     if out.get("stream").and_then(|v| v.as_bool()) == Some(true) {
-        out.insert("stream_options".into(), serde_json::json!({"include_usage": true}));
+        out.insert(
+            "stream_options".into(),
+            serde_json::json!({"include_usage": true}),
+        );
     }
     Ok(Bytes::from(
         serde_json::to_vec(&JsonValue::Object(out)).context("serialize chat body")?,
@@ -1344,8 +1963,36 @@ fn rewrite_openai_chat_model_body(raw_body: &[u8], upstream_model: &str) -> Resu
     ))
 }
 
+fn downstream_or_fallback_header(
+    downstream_headers: &HeaderMap,
+    name: &str,
+    fallback: Option<&'static str>,
+) -> Option<HeaderValue> {
+    downstream_headers
+        .get(name)
+        .cloned()
+        .or_else(|| fallback.map(HeaderValue::from_static))
+}
+
+fn claude_upstream_path(path: &str, oauth: bool) -> &str {
+    if oauth && path == "/v1/messages" {
+        "/v1/messages?beta=true"
+    } else {
+        path
+    }
+}
+
 /// Apply channel `header_override` last so it wins over default/auth headers.
 /// Supports `{api_key}` and `{client_header:Name}` (new-api compatible).
+fn has_explicit_header_override(
+    overrides: &std::collections::BTreeMap<String, String>,
+    name: &str,
+) -> bool {
+    overrides
+        .keys()
+        .any(|header| header.eq_ignore_ascii_case(name))
+}
+
 fn apply_channel_header_override(
     headers: &mut HeaderMap,
     route: &RouteContext,
@@ -1398,5 +2045,259 @@ fn resolve_header_override_value(
         None
     } else {
         Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authorization_override_suppresses_provider_api_key_header() {
+        let overrides = std::collections::BTreeMap::from([(
+            "aUtHoRiZaTiOn".to_string(),
+            "Bearer {api_key}".to_string(),
+        )]);
+
+        assert!(has_explicit_header_override(&overrides, "authorization"));
+        assert!(!has_explicit_header_override(&overrides, "x-api-key"));
+        assert_eq!(
+            claude_upstream_path("/v1/messages", true),
+            "/v1/messages?beta=true"
+        );
+        assert_eq!(claude_upstream_path("/v1/messages", false), "/v1/messages");
+    }
+
+    #[test]
+    fn codex_identity_fallback_preserves_downstream_headers() {
+        let mut downstream = HeaderMap::new();
+        downstream.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("codex_vscode/1.2.3"),
+        );
+        downstream.insert("Originator", HeaderValue::from_static("codex_vscode"));
+
+        assert_eq!(
+            downstream_or_fallback_header(
+                &downstream,
+                header::USER_AGENT.as_str(),
+                Some(CODEX_DEFAULT_USER_AGENT),
+            )
+            .as_ref()
+            .and_then(|value| value.to_str().ok()),
+            Some("codex_vscode/1.2.3")
+        );
+        assert_eq!(
+            downstream_or_fallback_header(
+                &downstream,
+                "Originator",
+                Some(CODEX_DEFAULT_ORIGINATOR),
+            )
+            .as_ref()
+            .and_then(|value| value.to_str().ok()),
+            Some("codex_vscode")
+        );
+        assert_eq!(
+            downstream_or_fallback_header(
+                &HeaderMap::new(),
+                "Originator",
+                Some(CODEX_DEFAULT_ORIGINATOR),
+            ),
+            Some(HeaderValue::from_static("codex-tui"))
+        );
+    }
+
+    #[test]
+    fn codex_endpoint_targets_chatgpt_backend_responses() {
+        assert_eq!(normalize_upstream_endpoint_type("codex"), "codex");
+        assert_eq!(normalize_upstream_endpoint_type("chatgpt_codex"), "codex");
+        let body = serde_json::json!({
+            "model": "requested-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true
+        });
+        let raw = serde_json::to_vec(&body).expect("request should serialize");
+
+        let prepared = prepare_openai_text_upstream("/v1/chat/completions", &raw, "gpt-5", "codex")
+            .expect("Codex request should prepare");
+        let uri = upstream_uri("https://chatgpt.com/backend-api/codex", &prepared.path)
+            .expect("Codex endpoint should be valid");
+        let rewritten: JsonValue =
+            serde_json::from_slice(&prepared.body).expect("rewritten request should be JSON");
+
+        assert_eq!(
+            uri.to_string(),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert_eq!(prepared.protocol, OpenAiTextProtocol::Responses);
+        assert_eq!(rewritten["model"], "gpt-5");
+        assert_eq!(rewritten["input"][0]["type"], "message");
+        assert_eq!(rewritten["input"][0]["role"], "user");
+        assert_eq!(rewritten["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(rewritten["input"][0]["content"][0]["text"], "hello");
+        assert_eq!(rewritten["stream"], true);
+    }
+
+    #[test]
+    fn xai_response_uses_responses_path_without_codex_identity() {
+        assert_eq!(
+            normalize_upstream_endpoint_type("xai_response"),
+            "xai-response"
+        );
+        assert!(!uses_codex_identity("xai-response"));
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "model": "requested-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        }))
+        .expect("request should serialize");
+
+        let prepared =
+            prepare_openai_text_upstream("/v1/chat/completions", &raw, "grok-4", "xai-response")
+                .expect("xAI request should prepare");
+        let versioned = upstream_uri("https://api.x.ai/v1", &prepared.path)
+            .expect("versioned xAI endpoint should be valid");
+        let custom = upstream_uri("https://xai.example.test/custom", &prepared.path)
+            .expect("custom xAI endpoint should be valid");
+        let rewritten: JsonValue =
+            serde_json::from_slice(&prepared.body).expect("rewritten request should be JSON");
+
+        assert_eq!(prepared.path, "/responses");
+        assert_eq!(prepared.protocol, OpenAiTextProtocol::Responses);
+        assert_eq!(versioned.to_string(), "https://api.x.ai/v1/responses");
+        assert_eq!(
+            custom.to_string(),
+            "https://xai.example.test/custom/responses"
+        );
+        assert_eq!(rewritten["model"], "grok-4");
+        assert_eq!(rewritten["input"][0]["content"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn codex_maps_chat_tool_transcript_to_typed_responses_items() {
+        let long_name = format!("mcp__weather__{}", "forecast".repeat(12));
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "model": "requested-model",
+            "messages": [
+                {"role": "system", "content": "Be precise."},
+                {"role": "user", "content": "Weather?"},
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": long_name, "arguments": "{\"city\":\"Paris\"}"}
+                    }]
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": long_name,
+                    "description": "Get weather",
+                    "parameters": {"type": "object"}
+                }
+            }],
+            "temperature": 0.3,
+            "max_tokens": 42,
+            "stream": true
+        }))
+        .expect("request should serialize");
+
+        let prepared = prepare_openai_text_upstream("/v1/chat/completions", &raw, "gpt-5", "codex")
+            .expect("Codex request should prepare");
+        let value: JsonValue =
+            serde_json::from_slice(&prepared.body).expect("request should remain JSON");
+        let input = value["input"].as_array().expect("input should be an array");
+
+        assert_eq!(input.len(), 4);
+        assert_eq!(input[0]["role"], "developer");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["call_id"], "call_1");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["call_id"], "call_1");
+        assert_eq!(input[3]["output"], "sunny");
+        let shortened = value["tools"][0]["name"]
+            .as_str()
+            .expect("tool name should be present");
+        assert!(shortened.len() <= 64);
+        assert_eq!(input[2]["name"], shortened);
+        assert_eq!(prepared.tool_name_reverse.get(shortened), Some(&long_name));
+        assert_eq!(value["instructions"], "");
+        assert_eq!(value["reasoning"]["effort"], "medium");
+        assert_eq!(value["reasoning"]["summary"], "auto");
+        assert_eq!(value["parallel_tool_calls"], true);
+        assert_eq!(value["include"][0], "reasoning.encrypted_content");
+        assert!(value.get("temperature").is_none());
+        assert!(value.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn xai_response_keeps_generic_responses_sampling_fields() {
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "model": "requested-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.4,
+            "top_p": 0.8,
+            "max_completion_tokens": 123
+        }))
+        .expect("request should serialize");
+
+        let prepared =
+            prepare_openai_text_upstream("/v1/chat/completions", &raw, "grok-4.5", "xai-response")
+                .expect("xAI request should prepare");
+        let value: JsonValue =
+            serde_json::from_slice(&prepared.body).expect("request should remain JSON");
+
+        assert_eq!(value["temperature"], 0.4);
+        assert_eq!(value["top_p"], 0.8);
+        assert_eq!(value["max_output_tokens"], 123);
+        assert!(value.get("instructions").is_none());
+    }
+
+    #[test]
+    fn native_responses_request_stays_responses_protocol() {
+        let raw = br#"{"model":"requested-model","input":"hello","stream":true}"#;
+        let prepared = prepare_openai_text_upstream("/v1/responses", raw, "gpt-5", "codex")
+            .expect("native Responses request should prepare");
+        let value: JsonValue =
+            serde_json::from_slice(&prepared.body).expect("request should remain JSON");
+
+        assert_eq!(prepared.path, "/responses");
+        assert_eq!(prepared.protocol, OpenAiTextProtocol::Responses);
+        assert_eq!(value["input"], "hello");
+        assert_eq!(value["stream"], true);
+    }
+
+    #[test]
+    fn codex_mac_user_agent_gets_session_id_without_overriding_existing_one() {
+        let mut generated = HeaderMap::new();
+        generated.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static(CODEX_DEFAULT_USER_AGENT),
+        );
+        ensure_codex_session_header(&mut generated, true);
+        let session_id = generated
+            .get("Session_id")
+            .and_then(|value| value.to_str().ok())
+            .expect("Mac Codex identity should get Session_id");
+        assert!(Uuid::parse_str(session_id).is_ok());
+
+        let mut existing = generated.clone();
+        existing.insert("Session_id", HeaderValue::from_static("downstream-session"));
+        ensure_codex_session_header(&mut existing, true);
+        assert_eq!(
+            existing.get("Session_id"),
+            Some(&HeaderValue::from_static("downstream-session"))
+        );
+
+        let mut non_codex = HeaderMap::new();
+        non_codex.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static(CODEX_DEFAULT_USER_AGENT),
+        );
+        ensure_codex_session_header(&mut non_codex, false);
+        assert!(!non_codex.contains_key("Session_id"));
     }
 }

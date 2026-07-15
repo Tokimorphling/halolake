@@ -1,4 +1,4 @@
-use crate::storage::ManagementStore;
+use crate::{channel_http::ChannelHttpClientFactory, proxy::ProxyStore, storage::ManagementStore};
 use halolake_control_plane::ManagementError;
 use halolake_domain::{CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI};
 use serde::Deserialize;
@@ -26,20 +26,24 @@ pub(crate) struct FetchModelsRequest {
     /// Channel setting JSON (import_source / using_api for static model lists).
     #[serde(default)]
     pub(crate) setting:         Option<String>,
+    /// Proxy binding used when probing an unsaved channel payload.
+    #[serde(default)]
+    pub(crate) proxy_id:        Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelProbeService {
     management: ManagementStore,
-    client:     reqwest::Client,
+    http:       ChannelHttpClientFactory,
 }
 
 impl ChannelProbeService {
-    pub(crate) fn new(management: ManagementStore) -> Self {
-        Self {
-            management,
-            client: reqwest::Client::new(),
-        }
+    pub(crate) fn new(management: ManagementStore, proxies: ProxyStore) -> Self {
+        Self::with_http(management, ChannelHttpClientFactory::new(proxies))
+    }
+
+    pub(crate) fn with_http(management: ManagementStore, http: ChannelHttpClientFactory) -> Self {
+        Self { management, http }
     }
 }
 
@@ -63,6 +67,7 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
                 key:             channel.key.clone(),
                 header_override: channel.header_override.clone(),
                 setting:         channel.setting.clone(),
+                proxy_id:        channel.proxy_id,
             }
         } else {
             req
@@ -83,12 +88,27 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
                     .collect(),
             ));
         }
+        let client = self
+            .http
+            .client(request.proxy_id, request.setting.as_deref())?;
         let models = match request.channel_type {
-            CHANNEL_TYPE_OLLAMA => self.fetch_ollama_models(&base_url, &key, &headers).await,
-            CHANNEL_TYPE_GEMINI => self.fetch_gemini_models(&base_url, &key, &headers).await,
-            _ => {
-                self.fetch_openai_compatible_models(request.channel_type, &base_url, &key, &headers)
+            CHANNEL_TYPE_OLLAMA => {
+                self.fetch_ollama_models(&client, &base_url, &key, &headers)
                     .await
+            }
+            CHANNEL_TYPE_GEMINI => {
+                self.fetch_gemini_models(&client, &base_url, &key, &headers)
+                    .await
+            }
+            _ => {
+                self.fetch_openai_compatible_models(
+                    &client,
+                    request.channel_type,
+                    &base_url,
+                    &key,
+                    &headers,
+                )
+                .await
             }
         }?;
         Ok(normalize_model_names(models))
@@ -98,13 +118,14 @@ impl Service<FetchModelsRequest> for ChannelProbeService {
 impl ChannelProbeService {
     async fn fetch_openai_compatible_models(
         &self,
+        client: &reqwest::Client,
         channel_type: i32,
         base_url: &str,
         key: &str,
         headers: &[(String, String)],
     ) -> Result<Vec<String>, ManagementError> {
         let url = openai_compatible_models_url(channel_type, base_url);
-        let mut request = self.client.get(url);
+        let mut request = client.get(url);
         if !key.is_empty() {
             if channel_type == CHANNEL_TYPE_ANTHROPIC {
                 request = request
@@ -128,13 +149,12 @@ impl ChannelProbeService {
 
     async fn fetch_ollama_models(
         &self,
+        client: &reqwest::Client,
         base_url: &str,
         key: &str,
         headers: &[(String, String)],
     ) -> Result<Vec<String>, ManagementError> {
-        let mut request = self
-            .client
-            .get(format!("{}/api/tags", base_url.trim_end_matches('/')));
+        let mut request = client.get(format!("{}/api/tags", base_url.trim_end_matches('/')));
         if !key.is_empty() {
             request = request.bearer_auth(key);
         }
@@ -152,6 +172,7 @@ impl ChannelProbeService {
 
     async fn fetch_gemini_models(
         &self,
+        client: &reqwest::Client,
         base_url: &str,
         key: &str,
         headers: &[(String, String)],
@@ -161,7 +182,7 @@ impl ChannelProbeService {
             url.push_str("?key=");
             url.push_str(key);
         }
-        let mut request = self.client.get(url);
+        let mut request = client.get(url);
         request = apply_header_overrides(request, headers, key);
         let response = request.send().await.map_err(storage_err)?;
         if !response.status().is_success() {
@@ -387,6 +408,7 @@ fn default_channel_type() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use halolake_control_plane::ManagementData;
     use serde_json::json;
 
     #[test]
@@ -422,5 +444,31 @@ mod tests {
             openai_compatible_models_url(CHANNEL_TYPE_OPENAI, "https://api.openai.com"),
             "https://api.openai.com/v1/models"
         );
+    }
+
+    #[tokio::test]
+    async fn unsaved_channel_probe_fails_closed_for_missing_proxy() {
+        let management = ManagementStore::memory(ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        let service = ChannelProbeService::new(management, ProxyStore::memory());
+        let error = service
+            .call(FetchModelsRequest {
+                channel_id:      None,
+                base_url:        "http://127.0.0.1:9".into(),
+                channel_type:    CHANNEL_TYPE_OPENAI,
+                key:             "test-key".into(),
+                header_override: None,
+                setting:         None,
+                proxy_id:        Some(99),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ManagementError::InvalidRequest(_)));
     }
 }

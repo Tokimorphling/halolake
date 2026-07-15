@@ -506,6 +506,11 @@ fn normalize_proxy_url(raw: &str) -> Result<String, ManagementError> {
             Some(format!("{userinfo}@"))
         })
         .unwrap_or_default();
+    let host = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
     Ok(format!("{scheme}://{userinfo}{host}:{port}"))
 }
 
@@ -812,5 +817,13 @@ mod tests {
                 .expect("create");
             assert_eq!(created.url, "socks5h://127.0.0.1:1080");
         });
+    }
+
+    #[test]
+    fn preserves_ipv6_brackets_when_normalizing_proxy_url() {
+        assert_eq!(
+            normalize_proxy_url("http://user:pass@[2001:db8::1]:8080").expect("normalize"),
+            "http://user:pass@[2001:db8::1]:8080"
+        );
     }
 }

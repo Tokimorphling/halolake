@@ -170,15 +170,21 @@ pub(crate) async fn gateway_channel_feedback(
         return api_error_status(StatusCode::UNAUTHORIZED, "invalid internal key");
     }
 
-    let service = ChannelFeedbackService::new(state.management.clone(), state.options.clone());
+    let service = ChannelFeedbackService::new(
+        state.management.clone(),
+        state.options.clone(),
+        state.proxies.clone(),
+    );
     match service.call(batch).await {
-        Ok(ack) => {
-            if (ack.disabled_channels > 0 || ack.disabled_keys > 0)
+        Ok(outcome) => {
+            if (outcome.refreshed_credentials > 0
+                || outcome.ack.disabled_channels > 0
+                || outcome.ack.disabled_keys > 0)
                 && let Err(err) = publish_management_snapshot(&state).await
             {
                 return management_error(err);
             }
-            api_success(ack)
+            api_success(outcome.ack)
         }
         Err(err) => channel_feedback_error(err),
     }

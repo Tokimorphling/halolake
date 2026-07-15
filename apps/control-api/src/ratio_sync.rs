@@ -1,4 +1,8 @@
-use crate::storage::{ManagementStore, OptionStore};
+use crate::{
+    channel_http::ChannelHttpClientFactory,
+    proxy::ProxyStore,
+    storage::{ManagementStore, OptionStore},
+};
 use futures_util::{StreamExt, stream};
 use halolake_control_plane::{ManagementData, ManagementError};
 use serde::{Deserialize, Serialize};
@@ -122,14 +126,20 @@ pub(crate) struct RatioSyncService {
     management: ManagementStore,
     options:    OptionStore,
     client:     reqwest::Client,
+    http:       ChannelHttpClientFactory,
 }
 
 impl RatioSyncService {
-    pub(crate) fn new(management: ManagementStore, options: OptionStore) -> Self {
+    pub(crate) fn new(
+        management: ManagementStore,
+        options: OptionStore,
+        proxies: ProxyStore,
+    ) -> Self {
         Self {
             management,
             options,
             client: reqwest::Client::new(),
+            http: ChannelHttpClientFactory::new(proxies),
         }
     }
 }
@@ -219,14 +229,19 @@ impl RatioSyncService {
         let full_url = upstream.full_url();
         let is_models_dev = is_models_dev_api_endpoint(&full_url);
         let mut last_error = None;
+        let (client, authorization) = if upstream.openrouter {
+            let Some((client, authorization)) = self.openrouter_client(upstream.id)? else {
+                return Ok(upstream.error("OpenRouter requires a valid channel with API key"));
+            };
+            (client, Some(authorization))
+        } else {
+            (self.client.clone(), None)
+        };
 
         for attempt in 0..3 {
-            let mut request = self.client.get(&full_url).timeout(timeout);
-            if upstream.openrouter {
-                let Some(auth) = self.openrouter_auth_header(upstream.id)? else {
-                    return Ok(upstream.error("OpenRouter requires a valid channel with API key"));
-                };
-                request = request.header(reqwest::header::AUTHORIZATION, auth);
+            let mut request = client.get(&full_url).timeout(timeout);
+            if let Some(authorization) = authorization.as_deref() {
+                request = request.header(reqwest::header::AUTHORIZATION, authorization);
             }
 
             match request.send().await {
@@ -255,18 +270,27 @@ impl RatioSyncService {
         Ok(upstream.error(last_error.unwrap_or_else(|| "request failed".to_string())))
     }
 
-    fn openrouter_auth_header(&self, channel_id: i64) -> Result<Option<String>, ManagementError> {
+    fn openrouter_client(
+        &self,
+        channel_id: i64,
+    ) -> Result<Option<(reqwest::Client, String)>, ManagementError> {
         if channel_id <= 0 {
             return Ok(None);
         }
         let management = self.management.current_data()?;
-        Ok(management
+        let Some(channel) = management
             .channels
             .iter()
             .find(|channel| channel.id == channel_id as u64)
-            .map(|channel| channel.key.trim())
-            .filter(|key| !key.is_empty())
-            .map(|key| format!("Bearer {key}")))
+        else {
+            return Ok(None);
+        };
+        let key = channel.key.trim();
+        if key.is_empty() {
+            return Ok(None);
+        }
+        let client = self.http.client_for_channel(channel)?;
+        Ok(Some((client, format!("Bearer {key}"))))
     }
 }
 
@@ -1076,6 +1100,30 @@ mod tests {
         assert_eq!(data["model_ratio"]["openrouter/model"], json!(0.5));
         assert_eq!(data["completion_ratio"]["openrouter/model"], json!(2.0));
         assert_eq!(data["cache_ratio"]["openrouter/model"], json!(0.5));
+    }
+
+    #[test]
+    fn openrouter_channel_proxy_binding_fails_closed() {
+        let management = ManagementStore::memory(ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            vec![ChannelRecord {
+                id: 7,
+                key: "sk-openrouter".into(),
+                proxy_id: Some(99),
+                ..test_channel_defaults()
+            }],
+            Vec::new(),
+        ));
+        let service = RatioSyncService::new(
+            management,
+            OptionStore::memory(BTreeMap::new()),
+            ProxyStore::memory(),
+        );
+
+        let error = service.openrouter_client(7).unwrap_err();
+        assert!(matches!(error, ManagementError::InvalidRequest(_)));
     }
 
     fn test_channel_defaults() -> ChannelRecord {

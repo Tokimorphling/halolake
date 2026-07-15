@@ -70,12 +70,30 @@ impl Default for ProtocolConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct UpstreamConfig {
     #[serde(default)]
-    pub connect_timeout_ms: Option<u64>,
+    pub connect_timeout_ms:      Option<u64>,
     #[serde(default)]
-    pub read_timeout_ms:    Option<u64>,
+    pub read_timeout_ms:         Option<u64>,
+    /// Consecutive transport failures before a worker temporarily rejects new
+    /// requests for the same proxy and target. `0` disables the breaker.
+    #[serde(default = "default_proxy_failure_threshold")]
+    pub proxy_failure_threshold: u32,
+    /// Worker-local proxy circuit cooldown before one half-open probe is allowed.
+    #[serde(default = "default_proxy_cooldown_ms")]
+    pub proxy_cooldown_ms:       u64,
+}
+
+impl Default for UpstreamConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout_ms:      None,
+            read_timeout_ms:         None,
+            proxy_failure_threshold: default_proxy_failure_threshold(),
+            proxy_cooldown_ms:       default_proxy_cooldown_ms(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -135,6 +153,36 @@ fn default_version() -> u64 {
     1
 }
 
+fn default_proxy_failure_threshold() -> u32 {
+    3
+}
+
+fn default_proxy_cooldown_ms() -> u64 {
+    15_000
+}
+
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_proxy_circuit_uses_safe_defaults_and_can_be_disabled() {
+        let defaults: UpstreamConfig = toml::from_str("").expect("default upstream config");
+        assert_eq!(defaults.proxy_failure_threshold, 3);
+        assert_eq!(defaults.proxy_cooldown_ms, 15_000);
+
+        let disabled: UpstreamConfig = toml::from_str(
+            r#"
+proxy_failure_threshold = 0
+proxy_cooldown_ms = 1
+"#,
+        )
+        .expect("disabled proxy circuit config");
+        assert_eq!(disabled.proxy_failure_threshold, 0);
+        assert_eq!(disabled.proxy_cooldown_ms, 1);
+    }
 }

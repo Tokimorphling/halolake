@@ -3,9 +3,10 @@
 use crate::{
     AppState,
     control_api_ext::{
-        AuthImportRequest, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
-        CodexAuthImportResult, Sub2apiDataImportRequest, CHANNEL_TYPE_CODEX, codex_key_to_json,
-        collect_entries, find_existing_channel_id, import_auth, run_sub2api_data_import,
+        AuthImportRequest, AuthMethod, CHANNEL_TYPE_CODEX, CodexAuthImportItem,
+        CodexAuthImportMessage, CodexAuthImportRequest, CodexAuthImportResult,
+        Sub2apiDataImportRequest, codex_key_to_json, collect_entries, find_existing_channel_id,
+        import_auth, merge_codex_oauth_key, run_sub2api_data_import,
     },
     http_auth::require_role,
     http_response::{api_error_status, api_success, management_error},
@@ -18,22 +19,43 @@ use axum::{
     response::Response,
     routing::post,
 };
-use halolake_control_plane::{CreateChannelRequest, UpdateChannelRequest};
+use halolake_control_plane::{CreateChannelRequest, ManagementError, UpdateChannelRequest};
 use halolake_domain::{ChannelRecord, ROLE_ADMIN_USER, STATUS_ENABLED};
 use service_async::Service;
 use std::collections::HashMap;
+
+async fn bump_and_publish_import_snapshot(state: &AppState) -> Result<(), ManagementError> {
+    // Auth imports may mutate only ProxyStore. Advance the management version
+    // explicitly so existing gateway workers do not reject that snapshot as
+    // NotModified. Channel mutations may already have bumped it; an extra
+    // monotonic increment is harmless.
+    state.management.bump_version().await?;
+    publish_management_snapshot(state).await
+}
 
 /// Mount import routes under admin-extras.
 pub(crate) fn mount(router: Router<AppState>) -> Router<AppState> {
     router
         .route("/api/channel/import/auth", post(import_auth_json))
         .route("/api/channel/import/auth/", post(import_auth_json))
-        .route("/api/channel/import/auth/upload", post(import_auth_multipart))
-        .route("/api/channel/import/auth/upload/", post(import_auth_multipart))
+        .route(
+            "/api/channel/import/auth/upload",
+            post(import_auth_multipart),
+        )
+        .route(
+            "/api/channel/import/auth/upload/",
+            post(import_auth_multipart),
+        )
         .route("/api/channel/import/codex-auth", post(import_codex_auth))
         .route("/api/channel/import/codex-auth/", post(import_codex_auth))
-        .route("/api/channel/import/sub2api-data", post(import_sub2api_data))
-        .route("/api/channel/import/sub2api-data/", post(import_sub2api_data))
+        .route(
+            "/api/channel/import/sub2api-data",
+            post(import_sub2api_data),
+        )
+        .route(
+            "/api/channel/import/sub2api-data/",
+            post(import_sub2api_data),
+        )
 }
 
 /// Import Codex / sub2api-format auth files as type-57 channels.
@@ -176,7 +198,28 @@ pub(crate) async fn import_codex_auth(
                         continue;
                     }
                 };
-                channel.key = key_json;
+                channel.key =
+                    match codex_key_to_json(&merge_codex_oauth_key(&channel.key, item.key.clone()))
+                    {
+                        Ok(key) => key,
+                        Err(err) => {
+                            result.failed = result.failed.saturating_add(1);
+                            let message = err.to_string();
+                            result.items.push(CodexAuthImportItem {
+                                index,
+                                name: account_name.clone(),
+                                action: "failed".into(),
+                                channel_id: None,
+                                message: message.clone(),
+                            });
+                            result.errors.push(CodexAuthImportMessage {
+                                index,
+                                name: account_name,
+                                message,
+                            });
+                            continue;
+                        }
+                    };
                 channel.channel_type = CHANNEL_TYPE_CODEX;
                 if !account_name.is_empty() {
                     channel.name = account_name.clone();
@@ -329,7 +372,7 @@ pub(crate) async fn import_auth_json(
                     d.proxy_created > 0 || d.account_created > 0 || d.proxy_reused > 0
                 });
             if mutated {
-                if let Err(err) = publish_management_snapshot(&state).await {
+                if let Err(err) = bump_and_publish_import_snapshot(&state).await {
                     return management_error(err);
                 }
             }
@@ -344,7 +387,7 @@ pub(crate) async fn import_auth_json(
 /// Form fields:
 /// - `file` / `files` / any file parts: one or more `.json` auth files
 /// - `format` (optional): `auto` | `cliproxy` | `codex-session` | `sub2api-data`
-/// - `group`, `models`, `name`, `update_existing` (optional)
+/// - `auth_method`, `group`, `models`, `name`, `proxy_id`, `update_existing` (optional)
 #[cfg(feature = "admin-extras")]
 pub(crate) async fn import_auth_multipart(
     State(state): State<AppState>,
@@ -359,9 +402,11 @@ pub(crate) async fn import_auth_multipart(
     let mut contents = Vec::new();
     let mut filenames = Vec::new();
     let mut format = "auto".to_string();
+    let mut auth_method = AuthMethod::Auto;
     let mut group = None;
     let mut models = None;
     let mut name = String::new();
+    let mut proxy_id = None;
     let mut update_existing = true;
 
     loop {
@@ -398,9 +443,28 @@ pub(crate) async fn import_auth_multipart(
         }
         match field_name.as_str() {
             "format" => format = text.trim().to_string(),
+            "auth_method" => {
+                auth_method = match AuthMethod::parse(&text) {
+                    Some(method) => method,
+                    None => {
+                        return api_error_status(StatusCode::BAD_REQUEST, "invalid auth_method");
+                    }
+                };
+            }
             "group" => group = Some(text.trim().to_string()).filter(|s| !s.is_empty()),
             "models" => models = Some(text.trim().to_string()).filter(|s| !s.is_empty()),
             "name" => name = text.trim().to_string(),
+            "proxy_id" => {
+                let value = text.trim();
+                if !value.is_empty() {
+                    proxy_id = match value.parse::<u64>() {
+                        Ok(id) if id > 0 => Some(id),
+                        _ => {
+                            return api_error_status(StatusCode::BAD_REQUEST, "invalid proxy_id");
+                        }
+                    };
+                }
+            }
             "update_existing" => {
                 update_existing = matches!(
                     text.trim().to_ascii_lowercase().as_str(),
@@ -423,6 +487,7 @@ pub(crate) async fn import_auth_multipart(
 
     let req = AuthImportRequest {
         format,
+        auth_method,
         content: String::new(),
         contents,
         filenames,
@@ -430,7 +495,7 @@ pub(crate) async fn import_auth_multipart(
         group,
         models,
         base_url: None,
-        proxy_id: None,
+        proxy_id,
         update_existing,
         data: None,
     };
@@ -445,7 +510,7 @@ pub(crate) async fn import_auth_multipart(
                     d.proxy_created > 0 || d.account_created > 0 || d.proxy_reused > 0
                 });
             if mutated {
-                if let Err(err) = publish_management_snapshot(&state).await {
+                if let Err(err) = bump_and_publish_import_snapshot(&state).await {
                     return management_error(err);
                 }
             }
@@ -472,7 +537,7 @@ pub(crate) async fn import_sub2api_data(
     match run_sub2api_data_import(&state.management, &state.proxies, req).await {
         Ok(result) => {
             if result.proxy_created > 0 || result.account_created > 0 || result.proxy_reused > 0 {
-                if let Err(err) = publish_management_snapshot(&state).await {
+                if let Err(err) = bump_and_publish_import_snapshot(&state).await {
                     return management_error(err);
                 }
             }
@@ -481,5 +546,3 @@ pub(crate) async fn import_sub2api_data(
         Err(err) => management_error(err),
     }
 }
-
-

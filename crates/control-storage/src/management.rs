@@ -1,15 +1,17 @@
 use halolake_control_plane::{
     AdjustUserQuotaRequest, AutoDisableChannelRequest, AutoDisableChannelResult,
-    BatchSetChannelTagRequest, BootstrapRootUserRequest, ChannelStatusUpdateRequest,
-    CreateChannelRequest, CreateTokenRequest, CreateUserRequest, DeleteChannelRequest,
-    DeleteDisabledChannelsRequest, DeleteTokenRequest, DeleteUserRequest, GetChannelRequest,
-    GetTokenRequest, GetUserRequest, ListChannelsRequest, ListTokensRequest, ListUsersRequest,
-    LoginUserRequest, ManageUserRequest, ManagementData, ManagementError, MemoryManagementStore,
+    BatchSetChannelTagRequest, BatchUpdateChannelStatusRequest, BootstrapRootUserRequest,
+    ChannelStatusUpdateRequest, CreateChannelRequest, CreateTokenRequest, CreateUserRequest,
+    DeleteChannelRequest, DeleteChannelsBatchRequest, DeleteDisabledChannelsRequest,
+    DeleteTokenRequest, DeleteUserRequest, GetChannelRequest, GetTokenRequest, GetUserRequest,
+    ListChannelsRequest, ListTokensRequest, ListUsersRequest, LoginUserRequest, ManageUserRequest,
+    ManagementData, ManagementError, MemoryManagementStore, PatchChannelBalanceRequest,
+    PatchChannelModelStateRequest, PatchChannelProbeMetricsRequest,
     PublishManagementSnapshotRequest, RegisterUserRequest, RegisteredUser, RevealChannelKeyRequest,
-    RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey, SearchChannelsRequest,
-    SearchTokensRequest, SearchUsersRequest, SettleUsageRequest, SnapshotPublished,
-    SnapshotPublisher, UpdateChannelRequest, UpdateChannelsByTagRequest, UpdateTokenRequest,
-    UpdateUserAccessTokenRequest, UpdateUserRequest, UsageSettlement,
+    RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey, RotateChannelCredentialRequest,
+    SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageRequest,
+    SnapshotPublished, SnapshotPublisher, UpdateChannelRequest, UpdateChannelsByTagRequest,
+    UpdateTokenRequest, UpdateUserAccessTokenRequest, UpdateUserRequest, UsageSettlement,
     ValidateUserAccessTokenRequest,
 };
 use halolake_domain::{ChannelRecord, PageResult, TokenRecord, UserRecord};
@@ -256,7 +258,13 @@ impl_write_service!(DeleteTokenRequest, ());
 impl_write_service!(CreateChannelRequest, ChannelRecord);
 impl_write_service!(UpdateChannelRequest, ChannelRecord);
 impl_write_service!(DeleteChannelRequest, ());
-impl_write_service!(ChannelStatusUpdateRequest, ChannelRecord);
+impl_write_service!(DeleteChannelsBatchRequest, usize);
+impl_write_service!(ChannelStatusUpdateRequest, bool);
+impl_write_service!(BatchUpdateChannelStatusRequest, usize);
+impl_write_service!(PatchChannelProbeMetricsRequest, ChannelRecord);
+impl_write_service!(PatchChannelBalanceRequest, ChannelRecord);
+impl_write_service!(PatchChannelModelStateRequest, ChannelRecord);
+impl_write_service!(RotateChannelCredentialRequest, ChannelRecord);
 
 impl Service<AutoDisableChannelRequest> for ManagementStore {
     type Response = AutoDisableChannelResult;

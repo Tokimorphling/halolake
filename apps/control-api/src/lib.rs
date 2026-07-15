@@ -34,17 +34,18 @@ mod bootstrap_credentials;
 mod catalog;
 mod channel_affinity;
 mod channel_feedback;
+mod channel_http;
 mod channel_ops;
 mod channel_probe;
 #[cfg(feature = "admin-extras")]
 mod channel_special;
 mod channel_task;
 mod checkin;
-#[cfg(feature = "admin-extras")]
-mod control_api_ext;
 #[cfg(feature = "compat-stubs")]
 mod compat;
 mod config;
+#[cfg(feature = "admin-extras")]
+mod control_api_ext;
 mod http_auth;
 mod http_response;
 #[cfg(feature = "admin-extras")]

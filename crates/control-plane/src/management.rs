@@ -3,11 +3,13 @@ use bcrypt::{DEFAULT_COST, hash, verify};
 use halolake_domain::{
     CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, PageRequest,
     PageResult, ROLE_ADMIN_USER, ROLE_COMMON_USER, ROLE_ROOT_USER, STATUS_AUTO_DISABLED,
-    STATUS_ENABLED, SearchRequest, TokenRecord, UsageEvent, UsageStatus, UserRecord,
+    STATUS_ENABLED, STATUS_MANUALLY_DISABLED, SearchRequest, TokenRecord, UsageEvent, UsageStatus,
+    UserRecord,
 };
 use halolake_router_core::{ChannelConfig, GatewaySnapshot, ModelMapping, Provider, TokenConfig};
 use serde_json::Value as JsonValue;
 use service_async::Service;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, RwLock},
@@ -46,6 +48,58 @@ pub struct ManagementData {
     pub tokens:         Vec<TokenRecord>,
     pub channels:       Vec<ChannelRecord>,
     pub model_mappings: Vec<ModelMapping>,
+}
+
+/// Allocate positive, unique management ids without letting an alias consume a
+/// numeric id that another snapshot channel explicitly owns.
+///
+/// Older snapshots only had `ChannelConfig.id`; newer snapshots carry an
+/// independent `management_id`. Pre-reserving every explicit id makes mixed
+/// inputs such as `foo`, `1` deterministic instead of assigning both records
+/// management id 1.
+fn allocate_snapshot_channel_ids(channels: &[ChannelConfig]) -> Vec<u64> {
+    let preferred = channels
+        .iter()
+        .map(|channel| {
+            channel
+                .management_id
+                .filter(|id| *id > 0)
+                .or_else(|| channel.id.trim().parse::<u64>().ok().filter(|id| *id > 0))
+        })
+        .collect::<Vec<_>>();
+    let reserved_ids = preferred.iter().flatten().copied().collect::<HashSet<_>>();
+    let reserved_route_ids = channels
+        .iter()
+        .map(|channel| channel.id.trim())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    let mut used = HashSet::new();
+    let mut next = 1u64;
+
+    preferred
+        .into_iter()
+        .map(|preferred| {
+            if let Some(id) = preferred
+                && used.insert(id)
+            {
+                return id;
+            }
+            loop {
+                let candidate = next;
+                next = next.saturating_add(1);
+                if candidate == 0
+                    || used.contains(&candidate)
+                    || reserved_ids.contains(&candidate)
+                    || reserved_route_ids.contains(&candidate.to_string())
+                {
+                    continue;
+                }
+                used.insert(candidate);
+                return candidate;
+            }
+        })
+        .collect()
 }
 
 impl ManagementData {
@@ -99,27 +153,45 @@ impl ManagementData {
             })
             .collect::<Vec<_>>();
 
+        let channel_ids = allocate_snapshot_channel_ids(&snapshot.channels);
+        let mut route_ids = HashSet::new();
         let channels = snapshot
             .channels
             .into_iter()
-            .enumerate()
-            .map(|(idx, channel)| {
+            .zip(channel_ids)
+            .map(|(channel, id)| {
                 let key = snapshot_channel_key(&channel);
-                let setting = channel.proxy.as_ref().and_then(|proxy| {
-                    let proxy = proxy.trim();
-                    if proxy.is_empty() {
-                        None
-                    } else {
-                        serde_json::to_string(&serde_json::json!({ "proxy": proxy })).ok()
-                    }
-                });
+                let imported_route_id = channel.id.trim().to_string();
+                let snapshot_id = (!imported_route_id.is_empty()
+                    && route_ids.insert(imported_route_id.clone()))
+                .then_some(imported_route_id.clone());
+                let setting = channel
+                    .proxy
+                    .as_ref()
+                    .and_then(|proxy| {
+                        let proxy = proxy.trim();
+                        if proxy.is_empty() {
+                            None
+                        } else {
+                            serde_json::to_string(&serde_json::json!({ "proxy": proxy })).ok()
+                        }
+                    })
+                    .or_else(|| {
+                        channel
+                            .proxy_required
+                            .then(|| serde_json::json!({ "proxy_required": true }).to_string())
+                    });
                 ChannelRecord {
-                    id: channel.id.parse().unwrap_or((idx + 1) as u64),
-                    snapshot_id: Some(channel.id.clone()),
+                    id,
+                    snapshot_id,
                     channel_type: channel_type_from_provider(channel.provider),
                     key,
                     status: if channel.enabled { STATUS_ENABLED } else { 0 },
-                    name: channel.id,
+                    name: if imported_route_id.is_empty() {
+                        id.to_string()
+                    } else {
+                        imported_route_id
+                    },
                     weight: Some(channel.weight),
                     created_time: 0,
                     test_time: 0,
@@ -189,31 +261,51 @@ impl ManagementData {
             })
             .collect::<Vec<_>>();
 
-        let channels = self
-            .channels
-            .iter()
-            .filter_map(|channel| match channel_config(channel) {
-                Ok(Some(channel)) => Some(Ok(channel)),
-                Ok(None) => None,
-                Err(err) => Some(Err(err)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut channels = Vec::new();
+        let mut channel_mappings = Vec::new();
+        let mut valid_route_ids = HashSet::new();
+        for channel in &self.channels {
+            let Some(config) = channel_config(channel)? else {
+                continue;
+            };
+            // A malformed enabled channel fails closed without preventing a
+            // healthy channel from being published. Create/update/status paths
+            // reject this state; this guard isolates legacy database rows.
+            let derived_mappings = if channel.status == STATUS_ENABLED {
+                match channel_model_mappings(channel) {
+                    Ok(mappings) => mappings,
+                    Err(_) => continue,
+                }
+            } else {
+                Vec::new()
+            };
+            // Do not let a duplicate canonical route id be silently overwritten
+            // by router-core's index. Keep the first record and fail later rows
+            // closed; mutation paths prevent introducing new duplicates.
+            if config.id.trim().is_empty() || !valid_route_ids.insert(config.id.clone()) {
+                continue;
+            }
+            channels.push(config);
+            channel_mappings.extend(derived_mappings);
+        }
 
         let mut mappings = self
             .model_mappings
             .iter()
+            .filter(|mapping| valid_route_ids.contains(&mapping.channel_id))
             .cloned()
-            .map(|mapping| (mapping.requested_model.clone(), mapping))
+            .map(|mapping| {
+                (
+                    (mapping.requested_model.clone(), mapping.channel_id.clone()),
+                    mapping,
+                )
+            })
             .collect::<BTreeMap<_, _>>();
-        for channel in &self.channels {
-            if channel.status != STATUS_ENABLED
-                || provider_from_channel_type(channel.channel_type).is_none()
-            {
-                continue;
-            }
-            for mapping in channel_model_mappings(channel)? {
-                mappings.insert(mapping.requested_model.clone(), mapping);
-            }
+        for mapping in channel_mappings {
+            mappings.insert(
+                (mapping.requested_model.clone(), mapping.channel_id.clone()),
+                mapping,
+            );
         }
 
         Ok(GatewaySnapshot {
@@ -249,6 +341,8 @@ pub enum ManagementError {
     UnsupportedChannelType(i32),
     #[error("invalid model mapping for channel {channel_id}: {message}")]
     InvalidModelMapping { channel_id: u64, message: String },
+    #[error("channel {0} changed while an operation was in flight")]
+    StaleChannelUpdate(u64),
     #[error("snapshot publish failed: {0}")]
     Snapshot(#[from] SnapshotError),
 }
@@ -493,20 +587,68 @@ pub struct DeleteChannelRequest {
     pub id: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeleteChannelsBatchRequest {
+    pub ids: Vec<u64>,
+}
+
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub struct ChannelStatusUpdateRequest {
     pub id:     u64,
     pub status: i32,
 }
 
+#[derive(Debug, Clone)]
+pub struct BatchUpdateChannelStatusRequest {
+    pub ids:    Vec<u64>,
+    pub status: i32,
+}
+
+/// Field-scoped writes used after network operations. They deliberately avoid
+/// replacing a stale `ChannelRecord` captured before an `.await`.
+#[derive(Debug, Clone, Copy)]
+pub struct PatchChannelProbeMetricsRequest {
+    pub id:            u64,
+    pub test_time:     i64,
+    pub response_time: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PatchChannelBalanceRequest {
+    pub id:                    u64,
+    pub expected_key:          String,
+    pub balance:               f64,
+    pub balance_updated_time:  i64,
+    pub auto_disable_if_empty: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PatchChannelModelStateRequest {
+    pub id:              u64,
+    pub expected_models: String,
+    pub models:          String,
+    /// JSON object containing only model-sync setting fields.
+    pub setting_patch:   Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RotateChannelCredentialRequest {
+    pub id:            u64,
+    pub expected_key:  String,
+    pub new_key:       String,
+    /// JSON object containing only fields changed by credential refresh.
+    pub setting_patch: Option<String>,
+}
+
 /// Auto-ban a single channel by numeric id only (gateway feedback).
 /// Applied inside `mutate` so other channels cannot be rewritten by a full UpdateChannel.
 #[derive(Debug, Clone)]
 pub struct AutoDisableChannelRequest {
-    pub id:                 u64,
-    pub reason:             String,
-    pub api_key_index:      Option<usize>,
-    pub created_at_unix_ms: i64,
+    pub id:                  u64,
+    pub reason:              String,
+    pub api_key_index:       Option<usize>,
+    pub api_key_fingerprint: Option<String>,
+    pub created_at_unix_ms:  i64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1415,9 +1557,20 @@ impl Service<CreateChannelRequest> for MemoryManagementStore {
         self.mutate(|data| {
             let mut channel = req.channel;
             if channel.id == 0 {
-                channel.id = next_id(data.channels.iter().map(|channel| channel.id));
+                channel.id = next_channel_id(&data.channels);
             }
-            if data.channels.iter().any(|item| item.id == channel.id) {
+            if channel.id == 0 {
+                return Err(ManagementError::InvalidRequest(
+                    "channel id must be positive",
+                ));
+            }
+            channel_model_mappings(&channel)?;
+            let route_id = channel_snapshot_id(&channel);
+            if data
+                .channels
+                .iter()
+                .any(|item| item.id == channel.id || channel_snapshot_id(item) == route_id)
+            {
                 return Err(ManagementError::Duplicate);
             }
             data.channels.push(channel.clone());
@@ -1450,10 +1603,18 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             if updated.group.trim().is_empty() {
                 updated.group.clone_from(&channel.group);
             }
-            // Merge setting JSON so sparse admin saves do not drop multi_key_* /
-            // import_source / status_reason written by runtime or import.
+            // Merge JSON fields so sparse or masked admin saves preserve runtime
+            // metadata and stored credential values.
             updated.setting =
-                merge_channel_setting_json(channel.setting.as_deref(), updated.setting.as_deref());
+                merge_channel_json(channel.setting.as_deref(), updated.setting.as_deref());
+            updated.header_override = merge_channel_json(
+                channel.header_override.as_deref(),
+                updated.header_override.as_deref(),
+            );
+            updated.param_override = merge_channel_json(
+                channel.param_override.as_deref(),
+                updated.param_override.as_deref(),
+            );
             if updated.proxy_id.is_none() {
                 updated.proxy_id = channel.proxy_id;
             }
@@ -1462,14 +1623,6 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
             // channel config. Intentional clear is rare; type defaults apply when
             // both sides are empty.
             preserve_nonempty_opt(&mut updated.base_url, channel.base_url.as_deref());
-            preserve_nonempty_opt(
-                &mut updated.header_override,
-                channel.header_override.as_deref(),
-            );
-            preserve_nonempty_opt(
-                &mut updated.param_override,
-                channel.param_override.as_deref(),
-            );
             preserve_nonempty_opt(&mut updated.model_mapping, channel.model_mapping.as_deref());
             preserve_nonempty_opt(&mut updated.remark, channel.remark.as_deref());
             preserve_nonempty_opt(&mut updated.tag, channel.tag.as_deref());
@@ -1495,6 +1648,7 @@ impl Service<UpdateChannelRequest> for MemoryManagementStore {
                 updated.created_time = channel.created_time;
             }
             updated.snapshot_id.clone_from(&channel.snapshot_id);
+            channel_model_mappings(&updated)?;
             *channel = updated.clone();
             Ok(updated.masked())
         })
@@ -1515,35 +1669,92 @@ fn preserve_nonempty_opt(target: &mut Option<String>, existing: Option<&str>) {
     }
 }
 
-/// Overlay incoming setting object keys onto existing; preserve keys not sent.
-fn merge_channel_setting_json(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
-    let existing_val = existing
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-    let incoming_val = incoming
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+/// Recursively overlay incoming JSON while preserving stored secrets hidden by masked reads.
+fn merge_channel_json(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
+    let existing_raw = existing
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    let Some(incoming_raw) = incoming.filter(|value| !value.trim().is_empty()) else {
+        return existing_raw;
+    };
+    let Ok(incoming_value) = serde_json::from_str::<JsonValue>(incoming_raw) else {
+        return existing_raw;
+    };
+    let Some(mut existing_value) = existing_raw
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+    else {
+        return serde_json::to_string(&incoming_value).ok();
+    };
+    merge_channel_json_value(&mut existing_value, incoming_value);
+    serde_json::to_string(&existing_value).ok().or(existing_raw)
+}
 
-    match (existing_val, incoming_val) {
-        (None, None) => None,
-        (Some(e), None) => serde_json::to_string(&e).ok(),
-        (None, Some(i)) => serde_json::to_string(&i).ok(),
-        (Some(mut e), Some(i)) => {
-            let Some(base) = e.as_object_mut() else {
-                return serde_json::to_string(&i).ok();
-            };
-            if let Some(overlay) = i.as_object() {
-                for (k, v) in overlay {
-                    base.insert(k.clone(), v.clone());
+fn merge_channel_json_value(existing: &mut JsonValue, incoming: JsonValue) {
+    match (existing, incoming) {
+        (JsonValue::Object(base), JsonValue::Object(overlay)) => {
+            for (key, value) in overlay {
+                if is_masked_sensitive_json_value(&key, &value) {
+                    continue;
                 }
-            } else {
-                return serde_json::to_string(&i).ok();
+                match base.get_mut(&key) {
+                    Some(existing) => merge_channel_json_value(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
             }
-            serde_json::to_string(&e).ok()
         }
+        (JsonValue::Array(base), JsonValue::Array(overlay)) => {
+            let incoming_len = overlay.len();
+            for (idx, value) in overlay.into_iter().enumerate() {
+                if let Some(existing) = base.get_mut(idx) {
+                    merge_channel_json_value(existing, value);
+                } else {
+                    base.push(value);
+                }
+            }
+            base.truncate(incoming_len);
+        }
+        (existing, incoming) => *existing = incoming,
     }
+}
+
+fn is_masked_sensitive_json_value(key: &str, value: &JsonValue) -> bool {
+    if !value.as_str().is_some_and(|value| value.trim().is_empty()) {
+        return false;
+    }
+    let key = key.to_ascii_lowercase();
+    let compact = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    matches!(
+        compact.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "apikey"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+            | "password"
+            | "secret"
+            | "clientsecret"
+            | "privatekey"
+            | "secretkey"
+            | "proxy"
+            | "proxyurl"
+            | "cookie"
+            | "setcookie"
+    ) || key.ends_with("_token")
+        || key.ends_with("-token")
+        || key.ends_with("_password")
+        || key.ends_with("-password")
+        || key.ends_with("_secret")
+        || key.ends_with("-secret")
+        || key.ends_with("_api_key")
+        || key.ends_with("-api-key")
 }
 
 impl Service<DeleteChannelRequest> for MemoryManagementStore {
@@ -1562,21 +1773,211 @@ impl Service<DeleteChannelRequest> for MemoryManagementStore {
     }
 }
 
+fn normalized_channel_ids(ids: Vec<u64>) -> Result<HashSet<u64>, ManagementError> {
+    if ids.is_empty() || ids.contains(&0) {
+        return Err(ManagementError::InvalidRequest(
+            "positive channel ids are required",
+        ));
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn validate_manual_channel_status(status: i32) -> Result<(), ManagementError> {
+    if matches!(status, STATUS_ENABLED | STATUS_MANUALLY_DISABLED) {
+        Ok(())
+    } else {
+        Err(ManagementError::InvalidRequest(
+            "manual channel status must be enabled or manually disabled",
+        ))
+    }
+}
+
+impl Service<DeleteChannelsBatchRequest> for MemoryManagementStore {
+    type Response = usize;
+    type Error = ManagementError;
+
+    async fn call(&self, req: DeleteChannelsBatchRequest) -> Result<Self::Response, Self::Error> {
+        let ids = normalized_channel_ids(req.ids)?;
+        self.mutate(|data| {
+            if ids
+                .iter()
+                .any(|id| !data.channels.iter().any(|channel| channel.id == *id))
+            {
+                return Err(ManagementError::NotFound);
+            }
+            let before = data.channels.len();
+            data.channels.retain(|channel| !ids.contains(&channel.id));
+            Ok(before.saturating_sub(data.channels.len()))
+        })
+    }
+}
+
 impl Service<ChannelStatusUpdateRequest> for MemoryManagementStore {
-    type Response = ChannelRecord;
+    type Response = bool;
     type Error = ManagementError;
 
     async fn call(&self, req: ChannelStatusUpdateRequest) -> Result<Self::Response, Self::Error> {
+        validate_manual_channel_status(req.status)?;
         self.mutate(|data| {
             let channel = data
                 .channels
                 .iter_mut()
                 .find(|channel| channel.id == req.id)
                 .ok_or(ManagementError::NotFound)?;
+            if req.status == STATUS_ENABLED {
+                channel_model_mappings(channel)?;
+            }
+            let changed = channel_status_update_needed(channel, req.status);
+            if !changed {
+                return Ok(false);
+            }
             // Align with new-api `UpdateChannelStatus` / `handlerMultiKeyUpdate`:
             // enabling clears multi-key disabled maps and status_reason so the
             // channel is actually routable again (status flag alone is not enough).
             apply_channel_status_update(channel, req.status, "manual operation");
+            Ok(true)
+        })
+    }
+}
+
+impl Service<BatchUpdateChannelStatusRequest> for MemoryManagementStore {
+    type Response = usize;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: BatchUpdateChannelStatusRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        validate_manual_channel_status(req.status)?;
+        let ids = normalized_channel_ids(req.ids)?;
+        self.mutate(|data| {
+            if ids
+                .iter()
+                .any(|id| !data.channels.iter().any(|channel| channel.id == *id))
+            {
+                return Err(ManagementError::NotFound);
+            }
+            if req.status == STATUS_ENABLED {
+                for channel in data
+                    .channels
+                    .iter()
+                    .filter(|channel| ids.contains(&channel.id))
+                {
+                    channel_model_mappings(channel)?;
+                }
+            }
+            let mut updated = 0usize;
+            for channel in &mut data.channels {
+                if ids.contains(&channel.id) && channel_status_update_needed(channel, req.status) {
+                    apply_channel_status_update(channel, req.status, "manual operation");
+                    updated = updated.saturating_add(1);
+                }
+            }
+            Ok(updated)
+        })
+    }
+}
+
+impl Service<PatchChannelProbeMetricsRequest> for MemoryManagementStore {
+    type Response = ChannelRecord;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: PatchChannelProbeMetricsRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        self.mutate(|data| {
+            let channel = data
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == req.id)
+                .ok_or(ManagementError::NotFound)?;
+            channel.test_time = req.test_time;
+            channel.response_time = req.response_time;
+            Ok(channel.clone().masked())
+        })
+    }
+}
+
+impl Service<PatchChannelBalanceRequest> for MemoryManagementStore {
+    type Response = ChannelRecord;
+    type Error = ManagementError;
+
+    async fn call(&self, req: PatchChannelBalanceRequest) -> Result<Self::Response, Self::Error> {
+        if !req.balance.is_finite() {
+            return Err(ManagementError::InvalidRequest("balance must be finite"));
+        }
+        self.mutate(|data| {
+            let channel = data
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == req.id)
+                .ok_or(ManagementError::NotFound)?;
+            if channel.key != req.expected_key {
+                return Err(ManagementError::StaleChannelUpdate(req.id));
+            }
+            channel.balance = req.balance;
+            channel.balance_updated_time = req.balance_updated_time;
+            if req.auto_disable_if_empty
+                && req.balance <= 0.0
+                && channel.status == STATUS_ENABLED
+                && channel.auto_ban.unwrap_or(1) != 0
+            {
+                apply_channel_status_update(channel, STATUS_AUTO_DISABLED, "balance exhausted");
+            }
+            Ok(channel.clone().masked())
+        })
+    }
+}
+
+impl Service<PatchChannelModelStateRequest> for MemoryManagementStore {
+    type Response = ChannelRecord;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: PatchChannelModelStateRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        self.mutate(|data| {
+            let channel = data
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == req.id)
+                .ok_or(ManagementError::NotFound)?;
+            if channel.models != req.expected_models {
+                return Err(ManagementError::StaleChannelUpdate(req.id));
+            }
+            let mut updated = channel.clone();
+            updated.models = req.models;
+            updated.setting =
+                merge_channel_json(channel.setting.as_deref(), req.setting_patch.as_deref());
+            channel_model_mappings(&updated)?;
+            *channel = updated.clone();
+            Ok(updated.masked())
+        })
+    }
+}
+
+impl Service<RotateChannelCredentialRequest> for MemoryManagementStore {
+    type Response = ChannelRecord;
+    type Error = ManagementError;
+
+    async fn call(
+        &self,
+        req: RotateChannelCredentialRequest,
+    ) -> Result<Self::Response, Self::Error> {
+        self.mutate(|data| {
+            let channel = data
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == req.id)
+                .ok_or(ManagementError::NotFound)?;
+            if channel.key != req.expected_key {
+                return Err(ManagementError::StaleChannelUpdate(req.id));
+            }
+            channel.key = req.new_key;
+            channel.setting =
+                merge_channel_json(channel.setting.as_deref(), req.setting_patch.as_deref());
             Ok(channel.clone().masked())
         })
     }
@@ -1596,6 +1997,14 @@ impl Service<AutoDisableChannelRequest> for MemoryManagementStore {
             if channel.auto_ban.unwrap_or(1) == 0 {
                 return Ok(AutoDisableChannelResult::default());
             }
+            if let Some(expected) = req.api_key_fingerprint.as_deref() {
+                let Some(key) = channel_key_for_feedback(channel, req.api_key_index) else {
+                    return Ok(AutoDisableChannelResult::default());
+                };
+                if credential_fingerprint(&key) != expected {
+                    return Ok(AutoDisableChannelResult::default());
+                }
+            }
             Ok(auto_disable_channel_in_place(
                 channel,
                 req.reason.as_str(),
@@ -1606,6 +2015,31 @@ impl Service<AutoDisableChannelRequest> for MemoryManagementStore {
     }
 }
 
+fn channel_key_for_feedback(channel: &ChannelRecord, index: Option<usize>) -> Option<String> {
+    let index = index.unwrap_or(0);
+    if channel.channel_type == CHANNEL_TYPE_CODEX
+        && index == 0
+        && let Some(credential) = parse_codex_oauth_runtime_credential(channel.key.trim())
+    {
+        return credential.access_token;
+    }
+    let key = channel.key.lines().nth(index)?.trim();
+    if key.is_empty() {
+        return None;
+    }
+    if channel.channel_type == CHANNEL_TYPE_CODEX
+        && let Some(credential) = parse_codex_oauth_runtime_credential(key)
+    {
+        return credential.access_token;
+    }
+    Some(key.to_string())
+}
+
+fn credential_fingerprint(key: &str) -> String {
+    let digest = Sha256::digest(key.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
 /// Single-channel auto-ban used by control-api feedback (in-place, no full record replace).
 pub fn auto_disable_channel_in_place(
     channel: &mut ChannelRecord,
@@ -1613,16 +2047,21 @@ pub fn auto_disable_channel_in_place(
     api_key_index: Option<usize>,
     created_at_unix_ms: i64,
 ) -> AutoDisableChannelResult {
-    let key_count = channel
+    let key_indexes = channel
         .key
         .lines()
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .count()
-        .max(1);
+        .enumerate()
+        .filter_map(|(index, key)| (!key.trim().is_empty()).then_some(index))
+        .collect::<Vec<_>>();
     // multi-key: disable one key when index is in range
     if let Some(key_index) = api_key_index {
-        if key_index < key_count && key_count > 1 {
+        if !key_indexes.contains(&key_index) {
+            // The gateway may still be reporting against an older snapshot
+            // after credentials were rotated. Never turn an out-of-range key
+            // report into a whole-channel disable.
+            return AutoDisableChannelResult::default();
+        }
+        if key_indexes.len() > 1 {
             let mut setting = channel
                 .setting
                 .as_deref()
@@ -1665,7 +2104,7 @@ pub fn auto_disable_channel_in_place(
                 }
             }
 
-            let all_disabled = (0..key_count).all(|idx| {
+            let all_disabled = key_indexes.iter().all(|idx| {
                 setting
                     .pointer(&format!("/multi_key_status_list/{idx}"))
                     .and_then(|v| v.as_i64())
@@ -1748,15 +2187,15 @@ fn apply_channel_status_update(channel: &mut ChannelRecord, status: i32, reason:
                 object.insert("multi_key_status_list".into(), serde_json::json!({}));
             }
         }
-        if let Some(map) = object.get_mut("multi_key_disabled_reason") {
-            if let Some(obj) = map.as_object_mut() {
-                obj.clear();
-            }
+        if let Some(map) = object.get_mut("multi_key_disabled_reason")
+            && let Some(obj) = map.as_object_mut()
+        {
+            obj.clear();
         }
-        if let Some(map) = object.get_mut("multi_key_disabled_time") {
-            if let Some(obj) = map.as_object_mut() {
-                obj.clear();
-            }
+        if let Some(map) = object.get_mut("multi_key_disabled_time")
+            && let Some(obj) = map.as_object_mut()
+        {
+            obj.clear();
         }
     } else {
         object.insert(
@@ -1770,6 +2209,27 @@ fn apply_channel_status_update(channel: &mut ChannelRecord, status: i32, reason:
         object.insert("status_time".into(), serde_json::json!(now));
     }
     channel.setting = serde_json::to_string(&setting).ok();
+}
+
+fn channel_status_update_needed(channel: &ChannelRecord, status: i32) -> bool {
+    if channel.status != status {
+        return true;
+    }
+    if status != STATUS_ENABLED {
+        return false;
+    }
+    let Some(setting) = channel
+        .setting
+        .as_deref()
+        .and_then(|setting| serde_json::from_str::<JsonValue>(setting).ok())
+    else {
+        return false;
+    };
+    setting.get("status_reason").is_some()
+        || setting
+            .get("multi_key_status_list")
+            .and_then(JsonValue::as_object)
+            .is_some_and(|statuses| !statuses.is_empty())
 }
 
 impl Service<DeleteDisabledChannelsRequest> for MemoryManagementStore {
@@ -1799,6 +2259,13 @@ impl Service<BatchSetChannelTagRequest> for MemoryManagementStore {
         }
         self.mutate(|data| {
             let ids = req.ids.into_iter().collect::<HashSet<_>>();
+            if ids.contains(&0)
+                || ids
+                    .iter()
+                    .any(|id| !data.channels.iter().any(|channel| channel.id == *id))
+            {
+                return Err(ManagementError::NotFound);
+            }
             let mut updated = 0usize;
             for channel in &mut data.channels {
                 if ids.contains(&channel.id) {
@@ -1820,14 +2287,28 @@ impl Service<UpdateChannelsByTagRequest> for MemoryManagementStore {
         if tag.is_empty() {
             return Err(ManagementError::InvalidRequest("tag is required"));
         }
+        if let Some(status) = req.patch.status {
+            validate_manual_channel_status(status)?;
+        }
         self.mutate(|data| {
-            let mut updated = 0usize;
-            for channel in &mut data.channels {
+            let mut replacements = Vec::new();
+            for (idx, channel) in data.channels.iter().enumerate() {
                 if channel.tag.as_deref() != Some(tag) {
                     continue;
                 }
-                apply_channel_tag_patch(channel, &req.patch);
-                updated = updated.saturating_add(1);
+                let mut updated = channel.clone();
+                apply_channel_tag_patch(&mut updated, &req.patch);
+                if req.patch.status == Some(STATUS_ENABLED)
+                    || req.patch.model_mapping.is_some()
+                    || req.patch.models.is_some()
+                {
+                    channel_model_mappings(&updated)?;
+                }
+                replacements.push((idx, updated));
+            }
+            let updated = replacements.len();
+            for (idx, channel) in replacements {
+                data.channels[idx] = channel;
             }
             Ok(updated)
         })
@@ -1883,14 +2364,24 @@ fn channel_config(channel: &ChannelRecord) -> Result<Option<ChannelConfig>, Mana
         api_key_indexes.push(idx);
         api_keys.push(key);
     }
+    let mut header_override = parse_channel_header_override(channel.header_override.as_deref());
+    if channel.channel_type == CHANNEL_TYPE_CODEX
+        && let Some(account_id) = channel_codex_runtime_account_id(channel)
+    {
+        insert_default_header(&mut header_override, "chatgpt-account-id", &account_id);
+    }
+    let proxy = channel_setting_proxy(channel);
+    let proxy_required =
+        channel.proxy_id.is_some() || proxy.is_some() || channel_setting_requires_proxy(channel);
     Ok(Some(ChannelConfig {
         id: channel_snapshot_id(channel),
+        management_id: Some(channel.id),
         provider,
         base_url: channel
             .base_url
             .clone()
             .filter(|url| !url.is_empty())
-            .unwrap_or_else(|| default_base_url(channel.channel_type).to_string()),
+            .unwrap_or_else(|| channel_default_base_url(channel).to_string()),
         api_key,
         api_keys,
         api_key_indexes,
@@ -1899,8 +2390,9 @@ fn channel_config(channel: &ChannelRecord) -> Result<Option<ChannelConfig>, Mana
         weight: channel.weight.unwrap_or(1),
         models: channel.model_list(),
         groups: channel.group_list(),
-        proxy: channel_setting_proxy(channel),
-        header_override: parse_channel_header_override(channel.header_override.as_deref()),
+        proxy,
+        proxy_required,
+        header_override,
         upstream_endpoint_type: channel_upstream_endpoint_type(channel),
     }))
 }
@@ -1944,23 +2436,49 @@ fn is_header_passthrough_rule_key(key: &str) -> bool {
     lower.starts_with("re:") || lower.starts_with("regex:")
 }
 
+fn insert_default_header(
+    headers: &mut std::collections::BTreeMap<String, String>,
+    name: &str,
+    value: &str,
+) {
+    if headers
+        .keys()
+        .any(|existing| existing.eq_ignore_ascii_case(name))
+    {
+        return;
+    }
+    headers.insert(name.to_string(), value.to_string());
+}
 
 /// Channel setting key aligned with new-api force path selection for OpenAI text APIs.
-/// Values: auto | openai | openai-response | openai-response-compact
+/// Values: auto | openai | openai-response | openai-response-compact | xai-response | codex
 fn channel_upstream_endpoint_type(channel: &ChannelRecord) -> String {
     let raw = channel.setting.as_deref().unwrap_or("").trim();
     if raw.is_empty() {
-        return String::new();
+        return codex_default_endpoint_type(channel);
     }
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return String::new();
+        return codex_default_endpoint_type(channel);
     };
     v.get("upstream_endpoint_type")
         .and_then(|x| x.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty() && *s != "auto")
-        .unwrap_or("")
-        .to_string()
+        .map(str::to_string)
+        .unwrap_or_else(|| codex_default_endpoint_type(channel))
+}
+
+fn codex_default_endpoint_type(channel: &ChannelRecord) -> String {
+    if channel_has_codex_runtime_credential(channel) {
+        "codex".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn channel_has_codex_runtime_credential(channel: &ChannelRecord) -> bool {
+    channel.channel_type == CHANNEL_TYPE_CODEX
+        && parse_codex_oauth_runtime_credential(channel.key.trim()).is_some()
 }
 
 fn channel_setting_proxy(channel: &ChannelRecord) -> Option<String> {
@@ -1976,42 +2494,69 @@ fn channel_setting_proxy(channel: &ChannelRecord) -> Option<String> {
         .map(str::to_string)
 }
 
+fn channel_setting_requires_proxy(channel: &ChannelRecord) -> bool {
+    let raw = channel.setting.as_deref().unwrap_or("").trim();
+    if raw.is_empty() {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("proxy_required")
+                .and_then(|value| value.as_bool())
+        })
+        .unwrap_or(false)
+}
+
 fn channel_model_mappings(channel: &ChannelRecord) -> Result<Vec<ModelMapping>, ManagementError> {
     let models = channel.model_list();
+    let channel_id = channel_snapshot_id(channel);
+    let mut mappings = models
+        .into_iter()
+        .map(|model| {
+            (model.clone(), ModelMapping {
+                requested_model: model.clone(),
+                channel_id:      channel_id.clone(),
+                upstream_model:  model,
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
     let Some(mapping) = channel
         .model_mapping
         .as_deref()
         .map(str::trim)
         .filter(|mapping| !mapping.is_empty())
     else {
-        return Ok(models
-            .into_iter()
-            .map(|model| ModelMapping {
-                requested_model: model.clone(),
-                channel_id:      channel_snapshot_id(channel),
-                upstream_model:  model,
-            })
-            .collect());
+        return Ok(mappings.into_values().collect());
     };
 
-    let parsed: HashMap<String, String> =
+    let parsed: BTreeMap<String, String> =
         serde_json::from_str(mapping).map_err(|err| ManagementError::InvalidModelMapping {
             channel_id: channel.id,
             message:    err.to_string(),
         })?;
-    Ok(parsed
-        .into_iter()
-        .map(|(requested_model, upstream_model)| ModelMapping {
+    for (requested_model, upstream_model) in parsed {
+        let requested_model = requested_model.trim().to_string();
+        let upstream_model = upstream_model.trim().to_string();
+        if requested_model.is_empty() || upstream_model.is_empty() {
+            return Err(ManagementError::InvalidModelMapping {
+                channel_id: channel.id,
+                message:    "model names must not be empty".to_string(),
+            });
+        }
+        mappings.insert(requested_model.clone(), ModelMapping {
             requested_model,
-            channel_id: channel_snapshot_id(channel),
+            channel_id: channel_id.clone(),
             upstream_model,
-        })
-        .collect())
+        });
+    }
+    Ok(mappings.into_values().collect())
 }
 
 fn apply_channel_tag_patch(channel: &mut ChannelRecord, patch: &ChannelTagPatch) {
     if let Some(status) = patch.status {
-        channel.status = status;
+        apply_channel_status_update(channel, status, "manual tag operation");
     }
     if let Some(new_tag) = &patch.new_tag {
         channel.tag = (!new_tag.trim().is_empty()).then(|| new_tag.trim().to_string());
@@ -2120,6 +2665,23 @@ fn snapshot_channel_key(channel: &ChannelConfig) -> String {
 
 fn channel_runtime_api_keys(channel: &ChannelRecord) -> Vec<(usize, String)> {
     let status = multi_key_status_list(channel.setting.as_deref());
+    let key = channel.key.trim();
+    let codex_json_document = channel.channel_type == CHANNEL_TYPE_CODEX
+        && (key.starts_with('{') || key.starts_with('['));
+    if channel.channel_type == CHANNEL_TYPE_CODEX
+        && let Some(credential) = parse_codex_oauth_runtime_credential(key)
+    {
+        if status
+            .get(&0)
+            .is_some_and(|status| *status != STATUS_ENABLED)
+        {
+            return Vec::new();
+        }
+        return credential
+            .access_token
+            .map(|access_token| vec![(0, access_token)])
+            .unwrap_or_default();
+    }
     channel
         .key
         .lines()
@@ -2135,9 +2697,110 @@ fn channel_runtime_api_keys(channel: &ChannelRecord) -> Vec<(usize, String)> {
             {
                 return None;
             }
+            if channel.channel_type == CHANNEL_TYPE_CODEX {
+                if let Some(credential) = parse_codex_oauth_runtime_credential(key) {
+                    return credential
+                        .access_token
+                        .map(|access_token| (idx, access_token));
+                }
+                if codex_json_document {
+                    return None;
+                }
+            }
             Some((idx, key.to_string()))
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct CodexOAuthRuntimeCredential {
+    access_token: Option<String>,
+    account_id:   Option<String>,
+}
+
+fn channel_codex_runtime_account_id(channel: &ChannelRecord) -> Option<String> {
+    if channel.channel_type != CHANNEL_TYPE_CODEX {
+        return None;
+    }
+    let status = multi_key_status_list(channel.setting.as_deref());
+    if let Some(credential) = parse_codex_oauth_runtime_credential(channel.key.trim()) {
+        if status
+            .get(&0)
+            .is_some_and(|status| *status != STATUS_ENABLED)
+        {
+            return None;
+        }
+        return credential.account_id;
+    }
+    channel.key.lines().enumerate().find_map(|(idx, key)| {
+        if status
+            .get(&idx)
+            .is_some_and(|status| *status != STATUS_ENABLED)
+        {
+            return None;
+        }
+        parse_codex_oauth_runtime_credential(key)?.account_id
+    })
+}
+
+fn parse_codex_oauth_runtime_credential(raw: &str) -> Option<CodexOAuthRuntimeCredential> {
+    let value = serde_json::from_str::<JsonValue>(raw).ok()?;
+    let object = value.as_object()?;
+    let tokens = object.get("tokens").and_then(JsonValue::as_object);
+    let account = object.get("account").and_then(JsonValue::as_object);
+    let access_token = tokens
+        .and_then(|tokens| json_string_field(tokens, &["access_token", "accessToken"]))
+        .or_else(|| json_string_field(object, &["access_token", "accessToken"]));
+    let refresh_token = tokens
+        .and_then(|tokens| json_string_field(tokens, &["refresh_token", "refreshToken"]))
+        .or_else(|| json_string_field(object, &["refresh_token", "refreshToken"]));
+    let id_token = tokens
+        .and_then(|tokens| json_string_field(tokens, &["id_token", "idToken"]))
+        .or_else(|| json_string_field(object, &["id_token", "idToken"]));
+    let account_id = json_string_field(object, &[
+        "chatgpt_account_id",
+        "chatgptAccountId",
+        "account_id",
+        "accountId",
+    ])
+    .or_else(|| {
+        account.and_then(|account| {
+            json_string_field(account, &[
+                "chatgpt_account_id",
+                "account_id",
+                "accountId",
+                "id",
+            ])
+        })
+    });
+    let is_codex_type =
+        json_string_field(object, &["type"]).is_some_and(|kind| kind.eq_ignore_ascii_case("codex"));
+    if access_token.is_none()
+        && refresh_token.is_none()
+        && id_token.is_none()
+        && account_id.is_none()
+        && !is_codex_type
+    {
+        return None;
+    }
+    Some(CodexOAuthRuntimeCredential {
+        access_token,
+        account_id,
+    })
+}
+
+fn json_string_field(
+    object: &serde_json::Map<String, JsonValue>,
+    names: &[&str],
+) -> Option<String> {
+    names.iter().find_map(|name| {
+        object
+            .get(*name)
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
 }
 
 fn multi_key_status_list(setting: Option<&str>) -> HashMap<usize, i32> {
@@ -2203,6 +2866,14 @@ fn channel_type_from_provider(provider: Provider) -> i32 {
     }
 }
 
+fn channel_default_base_url(channel: &ChannelRecord) -> &'static str {
+    if channel_has_codex_runtime_credential(channel) {
+        "https://chatgpt.com/backend-api/codex"
+    } else {
+        default_base_url(channel.channel_type)
+    }
+}
+
 fn default_base_url(channel_type: i32) -> &'static str {
     match channel_type {
         CHANNEL_TYPE_OLLAMA => "http://localhost:11434",
@@ -2227,7 +2898,8 @@ fn default_base_url(channel_type: i32) -> &'static str {
         CHANNEL_TYPE_VOLC_ENGINE => "https://ark.cn-beijing.volces.com",
         CHANNEL_TYPE_XAI => "https://api.x.ai",
         CHANNEL_TYPE_SUBMODEL => "https://llm.submodel.ai",
-        CHANNEL_TYPE_SORA | CHANNEL_TYPE_CODEX => "https://api.openai.com",
+        CHANNEL_TYPE_SORA => "https://api.openai.com",
+        CHANNEL_TYPE_CODEX => "https://api.openai.com",
         _ => "https://api.openai.com",
     }
 }
@@ -2353,18 +3025,18 @@ fn channel_matches_list_filters(
     keyword: Option<&str>,
     model: Option<&str>,
 ) -> bool {
-    if let Some(group) = group {
-        if !channel_belongs_to_group(channel, group) {
-            return false;
-        }
+    if let Some(group) = group
+        && !channel_belongs_to_group(channel, group)
+    {
+        return false;
     }
     if !channel_matches_status_filter(channel, status) {
         return false;
     }
-    if let Some(channel_type) = channel_type {
-        if channel.channel_type != channel_type {
-            return false;
-        }
+    if let Some(channel_type) = channel_type
+        && channel.channel_type != channel_type
+    {
+        return false;
     }
     if let Some(keyword) = keyword {
         let keyword = keyword.trim();
@@ -2404,6 +3076,18 @@ fn page<T>(items: Vec<T>, page: PageRequest) -> PageResult<T> {
 
 fn next_id(ids: impl Iterator<Item = u64>) -> u64 {
     ids.max().unwrap_or(0).saturating_add(1)
+}
+
+fn next_channel_id(channels: &[ChannelRecord]) -> u64 {
+    let mut candidate = next_id(channels.iter().map(|channel| channel.id));
+    while candidate > 0
+        && channels
+            .iter()
+            .any(|channel| channel_snapshot_id(channel) == candidate.to_string())
+    {
+        candidate = candidate.saturating_add(1);
+    }
+    candidate
 }
 
 fn usage_event_quota(
@@ -2570,7 +3254,13 @@ fn token_matches_usage_event(token: &TokenRecord, event_token_id: &str) -> bool 
 }
 
 fn channel_matches_usage_event(channel: &ChannelRecord, event_channel_id: &str) -> bool {
-    entity_id_matches(event_channel_id, channel.id, channel.snapshot_id.as_deref())
+    match parse_usage_entity_id(event_channel_id) {
+        Some(id) => channel.id == id,
+        None => channel
+            .snapshot_id
+            .as_deref()
+            .is_some_and(|snapshot_id| snapshot_id == event_channel_id),
+    }
 }
 
 fn entity_id_matches(event_id: &str, numeric_id: u64, snapshot_id: Option<&str>) -> bool {
@@ -2671,19 +3361,21 @@ mod tests {
                     allowed_ips:    Vec::new(),
                 }],
                 channels:         vec![ChannelConfig {
-                    id:              "openai-main".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://example.com".to_string(),
-                    api_key:         "upstream".to_string(),
-                    api_keys:        vec!["upstream".to_string()],
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          Vec::new(),
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "openai-main".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://example.com".to_string(),
+                    api_key:                "upstream".to_string(),
+                    api_keys:               vec!["upstream".to_string()],
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 Vec::new(),
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 }],
                 model_mappings:   vec![ModelMapping {
@@ -2867,19 +3559,21 @@ mod tests {
                     allowed_ips:    Vec::new(),
                 }],
                 channels:         vec![ChannelConfig {
-                    id:              "openai-main".to_string(),
-                    provider:        Provider::OpenAi,
-                    base_url:        "https://example.com".to_string(),
-                    api_key:         "upstream".to_string(),
-                    api_keys:        vec!["upstream".to_string()],
-                    api_key_indexes: Vec::new(),
-                    api_key_env:     None,
-                    enabled:         true,
-                    weight:          1,
-                    models:          vec!["gpt-4o".to_string()],
-                    groups:          Vec::new(),
-                    proxy:           None,
-                    header_override: Default::default(),
+                    id:                     "openai-main".to_string(),
+                    management_id:          None,
+                    provider:               Provider::OpenAi,
+                    base_url:               "https://example.com".to_string(),
+                    api_key:                "upstream".to_string(),
+                    api_keys:               vec!["upstream".to_string()],
+                    api_key_indexes:        Vec::new(),
+                    api_key_env:            None,
+                    enabled:                true,
+                    weight:                 1,
+                    models:                 vec!["gpt-4o".to_string()],
+                    groups:                 Vec::new(),
+                    proxy:                  None,
+                    proxy_required:         false,
+                    header_override:        Default::default(),
                     upstream_endpoint_type: String::new(),
                 }],
                 model_mappings:   vec![ModelMapping {
@@ -3160,20 +3854,22 @@ mod tests {
             version:          9,
             tokens:           Vec::new(),
             channels:         vec![ChannelConfig {
-                id:              "1".to_string(),
-                provider:        Provider::OpenAi,
-                base_url:        "https://example.com".to_string(),
-                api_key:         "key".to_string(),
-                api_keys:        vec!["key".to_string(), "key-b".to_string()],
-                api_key_indexes: Vec::new(),
-                api_key_env:     None,
-                enabled:         true,
-                weight:          1,
-                models:          vec!["upstream".to_string()],
-                groups:          Vec::new(),
-                proxy:           None,
-                header_override: Default::default(),
-            upstream_endpoint_type: String::new(),
+                id:                     "1".to_string(),
+                management_id:          None,
+                provider:               Provider::OpenAi,
+                base_url:               "https://example.com".to_string(),
+                api_key:                "key".to_string(),
+                api_keys:               vec!["key".to_string(), "key-b".to_string()],
+                api_key_indexes:        Vec::new(),
+                api_key_env:            None,
+                enabled:                true,
+                weight:                 1,
+                models:                 vec!["upstream".to_string()],
+                groups:                 Vec::new(),
+                proxy:                  None,
+                proxy_required:         false,
+                header_override:        Default::default(),
+                upstream_endpoint_type: String::new(),
             }],
             model_mappings:   vec![ModelMapping {
                 requested_model: "requested".to_string(),
@@ -3193,6 +3889,43 @@ mod tests {
     }
 
     #[test]
+    fn preserves_unavailable_proxy_requirement_across_management_roundtrip() {
+        let original = GatewaySnapshot {
+            version:          9,
+            tokens:           Vec::new(),
+            channels:         vec![ChannelConfig {
+                id:                     "proxy-required".to_string(),
+                management_id:          None,
+                provider:               Provider::OpenAi,
+                base_url:               "https://example.com".to_string(),
+                api_key:                "key".to_string(),
+                api_keys:               vec!["key".to_string()],
+                api_key_indexes:        Vec::new(),
+                api_key_env:            None,
+                enabled:                true,
+                weight:                 1,
+                models:                 vec!["upstream".to_string()],
+                groups:                 Vec::new(),
+                proxy:                  None,
+                proxy_required:         true,
+                header_override:        Default::default(),
+                upstream_endpoint_type: String::new(),
+            }],
+            model_mappings:   Vec::new(),
+            channel_affinity: Default::default(),
+            group_routing:    Default::default(),
+        };
+
+        let rebuilt = ManagementData::from_snapshot(original)
+            .build_snapshot()
+            .expect("snapshot should rebuild");
+
+        assert!(rebuilt.channels[0].enabled);
+        assert!(rebuilt.channels[0].proxy_required);
+        assert!(rebuilt.channels[0].proxy.is_none());
+    }
+
+    #[test]
     fn preserves_non_numeric_snapshot_ids() {
         let original = GatewaySnapshot {
             version:          9,
@@ -3208,20 +3941,22 @@ mod tests {
                 allowed_ips:    Vec::new(),
             }],
             channels:         vec![ChannelConfig {
-                id:              "openai-main".to_string(),
-                provider:        Provider::OpenAi,
-                base_url:        "https://example.com".to_string(),
-                api_key:         "key".to_string(),
-                api_keys:        vec!["key".to_string(), "key-b".to_string()],
-                api_key_indexes: Vec::new(),
-                api_key_env:     None,
-                enabled:         true,
-                weight:          1,
-                models:          vec!["deepseek-v4-pro".to_string()],
-                groups:          Vec::new(),
-                proxy:           None,
-                header_override: Default::default(),
-            upstream_endpoint_type: String::new(),
+                id:                     "openai-main".to_string(),
+                management_id:          None,
+                provider:               Provider::OpenAi,
+                base_url:               "https://example.com".to_string(),
+                api_key:                "key".to_string(),
+                api_keys:               vec!["key".to_string(), "key-b".to_string()],
+                api_key_indexes:        Vec::new(),
+                api_key_env:            None,
+                enabled:                true,
+                weight:                 1,
+                models:                 vec!["deepseek-v4-pro".to_string()],
+                groups:                 Vec::new(),
+                proxy:                  None,
+                proxy_required:         false,
+                header_override:        Default::default(),
+                upstream_endpoint_type: String::new(),
             }],
             model_mappings:   vec![ModelMapping {
                 requested_model: "deepseek-v4-pro".to_string(),
@@ -3457,6 +4192,391 @@ mod tests {
         }
     }
 
+    fn sample_codex_channel(key: &str) -> ChannelRecord {
+        let mut channel = sample_channel(57, "codex", "default");
+        channel.channel_type = CHANNEL_TYPE_CODEX;
+        channel.key = key.to_string();
+        channel.base_url = None;
+        channel.models = "gpt-5".to_string();
+        channel
+    }
+
+    fn snapshot_channel_config(id: &str, management_id: Option<u64>) -> ChannelConfig {
+        ChannelConfig {
+            id: id.to_string(),
+            management_id,
+            provider: Provider::OpenAi,
+            base_url: "https://example.com".to_string(),
+            api_key: format!("key-{id}"),
+            api_keys: Vec::new(),
+            api_key_indexes: Vec::new(),
+            api_key_env: None,
+            enabled: true,
+            weight: 1,
+            models: vec!["gpt-4".to_string()],
+            groups: vec!["default".to_string()],
+            proxy: None,
+            proxy_required: false,
+            header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
+        }
+    }
+
+    #[test]
+    fn snapshot_import_allocates_unique_positive_management_and_route_ids() {
+        let snapshot = GatewaySnapshot {
+            version:          1,
+            tokens:           Vec::new(),
+            channels:         vec![
+                snapshot_channel_config("foo", None),
+                snapshot_channel_config("1", None),
+                snapshot_channel_config("0", None),
+                snapshot_channel_config("foo", None),
+                snapshot_channel_config("explicit", Some(42)),
+            ],
+            model_mappings:   Vec::new(),
+            channel_affinity: Default::default(),
+            group_routing:    Default::default(),
+        };
+
+        let data = ManagementData::from_snapshot(snapshot);
+        let management_ids = data
+            .channels
+            .iter()
+            .map(|channel| channel.id)
+            .collect::<HashSet<_>>();
+        assert_eq!(management_ids.len(), data.channels.len());
+        assert!(management_ids.iter().all(|id| *id > 0));
+        assert_eq!(data.channels[1].id, 1);
+        assert_eq!(data.channels[4].id, 42);
+
+        let rebuilt = data.build_snapshot().expect("snapshot should build");
+        let route_ids = rebuilt
+            .channels
+            .iter()
+            .map(|channel| channel.id.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(route_ids.len(), rebuilt.channels.len());
+        assert!(rebuilt.channels.iter().all(|channel| {
+            channel
+                .management_id
+                .is_some_and(|id| management_ids.contains(&id))
+        }));
+    }
+
+    #[test]
+    fn build_snapshot_preserves_every_channel_for_the_same_model() {
+        let data = ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            vec![
+                sample_channel(1, "first", "default"),
+                sample_channel(2, "second", "default"),
+            ],
+            Vec::new(),
+        );
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+        let mappings = snapshot
+            .model_mappings
+            .iter()
+            .filter(|mapping| mapping.requested_model == "gpt-4")
+            .collect::<Vec<_>>();
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(
+            mappings
+                .iter()
+                .map(|mapping| mapping.channel_id.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["1", "2"])
+        );
+    }
+
+    #[test]
+    fn partial_model_mapping_keeps_unmapped_models_as_identity() {
+        let mut channel = sample_channel(1, "partial", "default");
+        channel.models = "gpt-4,gpt-3.5".to_string();
+        channel.model_mapping = Some(r#"{"gpt-4":"upstream-gpt-4"}"#.to_string());
+        let snapshot = ManagementData::new(1, Vec::new(), Vec::new(), vec![channel], Vec::new())
+            .build_snapshot()
+            .expect("snapshot should build");
+        let mappings = snapshot
+            .model_mappings
+            .iter()
+            .map(|mapping| {
+                (
+                    mapping.requested_model.as_str(),
+                    mapping.upstream_model.as_str(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(mappings.get("gpt-4"), Some(&"upstream-gpt-4"));
+        assert_eq!(mappings.get("gpt-3.5"), Some(&"gpt-3.5"));
+    }
+
+    #[test]
+    fn malformed_mapping_fails_only_its_channel_closed() {
+        let healthy = sample_channel(1, "healthy", "default");
+        let mut malformed = sample_channel(2, "malformed", "default");
+        malformed.model_mapping = Some("{".to_string());
+        let snapshot = ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            vec![healthy, malformed],
+            Vec::new(),
+        )
+        .build_snapshot()
+        .expect("healthy channels should still publish");
+
+        assert_eq!(snapshot.channels.len(), 1);
+        assert_eq!(snapshot.channels[0].management_id, Some(1));
+        assert!(
+            snapshot
+                .model_mappings
+                .iter()
+                .all(|mapping| mapping.channel_id == "1")
+        );
+    }
+
+    #[test]
+    fn create_rejects_invalid_mapping_and_duplicate_route_identity() {
+        block_on(async {
+            let mut existing = sample_channel(1, "existing", "default");
+            existing.snapshot_id = Some("legacy-route".to_string());
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![existing],
+                Vec::new(),
+            ));
+
+            let mut malformed = sample_channel(0, "malformed", "default");
+            malformed.model_mapping = Some("{".to_string());
+            assert!(matches!(
+                store
+                    .call(CreateChannelRequest { channel: malformed })
+                    .await,
+                Err(ManagementError::InvalidModelMapping { .. })
+            ));
+
+            let mut duplicate = sample_channel(2, "duplicate", "default");
+            duplicate.snapshot_id = Some("legacy-route".to_string());
+            assert!(matches!(
+                store
+                    .call(CreateChannelRequest { channel: duplicate })
+                    .await,
+                Err(ManagementError::Duplicate)
+            ));
+            let data = store.current_data().expect("data");
+            assert_eq!(data.channels.len(), 1);
+            assert_eq!(data.version, 1);
+        });
+    }
+
+    #[test]
+    fn batch_status_and_delete_are_atomic_and_manual_status_is_validated() {
+        block_on(async {
+            let store = MemoryManagementStore::new(ManagementData::new(
+                7,
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    sample_channel(1, "first", "default"),
+                    sample_channel(2, "second", "default"),
+                ],
+                Vec::new(),
+            ));
+
+            assert!(matches!(
+                store
+                    .call(BatchUpdateChannelStatusRequest {
+                        ids:    vec![1, 99],
+                        status: STATUS_MANUALLY_DISABLED,
+                    })
+                    .await,
+                Err(ManagementError::NotFound)
+            ));
+            let unchanged = store.current_data().expect("data");
+            assert_eq!(unchanged.version, 7);
+            assert!(
+                unchanged
+                    .channels
+                    .iter()
+                    .all(|channel| channel.status == STATUS_ENABLED)
+            );
+
+            assert!(matches!(
+                store
+                    .call(BatchUpdateChannelStatusRequest {
+                        ids:    vec![1],
+                        status: STATUS_AUTO_DISABLED,
+                    })
+                    .await,
+                Err(ManagementError::InvalidRequest(_))
+            ));
+            let updated = store
+                .call(BatchUpdateChannelStatusRequest {
+                    ids:    vec![1, 1, 2],
+                    status: STATUS_MANUALLY_DISABLED,
+                })
+                .await
+                .expect("batch status");
+            assert_eq!(updated, 2);
+            let unchanged = store
+                .call(BatchUpdateChannelStatusRequest {
+                    ids:    vec![1, 2],
+                    status: STATUS_MANUALLY_DISABLED,
+                })
+                .await
+                .expect("no-op batch status");
+            assert_eq!(unchanged, 0);
+
+            assert!(matches!(
+                store
+                    .call(DeleteChannelsBatchRequest { ids: vec![1, 99] })
+                    .await,
+                Err(ManagementError::NotFound)
+            ));
+            assert_eq!(store.current_data().expect("data").channels.len(), 2);
+            let deleted = store
+                .call(DeleteChannelsBatchRequest { ids: vec![1, 2, 2] })
+                .await
+                .expect("batch delete");
+            assert_eq!(deleted, 2);
+            assert!(store.current_data().expect("data").channels.is_empty());
+        });
+    }
+
+    #[test]
+    fn field_scoped_network_writes_preserve_concurrent_channel_state() {
+        block_on(async {
+            let mut channel = sample_channel(1, "scoped", "default");
+            channel.status = STATUS_MANUALLY_DISABLED;
+            channel.proxy_id = Some(7);
+            channel.setting = Some(
+                r#"{"proxy":"http://proxy.example","status_reason":"manual","refresh_token":"old"}"#
+                    .to_string(),
+            );
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![channel],
+                Vec::new(),
+            ));
+
+            store
+                .call(PatchChannelProbeMetricsRequest {
+                    id:            1,
+                    test_time:     123,
+                    response_time: 45,
+                })
+                .await
+                .expect("probe patch");
+            store
+                .call(RotateChannelCredentialRequest {
+                    id:            1,
+                    expected_key:  "key-1".to_string(),
+                    new_key:       "rotated".to_string(),
+                    setting_patch: Some(r#"{"refresh_token":"new"}"#.to_string()),
+                })
+                .await
+                .expect("credential rotation");
+            assert!(matches!(
+                store
+                    .call(PatchChannelBalanceRequest {
+                        id:                    1,
+                        expected_key:          "key-1".to_string(),
+                        balance:               0.0,
+                        balance_updated_time:  456,
+                        auto_disable_if_empty: true,
+                    })
+                    .await,
+                Err(ManagementError::StaleChannelUpdate(1))
+            ));
+
+            let stored = &store.current_data().expect("data").channels[0];
+            assert_eq!(stored.status, STATUS_MANUALLY_DISABLED);
+            assert_eq!(stored.proxy_id, Some(7));
+            assert_eq!(stored.test_time, 123);
+            assert_eq!(stored.response_time, 45);
+            assert_eq!(stored.key, "rotated");
+            assert_eq!(stored.balance_updated_time, 0);
+            let setting: JsonValue =
+                serde_json::from_str(stored.setting.as_deref().expect("setting")).expect("json");
+            assert_eq!(
+                setting.get("proxy").and_then(JsonValue::as_str),
+                Some("http://proxy.example")
+            );
+            assert_eq!(
+                setting.get("status_reason").and_then(JsonValue::as_str),
+                Some("manual")
+            );
+            assert_eq!(
+                setting.get("refresh_token").and_then(JsonValue::as_str),
+                Some("new")
+            );
+        });
+    }
+
+    #[test]
+    fn stale_or_out_of_range_feedback_never_disables_current_credentials() {
+        block_on(async {
+            let mut channel = sample_channel(1, "multi", "default");
+            channel.key = "new-a\nnew-b".to_string();
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![channel],
+                Vec::new(),
+            ));
+
+            let stale = store
+                .call(AutoDisableChannelRequest {
+                    id:                  1,
+                    reason:              "401".to_string(),
+                    api_key_index:       Some(0),
+                    api_key_fingerprint: Some(credential_fingerprint("old-a")),
+                    created_at_unix_ms:  1,
+                })
+                .await
+                .expect("stale feedback");
+            assert_eq!(stale, AutoDisableChannelResult::default());
+            let out_of_range = store
+                .call(AutoDisableChannelRequest {
+                    id:                  1,
+                    reason:              "401".to_string(),
+                    api_key_index:       Some(9),
+                    api_key_fingerprint: None,
+                    created_at_unix_ms:  1,
+                })
+                .await
+                .expect("out of range feedback");
+            assert_eq!(out_of_range, AutoDisableChannelResult::default());
+            assert_eq!(
+                store.current_data().expect("data").channels[0].status,
+                STATUS_ENABLED
+            );
+        });
+    }
+
+    #[test]
+    fn numeric_usage_identity_never_falls_through_to_snapshot_alias() {
+        let mut first = sample_channel(1, "first", "default");
+        first.snapshot_id = Some("route-a".to_string());
+        let mut second = sample_channel(2, "second", "default");
+        second.snapshot_id = Some("1".to_string());
+
+        assert!(channel_matches_usage_event(&first, "1"));
+        assert!(!channel_matches_usage_event(&second, "1"));
+        assert!(channel_matches_usage_event(&second, "2"));
+        assert!(channel_matches_usage_event(&first, "route-a"));
+    }
+
     #[test]
     fn auto_disable_mutates_only_the_requested_channel() {
         block_on(async {
@@ -3473,10 +4593,11 @@ mod tests {
 
             let result = store
                 .call(AutoDisableChannelRequest {
-                    id:                 1,
-                    reason:             "upstream status 401".to_string(),
-                    api_key_index:      None,
-                    created_at_unix_ms: 1_700_000_000_000,
+                    id:                  1,
+                    reason:              "upstream status 401".to_string(),
+                    api_key_index:       None,
+                    api_key_fingerprint: None,
+                    created_at_unix_ms:  1_700_000_000_000,
                 })
                 .await
                 .expect("auto-disable should succeed");
@@ -3652,5 +4773,250 @@ mod tests {
                 .map(String::as_str),
             Some("forced-ua")
         );
+    }
+
+    #[test]
+    fn build_snapshot_normalizes_codex_oauth_runtime_config() {
+        let oauth_key = r#"{
+            "type": "codex",
+            "access_token": "access-token",
+            "refresh_token": "refresh-token-must-not-leak",
+            "account_id": "account-123"
+        }"#;
+        let data = ManagementData::new(
+            5,
+            Vec::new(),
+            Vec::new(),
+            vec![sample_codex_channel(oauth_key)],
+            Vec::new(),
+        );
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+        let codex = &snapshot.channels[0];
+
+        assert_eq!(codex.api_key, "access-token");
+        assert_eq!(codex.api_keys, ["access-token"]);
+        assert_eq!(codex.api_key_indexes, [0]);
+        assert_eq!(codex.base_url, "https://chatgpt.com/backend-api/codex");
+        assert_eq!(codex.upstream_endpoint_type, "codex");
+        assert_eq!(
+            codex
+                .header_override
+                .get("chatgpt-account-id")
+                .map(String::as_str),
+            Some("account-123")
+        );
+        assert!(!codex.header_override.contains_key("Originator"));
+        assert!(!codex.header_override.contains_key("User-Agent"));
+        let published = serde_json::to_string(&snapshot).expect("snapshot should serialize");
+        assert!(!published.contains("refresh-token-must-not-leak"));
+    }
+
+    #[test]
+    fn build_snapshot_keeps_explicit_codex_identity_headers() {
+        let mut channel = sample_codex_channel(r#"{"type":"codex","access_token":"access-token"}"#);
+        channel.header_override =
+            Some(r#"{"originator":"codex-tui","user-agent":"codex-tui/1.0"}"#.to_string());
+        let data = ManagementData::new(5, Vec::new(), Vec::new(), vec![channel], Vec::new());
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+        let headers = &snapshot.channels[0].header_override;
+
+        assert_eq!(
+            headers.get("originator").map(String::as_str),
+            Some("codex-tui")
+        );
+        assert_eq!(
+            headers.get("user-agent").map(String::as_str),
+            Some("codex-tui/1.0")
+        );
+        assert_eq!(headers.len(), 2);
+    }
+
+    #[test]
+    fn build_snapshot_never_publishes_refresh_only_codex_json() {
+        let secret = "refresh-token-must-stay-in-control-plane";
+        let oauth_key = format!(r#"{{"type":"codex","refresh_token":"{secret}"}}"#);
+        let data = ManagementData::new(
+            5,
+            Vec::new(),
+            Vec::new(),
+            vec![sample_codex_channel(&oauth_key)],
+            Vec::new(),
+        );
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+
+        assert!(snapshot.channels[0].api_key.is_empty());
+        assert!(snapshot.channels[0].api_keys.is_empty());
+        let published = serde_json::to_string(&snapshot).expect("snapshot should serialize");
+        assert!(!published.contains(secret));
+    }
+
+    #[test]
+    fn build_snapshot_preserves_plain_codex_multi_keys() {
+        let data = ManagementData::new(
+            6,
+            Vec::new(),
+            Vec::new(),
+            vec![sample_codex_channel("plain-key-a\nplain-key-b")],
+            Vec::new(),
+        );
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+        let codex = &snapshot.channels[0];
+
+        assert_eq!(codex.api_key, "plain-key-a");
+        assert_eq!(codex.api_keys, ["plain-key-a", "plain-key-b"]);
+        assert_eq!(codex.api_key_indexes, [0, 1]);
+        assert_eq!(codex.base_url, "https://api.openai.com");
+        assert!(codex.upstream_endpoint_type.is_empty());
+        assert!(!codex.header_override.contains_key("chatgpt-account-id"));
+    }
+
+    #[test]
+    fn build_snapshot_keeps_plain_codex_api_key_openai_compatible() {
+        let data = ManagementData::new(
+            6,
+            Vec::new(),
+            Vec::new(),
+            vec![sample_codex_channel("plain-api-key")],
+            Vec::new(),
+        );
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+        let codex = &snapshot.channels[0];
+
+        assert_eq!(codex.api_key, "plain-api-key");
+        assert_eq!(codex.base_url, "https://api.openai.com");
+        assert!(codex.upstream_endpoint_type.is_empty());
+        assert!(codex.header_override.is_empty());
+    }
+
+    #[test]
+    fn masked_channel_update_preserves_nested_json_secrets() {
+        block_on(async {
+            let mut channel = sample_channel(11, "secret-channel", "default");
+            channel.setting = Some(
+                r#"{"credentials":[{"refresh_token":"refresh-secret","access_token":"access-secret"}],"proxy":"socks5h://user:proxy-secret@127.0.0.1:1080","import_source":"codex"}"#.to_string(),
+            );
+            channel.param_override =
+                Some(r#"{"auth":{"id_token":"id-secret"},"temperature":0.5}"#.to_string());
+            channel.header_override = Some(
+                r#"{"Authorization":"Bearer header-secret","User-Agent":"codex_cli_rs"}"#
+                    .to_string(),
+            );
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![channel],
+                Vec::new(),
+            ));
+
+            let mut masked = store
+                .call(GetChannelRequest { id: 11 })
+                .await
+                .expect("channel should load masked");
+            masked.name = "renamed-channel".to_string();
+            store
+                .call(UpdateChannelRequest { channel: masked })
+                .await
+                .expect("masked channel should update");
+
+            let stored = store
+                .current_data()
+                .expect("data should be readable")
+                .channels
+                .into_iter()
+                .find(|channel| channel.id == 11)
+                .expect("stored channel");
+            let setting: JsonValue =
+                serde_json::from_str(stored.setting.as_deref().expect("stored setting"))
+                    .expect("setting should remain JSON");
+            let param_override: JsonValue = serde_json::from_str(
+                stored
+                    .param_override
+                    .as_deref()
+                    .expect("stored param override"),
+            )
+            .expect("param override should remain JSON");
+            let header_override: JsonValue = serde_json::from_str(
+                stored
+                    .header_override
+                    .as_deref()
+                    .expect("stored header override"),
+            )
+            .expect("header override should remain JSON");
+
+            assert_eq!(stored.name, "renamed-channel");
+            assert_eq!(setting["credentials"][0]["refresh_token"], "refresh-secret");
+            assert_eq!(setting["credentials"][0]["access_token"], "access-secret");
+            assert_eq!(
+                setting["proxy"],
+                "socks5h://user:proxy-secret@127.0.0.1:1080"
+            );
+            assert_eq!(param_override["auth"]["id_token"], "id-secret");
+            assert_eq!(header_override["Authorization"], "Bearer header-secret");
+        });
+    }
+
+    #[test]
+    fn merge_channel_json_preserves_malformed_existing_when_incoming_is_empty() {
+        let malformed = "  {malformed-secret  ";
+        assert_eq!(
+            merge_channel_json(Some(malformed), None).as_deref(),
+            Some(malformed)
+        );
+        assert_eq!(
+            merge_channel_json(Some(malformed), Some("  ")).as_deref(),
+            Some(malformed)
+        );
+        assert_eq!(
+            merge_channel_json(Some(malformed), Some(r#"{"replacement":true}"#)).as_deref(),
+            Some(r#"{"replacement":true}"#)
+        );
+    }
+
+    #[test]
+    fn masked_channel_update_roundtrips_malformed_json_without_exposing_or_losing_it() {
+        block_on(async {
+            let mut channel = sample_channel(12, "malformed-secret-channel", "default");
+            channel.setting = Some("{setting-secret".to_string());
+            channel.param_override = Some("[param-secret".to_string());
+            channel.header_override = Some("{header-secret".to_string());
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                Vec::new(),
+                Vec::new(),
+                vec![channel],
+                Vec::new(),
+            ));
+
+            let mut masked = store
+                .call(GetChannelRequest { id: 12 })
+                .await
+                .expect("channel should load masked");
+            assert!(masked.setting.is_none());
+            assert!(masked.param_override.is_none());
+            assert!(masked.header_override.is_none());
+            masked.name = "renamed-malformed-channel".to_string();
+            store
+                .call(UpdateChannelRequest { channel: masked })
+                .await
+                .expect("masked channel should update");
+
+            let stored = store
+                .current_data()
+                .expect("data should be readable")
+                .channels
+                .into_iter()
+                .next()
+                .expect("stored channel");
+            assert_eq!(stored.name, "renamed-malformed-channel");
+            assert_eq!(stored.setting.as_deref(), Some("{setting-secret"));
+            assert_eq!(stored.param_override.as_deref(), Some("[param-secret"));
+            assert_eq!(stored.header_override.as_deref(), Some("{header-secret"));
+        });
     }
 }

@@ -29,6 +29,8 @@ pub(crate) struct CodexOAuthKey {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) client_id:     Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) account_id:    Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_refresh:  Option<String>,
@@ -122,6 +124,16 @@ pub(crate) struct ParsedCodexAuth {
 pub(crate) fn collect_entries(
     req: &CodexAuthImportRequest,
 ) -> Result<Vec<ParsedCodexAuth>, ManagementError> {
+    collect_entry_results(req)?.into_iter().collect()
+}
+
+/// Parse the request envelope once, but keep semantic normalization failures
+/// scoped to their individual entries. The auth import coordinator uses this
+/// form so a malformed account in a JSON array/NDJSON stream cannot discard
+/// valid accounts before or after it.
+pub(crate) fn collect_entry_results(
+    req: &CodexAuthImportRequest,
+) -> Result<Vec<Result<ParsedCodexAuth, ManagementError>>, ManagementError> {
     let mut blobs = Vec::new();
     if !req.content.trim().is_empty() {
         blobs.push(req.content.as_str());
@@ -138,7 +150,7 @@ pub(crate) fn collect_entries(
     }
     let mut out = Vec::new();
     for blob in blobs {
-        out.extend(normalize_codex_auth_blob(blob)?);
+        out.extend(normalize_codex_auth_blob_results(blob)?);
     }
     if out.is_empty() {
         return Err(ManagementError::InvalidRequest(
@@ -151,10 +163,18 @@ pub(crate) fn collect_entries(
 pub(crate) fn normalize_codex_auth_blob(
     content: &str,
 ) -> Result<Vec<ParsedCodexAuth>, ManagementError> {
+    normalize_codex_auth_blob_results(content)?
+        .into_iter()
+        .collect()
+}
+
+fn normalize_codex_auth_blob_results(
+    content: &str,
+) -> Result<Vec<Result<ParsedCodexAuth, ManagementError>>, ManagementError> {
     let entries = parse_import_content(content)?;
     let mut out = Vec::with_capacity(entries.len());
     for (idx, value) in entries.into_iter().enumerate() {
-        out.push(normalize_entry(idx + 1, value)?);
+        out.push(normalize_entry(idx + 1, value));
     }
     Ok(out)
 }
@@ -191,6 +211,43 @@ pub(crate) fn codex_key_to_json(key: &CodexOAuthKey) -> Result<String, Managemen
     serde_json::to_string(key).map_err(|err| ManagementError::Storage(err.to_string()))
 }
 
+/// Merge an imported key onto the durable key already stored for a channel.
+///
+/// Some CLI/session exports intentionally contain only a fresh access token.
+/// Treating those as a full replacement would silently delete the refresh
+/// token and OAuth client identity required for the next refresh. Non-empty
+/// incoming fields are authoritative; absent/blank fields inherit the stored
+/// value.
+pub(crate) fn merge_codex_oauth_key(
+    existing_raw: &str,
+    mut incoming: CodexOAuthKey,
+) -> CodexOAuthKey {
+    let existing = serde_json::from_str::<CodexOAuthKey>(existing_raw)
+        .ok()
+        .or_else(|| parse_flexible_codex_key(existing_raw).ok());
+    let Some(existing) = existing else {
+        return incoming;
+    };
+
+    incoming.id_token = prefer_non_empty(incoming.id_token, existing.id_token);
+    incoming.access_token = prefer_non_empty(incoming.access_token, existing.access_token);
+    incoming.refresh_token = prefer_non_empty(incoming.refresh_token, existing.refresh_token);
+    incoming.client_id = prefer_non_empty(incoming.client_id, existing.client_id);
+    incoming.account_id = prefer_non_empty(incoming.account_id, existing.account_id);
+    incoming.last_refresh = prefer_non_empty(incoming.last_refresh, existing.last_refresh);
+    incoming.email = prefer_non_empty(incoming.email, existing.email);
+    incoming.key_type = prefer_non_empty(incoming.key_type, existing.key_type)
+        .or_else(|| Some("codex".to_string()));
+    incoming.expired = prefer_non_empty(incoming.expired, existing.expired);
+    incoming
+}
+
+fn prefer_non_empty(incoming: Option<String>, existing: Option<String>) -> Option<String> {
+    incoming
+        .and_then(non_empty)
+        .or_else(|| existing.and_then(non_empty))
+}
+
 pub(crate) fn identity_keys_for_channel_key(raw_key: &str) -> Vec<String> {
     match parse_flexible_codex_key(raw_key) {
         Ok(key) => build_stored_identity_keys(
@@ -207,18 +264,53 @@ pub(crate) fn find_existing_channel_id(
     channels: &[halolake_domain::ChannelRecord],
     item: &ParsedCodexAuth,
 ) -> Option<u64> {
+    let mut best: Option<(u8, u64)> = None;
+    let mut ambiguous = false;
     for channel in channels {
         if channel.channel_type != CHANNEL_TYPE_CODEX {
             continue;
         }
         let keys = identity_keys_for_channel_key(&channel.key);
-        for key in &item.identity_keys {
-            if keys.iter().any(|existing| existing == key) {
-                return Some(channel.id);
+        let score = item
+            .identity_keys
+            .iter()
+            .filter(|key| keys.iter().any(|existing| existing == *key))
+            .map(|key| identity_match_score(key))
+            .max()
+            .unwrap_or_default();
+        if score == 0 {
+            continue;
+        }
+        match best {
+            None => {
+                best = Some((score, channel.id));
+                ambiguous = false;
             }
+            Some((best_score, _)) if score > best_score => {
+                best = Some((score, channel.id));
+                ambiguous = false;
+            }
+            Some((best_score, _)) if score == best_score => ambiguous = true,
+            Some(_) => {}
         }
     }
-    None
+    if ambiguous {
+        None
+    } else {
+        best.map(|(_, id)| id)
+    }
+}
+
+fn identity_match_score(key: &str) -> u8 {
+    if key.starts_with("access:") {
+        4
+    } else if key.starts_with("account:") || key.starts_with("user:") {
+        3
+    } else if key.starts_with("email:") {
+        1
+    } else {
+        0
+    }
 }
 
 fn parse_import_content(content: &str) -> Result<Vec<JsonValue>, ManagementError> {
@@ -311,7 +403,9 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
     let mut name_hint = String::new();
     let access_token;
     let mut refresh_token = String::new();
+    let mut client_id = String::new();
     let mut id_token = String::new();
+    let mut last_refresh = String::new();
     let mut token_expires_at_unix: Option<i64> = None;
 
     match value {
@@ -332,11 +426,23 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
                 &["refresh_token"],
                 &["refreshToken"],
             ]);
+            client_id = first_string(&map, &[
+                &["tokens", "client_id"],
+                &["tokens", "clientId"],
+                &["client_id"],
+                &["clientId"],
+            ]);
             id_token = first_string(&map, &[
                 &["tokens", "id_token"],
                 &["tokens", "idToken"],
                 &["id_token"],
                 &["idToken"],
+            ]);
+            last_refresh = first_string(&map, &[
+                &["tokens", "last_refresh"],
+                &["tokens", "lastRefresh"],
+                &["last_refresh"],
+                &["lastRefresh"],
             ]);
             email = first_string(&map, &[&["email"], &["user", "email"]]);
             account_id = first_string(&map, &[
@@ -377,6 +483,7 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
                 &["tokens", "expiresAt"],
                 &["expires_at"],
                 &["expiresAt"],
+                &["expired"],
             ]) {
                 if exp <= now - CLOCK_SKEW_SECS {
                     return Err(ManagementError::InvalidRequest(
@@ -446,8 +553,9 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
         id_token:      non_empty(id_token),
         access_token:  Some(access_token.clone()),
         refresh_token: non_empty(refresh_token.clone()),
+        client_id:     non_empty(client_id),
         account_id:    non_empty(account_id.clone()),
-        last_refresh:  None,
+        last_refresh:  non_empty(last_refresh),
         email:         non_empty(email.clone()),
         key_type:      Some("codex".to_string()),
         expired:       token_expires_at_unix.map(|ts| ts.to_string()),
@@ -618,6 +726,9 @@ pub(crate) fn build_identity_keys(
 ) -> Vec<String> {
     let access_token = access_token.trim();
     let refresh_token = refresh_token.trim();
+    // Access-only credentials are intentionally matched only by the exact
+    // token. Stable account claims are not enough to prove that a stale token
+    // should replace a refresh-capable credential for the same account.
     if refresh_token.is_empty() && !access_token.is_empty() {
         return vec![format!("access:{}", token_fingerprint(access_token))];
     }

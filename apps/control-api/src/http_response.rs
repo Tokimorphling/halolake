@@ -102,6 +102,7 @@ pub(crate) fn management_error(err: ManagementError) -> Response {
         | ManagementError::InvalidRequest(_)
         | ManagementError::PasswordHash(_)
         | ManagementError::InvalidModelMapping { .. } => StatusCode::BAD_REQUEST,
+        ManagementError::StaleChannelUpdate(_) => StatusCode::CONFLICT,
         ManagementError::PermissionDenied => StatusCode::FORBIDDEN,
         ManagementError::UnsupportedChannelType(_) => StatusCode::BAD_REQUEST,
         ManagementError::Poisoned(_)

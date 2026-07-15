@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const STATUS_ENABLED: i32 = 1;
+pub const STATUS_MANUALLY_DISABLED: i32 = 2;
 pub const STATUS_AUTO_DISABLED: i32 = 3;
 pub const ROLE_COMMON_USER: i32 = 1;
 pub const ROLE_ADMIN_USER: i32 = 10;
@@ -166,6 +167,9 @@ pub struct ChannelRecord {
 impl ChannelRecord {
     pub fn masked(mut self) -> Self {
         self.key.clear();
+        redact_json_option(&mut self.setting);
+        redact_json_option(&mut self.param_override);
+        redact_json_option(&mut self.header_override);
         self
     }
 
@@ -188,6 +192,85 @@ impl ChannelRecord {
             .map(str::to_string)
             .collect()
     }
+}
+
+fn redact_json_option(raw: &mut Option<String>) {
+    let Some(source) = raw.as_ref() else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(source) else {
+        // Malformed legacy JSON cannot be inspected safely. Hide the entire
+        // field from API responses; the control-plane update merge preserves
+        // the stored raw value when this masked field is omitted on round-trip.
+        *raw = None;
+        return;
+    };
+    if !redact_json_secrets(&mut value) {
+        return;
+    }
+    if let Ok(redacted) = serde_json::to_string(&value) {
+        *raw = Some(redacted);
+    }
+}
+
+fn redact_json_secrets(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut changed = false;
+            for (key, value) in object {
+                if is_sensitive_json_key(key) {
+                    *value = serde_json::Value::String(String::new());
+                    changed = true;
+                } else {
+                    changed |= redact_json_secrets(value);
+                }
+            }
+            changed
+        }
+        serde_json::Value::Array(values) => {
+            let mut changed = false;
+            for value in values {
+                changed |= redact_json_secrets(value);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+fn is_sensitive_json_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    let compact: String = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect();
+
+    matches!(
+        compact.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "apikey"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+            | "password"
+            | "secret"
+            | "clientsecret"
+            | "privatekey"
+            | "secretkey"
+            | "proxy"
+            | "proxyurl"
+            | "cookie"
+            | "setcookie"
+    ) || key.ends_with("_token")
+        || key.ends_with("-token")
+        || key.ends_with("_password")
+        || key.ends_with("-password")
+        || key.ends_with("_secret")
+        || key.ends_with("-secret")
+        || key.ends_with("_api_key")
+        || key.ends_with("-api-key")
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -333,11 +416,108 @@ fn default_page_size() -> usize {
 mod tests {
     use super::*;
 
+    fn channel_with_json_fields(
+        setting: &str,
+        param_override: &str,
+        header_override: &str,
+    ) -> ChannelRecord {
+        serde_json::from_value(serde_json::json!({
+            "key": "top-level-api-key",
+            "setting": setting,
+            "param_override": param_override,
+            "header_override": header_override,
+        }))
+        .expect("channel fixture should deserialize")
+    }
+
     #[test]
     fn masks_token_keys_like_new_api() {
         assert_eq!(mask_token_key(""), "");
         assert_eq!(mask_token_key("abc"), "***");
         assert_eq!(mask_token_key("abcdef"), "ab****ef");
         assert_eq!(mask_token_key("abcdefghijkl"), "abcd**********ijkl");
+    }
+
+    #[test]
+    fn masks_nested_channel_secrets_without_mutating_stored_record() {
+        let stored = channel_with_json_fields(
+            r#"{
+                "auth_kind":"oauth",
+                "refresh_token":"xai-refresh-secret",
+                "proxy":"socks5h://proxy-user:proxy-secret@127.0.0.1:1080",
+                "base_url":"https://api.x.ai",
+                "credentials":[{"access_token":"access-secret","id_token":"id-secret"}]
+            }"#,
+            r#"{
+                "temperature":0.25,
+                "max_tokens":1024,
+                "nested":{"api_key":"api-secret","token":"token-secret","password":"password-secret","secret":"secret-secret"}
+            }"#,
+            r#"{"User-Agent":"halolake","Authorization":"Bearer header-secret","X-Api-Key":"header-api-secret"}"#,
+        );
+        let original = stored.clone();
+
+        let masked = stored.clone().masked();
+
+        assert!(masked.key.is_empty());
+        let setting: serde_json::Value = serde_json::from_str(
+            masked
+                .setting
+                .as_deref()
+                .expect("masked setting should remain"),
+        )
+        .expect("masked setting should be JSON");
+        assert_eq!(setting["refresh_token"], "");
+        assert_eq!(setting["proxy"], "");
+        assert_eq!(setting["credentials"][0]["access_token"], "");
+        assert_eq!(setting["credentials"][0]["id_token"], "");
+        assert_eq!(setting["auth_kind"], "oauth");
+        assert_eq!(setting["base_url"], "https://api.x.ai");
+
+        let param_override: serde_json::Value = serde_json::from_str(
+            masked
+                .param_override
+                .as_deref()
+                .expect("masked param_override should remain"),
+        )
+        .expect("masked param_override should be JSON");
+        assert_eq!(param_override["nested"]["api_key"], "");
+        assert_eq!(param_override["nested"]["token"], "");
+        assert_eq!(param_override["nested"]["password"], "");
+        assert_eq!(param_override["nested"]["secret"], "");
+        assert_eq!(param_override["temperature"], 0.25);
+        assert_eq!(param_override["max_tokens"], 1024);
+
+        let header_override: serde_json::Value = serde_json::from_str(
+            masked
+                .header_override
+                .as_deref()
+                .expect("masked header_override should remain"),
+        )
+        .expect("masked header_override should be JSON");
+        assert_eq!(header_override["Authorization"], "");
+        assert_eq!(header_override["X-Api-Key"], "");
+        assert_eq!(header_override["User-Agent"], "halolake");
+
+        assert_eq!(stored, original);
+        assert!(
+            stored
+                .setting
+                .as_deref()
+                .expect("stored setting should remain")
+                .contains("xai-refresh-secret")
+        );
+    }
+
+    #[test]
+    fn hides_malformed_json_fields_when_masking() {
+        let malformed = r#"{"refresh_token":"legacy-token"#;
+        let channel = channel_with_json_fields(malformed, "not-json", "{broken");
+
+        let masked = channel.masked();
+
+        assert!(masked.setting.is_none());
+        assert!(masked.param_override.is_none());
+        assert!(masked.header_override.is_none());
     }
 }

@@ -1,7 +1,11 @@
-use crate::storage::{ManagementStore, OptionStore};
+use crate::{
+    channel_special::ChannelSpecialService,
+    proxy::ProxyStore,
+    storage::{ManagementStore, OptionStore},
+};
 use halolake_control_plane::{
     AutoDisableChannelRequest, ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError,
-    ChannelFeedbackEvent, ChannelFeedbackReason, auto_disable_channel_in_place,
+    ChannelFeedbackEvent, ChannelFeedbackReason,
 };
 use service_async::Service;
 use std::collections::BTreeMap;
@@ -11,19 +15,31 @@ use tracing::warn;
 pub(crate) struct ChannelFeedbackService {
     management: ManagementStore,
     options:    OptionStore,
+    special:    ChannelSpecialService,
 }
 
 impl ChannelFeedbackService {
-    pub(crate) fn new(management: ManagementStore, options: OptionStore) -> Self {
+    pub(crate) fn new(
+        management: ManagementStore,
+        options: OptionStore,
+        proxies: ProxyStore,
+    ) -> Self {
         Self {
+            special: ChannelSpecialService::new(management.clone(), proxies),
             management,
             options,
         }
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ChannelFeedbackOutcome {
+    pub(crate) ack:                   ChannelFeedbackAck,
+    pub(crate) refreshed_credentials: usize,
+}
+
 impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
-    type Response = ChannelFeedbackAck;
+    type Response = ChannelFeedbackOutcome;
     type Error = ChannelFeedbackError;
 
     async fn call(&self, req: ChannelFeedbackBatch) -> Result<Self::Response, Self::Error> {
@@ -34,13 +50,13 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
             disabled_channels: 0,
             disabled_keys:     0,
         };
-
-        if !policy.enabled {
-            return Ok(ack);
-        }
+        let mut refresh_results = BTreeMap::<u64, bool>::new();
+        let mut refreshed_credentials = 0usize;
 
         for event in req.events {
-            if !policy.should_disable(&event) {
+            let should_refresh = should_attempt_oauth_refresh(&event);
+            let should_disable = policy.enabled && policy.should_disable(&event);
+            if !should_refresh && !should_disable {
                 continue;
             }
             // Gateway always sends ChannelConfig.id = numeric channel.id as string.
@@ -50,19 +66,50 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
                 warn!(
                     feedback_id = %event.channel_id,
                     status_code = ?event.status_code,
-                    reason = %event.message,
-                    "skip auto-disable: non-numeric channel_id"
+                    "skip channel feedback: non-numeric channel_id"
                 );
                 continue;
             };
+            if should_refresh {
+                let refreshed = if let Some(refreshed) = refresh_results.get(&numeric_id) {
+                    *refreshed
+                } else {
+                    let refreshed = match self
+                        .special
+                        .refresh_imported_oauth_channel(numeric_id)
+                        .await
+                    {
+                        Ok(refreshed) => refreshed,
+                        Err(_) => {
+                            warn!(
+                                channel_id = numeric_id,
+                                "failed to refresh imported OAuth channel"
+                            );
+                            false
+                        }
+                    };
+                    refresh_results.insert(numeric_id, refreshed);
+                    if refreshed {
+                        refreshed_credentials = refreshed_credentials.saturating_add(1);
+                    }
+                    refreshed
+                };
+                if refreshed {
+                    continue;
+                }
+            }
+            if !should_disable {
+                continue;
+            }
             let reason = feedback_reason(&event);
             let result = match self
                 .management
                 .call(AutoDisableChannelRequest {
-                    id:                 numeric_id,
-                    reason:             reason.clone(),
-                    api_key_index:      event.api_key_index,
-                    created_at_unix_ms: event.created_at_unix_ms,
+                    id:                  numeric_id,
+                    reason:              reason.clone(),
+                    api_key_index:       event.api_key_index,
+                    api_key_fingerprint: event.api_key_fingerprint.clone(),
+                    created_at_unix_ms:  event.created_at_unix_ms,
                 })
                 .await
             {
@@ -98,7 +145,6 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
                 group = %group,
                 feedback_id = %event.channel_id,
                 status_code = ?event.status_code,
-                reason = %event.message,
                 "auto-disabling channel from gateway feedback"
             );
             ack.disabled_channels = ack
@@ -109,8 +155,15 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
                 .saturating_add(usize::from(result.key_disabled));
         }
 
-        Ok(ack)
+        Ok(ChannelFeedbackOutcome {
+            ack,
+            refreshed_credentials,
+        })
     }
+}
+
+fn should_attempt_oauth_refresh(event: &ChannelFeedbackEvent) -> bool {
+    matches!(event.status_code, Some(401 | 403))
 }
 
 fn parse_numeric_channel_id(channel_id: &str) -> Option<u64> {
@@ -309,6 +362,7 @@ fn feedback_storage(err: impl std::fmt::Display) -> ChannelFeedbackError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use halolake_control_plane::{ManagementData, auto_disable_channel_in_place};
     use halolake_domain::{ChannelRecord, STATUS_AUTO_DISABLED, STATUS_ENABLED};
 
     #[test]
@@ -386,13 +440,14 @@ mod tests {
             keywords:      vec!["invalid_api_key".into()],
         };
         let transport = ChannelFeedbackEvent {
-            request_id:         "req".into(),
-            channel_id:         "1".into(),
-            api_key_index:      None,
-            status_code:        None,
-            reason:             ChannelFeedbackReason::Transport,
-            message:            "connection reset by peer".into(),
-            created_at_unix_ms: 0,
+            request_id:          "req".into(),
+            channel_id:          "1".into(),
+            api_key_index:       None,
+            api_key_fingerprint: None,
+            status_code:         None,
+            reason:              ChannelFeedbackReason::Transport,
+            message:             "connection reset by peer".into(),
+            created_at_unix_ms:  0,
         };
         assert!(
             !policy.should_disable(&transport),
@@ -416,17 +471,122 @@ mod tests {
         assert!(policy.should_disable(&keyword));
 
         let grok_cli = ChannelFeedbackEvent {
-            request_id:         "req".into(),
-            channel_id:         "1".into(),
-            api_key_index:      None,
-            status_code:        Some(400),
-            reason:             ChannelFeedbackReason::UpstreamStatus,
-            message:            "Your Grok CLI version (none) is outdated".into(),
-            created_at_unix_ms: 0,
+            request_id:          "req".into(),
+            channel_id:          "1".into(),
+            api_key_index:       None,
+            api_key_fingerprint: None,
+            status_code:         Some(400),
+            reason:              ChannelFeedbackReason::UpstreamStatus,
+            message:             "Your Grok CLI version (none) is outdated".into(),
+            created_at_unix_ms:  0,
         };
         assert!(
             !policy.should_disable(&grok_cli),
             "xAI client identity errors must not auto-ban"
         );
+    }
+
+    #[test]
+    fn oauth_refresh_only_runs_for_authentication_statuses() {
+        let mut event = ChannelFeedbackEvent {
+            request_id:          "req".into(),
+            channel_id:          "1".into(),
+            api_key_index:       None,
+            api_key_fingerprint: None,
+            status_code:         Some(401),
+            reason:              ChannelFeedbackReason::UpstreamStatus,
+            message:             String::new(),
+            created_at_unix_ms:  0,
+        };
+        assert!(should_attempt_oauth_refresh(&event));
+        event.status_code = Some(403);
+        assert!(should_attempt_oauth_refresh(&event));
+        event.status_code = Some(400);
+        assert!(!should_attempt_oauth_refresh(&event));
+        event.status_code = None;
+        assert!(!should_attempt_oauth_refresh(&event));
+    }
+
+    #[tokio::test]
+    async fn rejected_untrusted_oauth_endpoint_allows_auto_disable() {
+        let mut channel = feedback_channel();
+        channel.setting = Some(
+            r#"{"auth_kind":"oauth","refresh_token":"refresh-old","token_endpoint":"https://evil.example/oauth/token"}"#
+                .to_string(),
+        );
+        let management = ManagementStore::memory(ManagementData::new(
+            1,
+            Vec::new(),
+            Vec::new(),
+            vec![channel],
+            Vec::new(),
+        ));
+        let options = OptionStore::memory(BTreeMap::from([
+            ("AutomaticDisableChannelEnabled".into(), "true".into()),
+            ("AutomaticDisableStatusCodes".into(), "401".into()),
+        ]));
+        let service =
+            ChannelFeedbackService::new(management.clone(), options, ProxyStore::memory());
+        let outcome = service
+            .call(ChannelFeedbackBatch::new(vec![ChannelFeedbackEvent {
+                request_id:          "req".into(),
+                channel_id:          "48".into(),
+                api_key_index:       None,
+                api_key_fingerprint: None,
+                status_code:         Some(401),
+                reason:              ChannelFeedbackReason::UpstreamStatus,
+                message:             "unauthorized".into(),
+                created_at_unix_ms:  1_700_000_000_000,
+            }]))
+            .await
+            .expect("feedback succeeds");
+
+        assert_eq!(outcome.refreshed_credentials, 0);
+        assert_eq!(outcome.ack.disabled_channels, 1);
+        let stored = management
+            .current_data()
+            .expect("management data")
+            .channels
+            .into_iter()
+            .next()
+            .expect("stored channel");
+        assert_eq!(stored.status, STATUS_AUTO_DISABLED);
+        assert_eq!(stored.key, "access-old");
+        assert!(
+            stored
+                .setting
+                .as_deref()
+                .is_some_and(|setting| !setting.contains("last_refresh"))
+        );
+    }
+
+    fn feedback_channel() -> ChannelRecord {
+        ChannelRecord {
+            id:                   48,
+            snapshot_id:          Some("xai-oauth".to_string()),
+            channel_type:         48,
+            key:                  "access-old".to_string(),
+            status:               STATUS_ENABLED,
+            name:                 "xai-oauth".to_string(),
+            weight:               Some(1),
+            created_time:         0,
+            test_time:            0,
+            response_time:        0,
+            base_url:             None,
+            balance:              0.0,
+            balance_updated_time: 0,
+            models:               "grok-4".to_string(),
+            group:                "default".to_string(),
+            used_quota:           0,
+            model_mapping:        None,
+            priority:             Some(0),
+            auto_ban:             Some(1),
+            tag:                  None,
+            setting:              None,
+            param_override:       None,
+            header_override:      None,
+            remark:               None,
+            proxy_id:             None,
+        }
     }
 }

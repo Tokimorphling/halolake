@@ -266,7 +266,11 @@ pub(crate) async fn get_syncable_channels(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = RatioSyncService::new(state.management.clone(), state.options.clone());
+    let service = RatioSyncService::new(
+        state.management.clone(),
+        state.options.clone(),
+        state.proxies.clone(),
+    );
     match service.call(ListSyncableChannelsRequest).await {
         Ok(channels) => api_success(channels),
         Err(err) => management_error(err),
@@ -283,7 +287,11 @@ pub(crate) async fn fetch_upstream_ratios(
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    let service = RatioSyncService::new(state.management.clone(), state.options.clone());
+    let service = RatioSyncService::new(
+        state.management.clone(),
+        state.options.clone(),
+        state.proxies.clone(),
+    );
     match service.call(payload).await {
         Ok(data) => api_success(data),
         Err(ManagementError::InvalidRequest(message)) => api_error_status(StatusCode::OK, message),

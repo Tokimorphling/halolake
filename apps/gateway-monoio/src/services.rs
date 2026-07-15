@@ -1,8 +1,12 @@
 use super::*;
-use crate::gateway::{
-    ClaudeVersion, ConnectTimeout, GatewayAuthPolicy, GeminiApiVersion, PassAnthropicBeta,
-    SnapshotStore, UpstreamReadTimeout,
+use crate::{
+    gateway::{
+        ClaudeVersion, ConnectTimeout, GatewayAuthPolicy, GeminiApiVersion, PassAnthropicBeta,
+        SnapshotStore, UpstreamReadTimeout,
+    },
+    upstream_proxy::ProxyTransportService,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub(crate) struct ChatGatewayService {
@@ -61,6 +65,7 @@ impl ChatGatewayService {
             + Param<PassAnthropicBeta>
             + Param<ConnectTimeout>
             + Param<UpstreamReadTimeout>
+            + Param<ProxyTransportService>
             + Param<UsageReporter>
             + Param<ChannelFeedbackReporter>,
     {
@@ -160,6 +165,7 @@ impl ImageGatewayService {
             + Param<PassAnthropicBeta>
             + Param<ConnectTimeout>
             + Param<UpstreamReadTimeout>
+            + Param<ProxyTransportService>
             + Param<UsageReporter>
             + Param<ChannelFeedbackReporter>,
     {
@@ -256,6 +262,7 @@ impl ClaudeMessagesGatewayService {
             + Param<PassAnthropicBeta>
             + Param<ConnectTimeout>
             + Param<UpstreamReadTimeout>
+            + Param<ProxyTransportService>
             + Param<UsageReporter>
             + Param<ChannelFeedbackReporter>,
     {
@@ -370,6 +377,7 @@ impl GeminiGatewayService {
             + Param<PassAnthropicBeta>
             + Param<ConnectTimeout>
             + Param<UpstreamReadTimeout>
+            + Param<ProxyTransportService>
             + Param<UsageReporter>
             + Param<ChannelFeedbackReporter>,
     {
@@ -467,6 +475,7 @@ impl RawOpenAiGatewayService {
             + Param<PassAnthropicBeta>
             + Param<ConnectTimeout>
             + Param<UpstreamReadTimeout>
+            + Param<ProxyTransportService>
             + Param<UsageReporter>
             + Param<ChannelFeedbackReporter>,
     {
@@ -642,6 +651,7 @@ impl Service<RouteLookup> for AuthRouteService {
             );
         }
         let (api_key, api_key_index) = route.channel.select_api_key_with_index(key_seed);
+        let api_key_fingerprint = selected_api_key_fingerprint(api_key);
         Ok(RouteParts {
             auth:     RequestAuth {
                 user_id:  route.user_id.to_string(),
@@ -649,14 +659,19 @@ impl Service<RouteLookup> for AuthRouteService {
             },
             route:    RouteContext {
                 channel_id: route.channel.id.clone(),
+                management_channel_id: route.channel.management_id,
                 provider: route.channel.provider,
                 base_url: route.channel.base_url.clone(),
                 api_key: api_key.to_string(),
+                api_key_fingerprint,
                 api_key_index,
                 using_group: route.using_group.to_string(),
                 requested_model: route.requested_model.to_string(),
                 upstream_model: route.upstream_model.to_string(),
-                proxy: route.channel.proxy.clone(),
+                proxy: ProxyRoute::from_snapshot(
+                    route.channel.proxy.clone(),
+                    route.channel.proxy_required,
+                ),
                 header_override: route.channel.header_override.clone(),
                 upstream_endpoint_type: route.channel.upstream_endpoint_type.clone(),
             },
@@ -700,6 +715,13 @@ fn route_affinity_context(candidate: ChannelAffinityCandidate) -> RouteAffinityC
     }
 }
 
+fn selected_api_key_fingerprint(api_key: &str) -> String {
+    format!(
+        "sha256:{}",
+        data_encoding::HEXLOWER.encode(&Sha256::digest(api_key.as_bytes()))
+    )
+}
+
 #[derive(Debug, Clone)]
 struct UsageEventParts {
     request_id:          String,
@@ -707,6 +729,7 @@ struct UsageEventParts {
     token_id:            String,
     channel_id:          String,
     api_key_index:       Option<usize>,
+    api_key_fingerprint: String,
     using_group:         String,
     requested_model:     String,
     upstream_model:      String,
@@ -727,8 +750,9 @@ where
         request_id: request_id.0.clone(),
         user_id: auth.user_id.clone(),
         token_id: auth.token_id.clone(),
-        channel_id: route.channel_id.clone(),
+        channel_id: reporting_channel_id(route.management_channel_id, &route.channel_id),
         api_key_index: route.api_key_index,
+        api_key_fingerprint: route.api_key_fingerprint.clone(),
         using_group: route.using_group.clone(),
         requested_model: route.requested_model.clone(),
         upstream_model: route.upstream_model.clone(),
@@ -779,15 +803,23 @@ fn report_channel_feedback(
     let Some(meta) = resp.extensions().get::<ChannelFeedbackMeta>() else {
         return;
     };
-    reporter.report(ChannelFeedbackEvent {
-        request_id:         parts.request_id.clone(),
-        channel_id:         parts.channel_id.clone(),
-        api_key_index:      parts.api_key_index,
-        status_code:        meta.status_code,
-        reason:             meta.reason,
-        message:            truncate_feedback_message(&meta.message),
-        created_at_unix_ms: now_unix_ms_i64(),
-    });
+    reporter.report(channel_feedback_event(parts, meta));
+}
+
+fn channel_feedback_event(
+    parts: &UsageEventParts,
+    meta: &ChannelFeedbackMeta,
+) -> ChannelFeedbackEvent {
+    ChannelFeedbackEvent {
+        request_id:          parts.request_id.clone(),
+        channel_id:          parts.channel_id.clone(),
+        api_key_index:       parts.api_key_index,
+        api_key_fingerprint: Some(parts.api_key_fingerprint.clone()),
+        status_code:         meta.status_code,
+        reason:              meta.reason,
+        message:             truncate_feedback_message(&meta.message),
+        created_at_unix_ms:  now_unix_ms_i64(),
+    }
 }
 
 fn truncate_feedback_message(message: &str) -> String {
@@ -1127,5 +1159,42 @@ mod tests {
         headers.insert("x-openai-request-id", HeaderValue::from_static(" req_123 "));
 
         assert_eq!(upstream_request_id_from_headers(&headers), "req_123");
+    }
+
+    #[test]
+    fn selected_api_key_fingerprint_is_sha256_and_not_plaintext() {
+        let fingerprint = selected_api_key_fingerprint("secret");
+        assert_eq!(
+            fingerprint,
+            "sha256:2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b"
+        );
+        assert!(!fingerprint.contains("secret"));
+    }
+
+    #[test]
+    fn feedback_event_uses_management_id_and_selected_key_fingerprint() {
+        let parts = UsageEventParts {
+            request_id:          "req-1".to_string(),
+            user_id:             "user-1".to_string(),
+            token_id:            "token-1".to_string(),
+            channel_id:          reporting_channel_id(Some(42), "route-alias"),
+            api_key_index:       Some(3),
+            api_key_fingerprint: selected_api_key_fingerprint("secret"),
+            using_group:         "default".to_string(),
+            requested_model:     "model-a".to_string(),
+            upstream_model:      "model-a".to_string(),
+            is_stream:           false,
+            ip:                  "127.0.0.1".to_string(),
+            upstream_request_id: String::new(),
+        };
+        let event =
+            channel_feedback_event(&parts, &ChannelFeedbackMeta::transport("connection failed"));
+
+        assert_eq!(event.channel_id, "42");
+        assert_eq!(event.api_key_index, Some(3));
+        assert_eq!(
+            event.api_key_fingerprint.as_deref(),
+            Some("sha256:2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b")
+        );
     }
 }

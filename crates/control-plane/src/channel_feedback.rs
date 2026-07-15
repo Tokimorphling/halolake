@@ -24,16 +24,21 @@ impl ChannelFeedbackBatch {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ChannelFeedbackEvent {
-    pub request_id:         String,
-    pub channel_id:         String,
+    pub request_id:          String,
+    pub channel_id:          String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_index:      Option<usize>,
+    pub api_key_index:       Option<usize>,
+    /// SHA-256 fingerprint of the credential selected by the reporting
+    /// snapshot. The control plane uses it as a compare-and-set guard so stale
+    /// feedback cannot disable a credential that has since been rotated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_code:        Option<u16>,
-    pub reason:             ChannelFeedbackReason,
+    pub api_key_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code:         Option<u16>,
+    pub reason:              ChannelFeedbackReason,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub message:            String,
-    pub created_at_unix_ms: i64,
+    pub message:             String,
+    pub created_at_unix_ms:  i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

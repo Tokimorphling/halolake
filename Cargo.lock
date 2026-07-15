@@ -1407,6 +1407,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-async",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
 
@@ -1459,6 +1460,7 @@ dependencies = [
  "serde",
  "serde_json",
  "service-async",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
  "toml",

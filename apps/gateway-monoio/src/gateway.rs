@@ -1,4 +1,5 @@
 use super::*;
+use crate::upstream_proxy::{ProxyCircuitPolicy, ProxyTransportService};
 use halolake_control_plane::{SnapshotRequest, SnapshotResponse};
 use service_async::stack::FactoryStack;
 
@@ -21,6 +22,7 @@ pub(crate) struct AppParams {
     auth:                     AuthConfig,
     usage:                    UsageReporter,
     channel_feedback:         ChannelFeedbackReporter,
+    proxy_transport:          ProxyTransportService,
     request_body_limit_bytes: usize,
 }
 
@@ -442,6 +444,14 @@ impl AppParams {
         let auth = config.auth;
         let usage = UsageReporter::from_config(&config.control)?;
         let channel_feedback = ChannelFeedbackReporter::from_config(&config.control)?;
+        let proxy_transport = ProxyTransportService::new(
+            upstream.connect_timeout_ms.map(Duration::from_millis),
+            upstream.read_timeout_ms.map(Duration::from_millis),
+            ProxyCircuitPolicy::new(
+                upstream.proxy_failure_threshold,
+                Duration::from_millis(upstream.proxy_cooldown_ms),
+            ),
+        );
         let snapshot = config.into_snapshot();
         let snapshots = SnapshotStore::new(snapshot, affinity_cache)?;
 
@@ -452,6 +462,7 @@ impl AppParams {
             auth,
             usage,
             channel_feedback,
+            proxy_transport,
             request_body_limit_bytes,
         })
     }
@@ -496,6 +507,12 @@ impl Param<UsageReporter> for AppParams {
 impl Param<ChannelFeedbackReporter> for AppParams {
     fn param(&self) -> ChannelFeedbackReporter {
         self.channel_feedback.clone()
+    }
+}
+
+impl Param<ProxyTransportService> for AppParams {
+    fn param(&self) -> ProxyTransportService {
+        self.proxy_transport.clone()
     }
 }
 
