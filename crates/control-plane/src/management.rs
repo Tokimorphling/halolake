@@ -441,11 +441,61 @@ pub struct SettleUsageRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageSettlement {
+    /// Snapshot version produced by this mutation. `None` means the request
+    /// contained no events and did not mutate management state.
+    pub version:          Option<u64>,
     pub settled:          usize,
     pub skipped:          usize,
     pub quota:            i64,
     pub tokens_exhausted: usize,
     pub event_quotas:     Vec<UsageEventQuota>,
+    /// Compact post-mutation rows used by SQL backends. Carrying these values
+    /// avoids cloning and scanning the complete ManagementData after every
+    /// accounting batch.
+    pub users:            Vec<SettledUserState>,
+    pub tokens:           Vec<SettledTokenState>,
+    pub channels:         Vec<SettledChannelState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettledUserState {
+    pub id:         u64,
+    pub quota:      i64,
+    pub used_quota: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettledTokenState {
+    pub id:           u64,
+    pub accessed_at:  i64,
+    pub remain_quota: i64,
+    pub used_quota:   i64,
+    pub status:       i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettledChannelState {
+    pub id:         u64,
+    pub used_quota: i64,
+}
+
+/// Sparse usage mutation prepared against one management version. SQL stores
+/// persist `settlement` first, then apply the indexed post-state to memory.
+/// The plan owns only affected counters plus vector indexes; it never clones
+/// the complete management records.
+#[derive(Debug)]
+pub struct PlannedUsageSettlement {
+    settlement:      UsageSettlement,
+    base_version:    u64,
+    user_indices:    Vec<usize>,
+    token_indices:   Vec<usize>,
+    channel_indices: Vec<usize>,
+}
+
+impl PlannedUsageSettlement {
+    pub fn settlement(&self) -> &UsageSettlement {
+        &self.settlement
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -691,23 +741,157 @@ pub struct PublishManagementSnapshotRequest<P> {
     pub publisher: P,
 }
 
+#[derive(Debug)]
+struct ManagementIdentityIndexes {
+    users_by_id:          HashMap<u64, usize>,
+    tokens_by_id:         HashMap<u64, usize>,
+    tokens_by_snapshot:   HashMap<String, usize>,
+    channels_by_id:       HashMap<u64, usize>,
+    channels_by_snapshot: HashMap<String, usize>,
+}
+
+impl ManagementIdentityIndexes {
+    fn new(data: &ManagementData) -> Self {
+        Self {
+            users_by_id:          data
+                .users
+                .iter()
+                .enumerate()
+                .map(|(index, user)| (user.id, index))
+                .collect(),
+            tokens_by_id:         data
+                .tokens
+                .iter()
+                .enumerate()
+                .map(|(index, token)| (token.id, index))
+                .collect(),
+            tokens_by_snapshot:   data
+                .tokens
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| {
+                    token
+                        .snapshot_id
+                        .as_ref()
+                        .map(|snapshot_id| (snapshot_id.clone(), index))
+                })
+                .fold(HashMap::new(), |mut indexes, (snapshot_id, index)| {
+                    // Preserve the former Vec::position semantics if legacy
+                    // data contains duplicate aliases.
+                    indexes.entry(snapshot_id).or_insert(index);
+                    indexes
+                }),
+            channels_by_id:       data
+                .channels
+                .iter()
+                .enumerate()
+                .map(|(index, channel)| (channel.id, index))
+                .collect(),
+            channels_by_snapshot: data
+                .channels
+                .iter()
+                .enumerate()
+                .filter_map(|(index, channel)| {
+                    channel
+                        .snapshot_id
+                        .as_ref()
+                        .map(|snapshot_id| (snapshot_id.clone(), index))
+                })
+                .fold(HashMap::new(), |mut indexes, (snapshot_id, index)| {
+                    indexes.entry(snapshot_id).or_insert(index);
+                    indexes
+                }),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MemoryManagementState {
+    data:     ManagementData,
+    identity: ManagementIdentityIndexes,
+}
+
+impl MemoryManagementState {
+    fn new(data: ManagementData) -> Self {
+        let identity = ManagementIdentityIndexes::new(&data);
+        Self { data, identity }
+    }
+
+    fn rebuild_identity(&mut self) {
+        self.identity = ManagementIdentityIndexes::new(&self.data);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryManagementStore {
-    inner: Arc<RwLock<ManagementData>>,
+    inner: Arc<RwLock<MemoryManagementState>>,
 }
 
 impl MemoryManagementStore {
     pub fn new(data: ManagementData) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(data)),
+            inner: Arc::new(RwLock::new(MemoryManagementState::new(data))),
         }
     }
 
     pub fn current_data(&self) -> Result<ManagementData, ManagementError> {
         self.inner
             .read()
-            .map(|data| data.clone())
+            .map(|state| state.data.clone())
             .map_err(|_| ManagementError::Poisoned("management"))
+    }
+
+    /// Atomically replaces the published in-memory management snapshot.
+    /// SQL-backed stores use this only after the candidate state commits, so
+    /// failed persistence never becomes visible to readers or later writes.
+    pub fn replace_data(&self, data: ManagementData) -> Result<(), ManagementError> {
+        let replacement = MemoryManagementState::new(data);
+        *self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))? = replacement;
+        Ok(())
+    }
+
+    /// Consumes an isolated store and returns its owned snapshot without an
+    /// additional deep clone. SQL-backed stores use this for write candidates.
+    pub fn into_data(self) -> Result<ManagementData, ManagementError> {
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => inner
+                .into_inner()
+                .map(|state| state.data)
+                .map_err(|_| ManagementError::Poisoned("management")),
+            Err(inner) => inner
+                .read()
+                .map(|state| state.data.clone())
+                .map_err(|_| ManagementError::Poisoned("management")),
+        }
+    }
+
+    /// Plans a usage mutation while holding only a read lock. The returned
+    /// value contains compact post-state for affected entities and indexes into
+    /// the current vectors, but does not publish any mutation.
+    pub fn plan_usage_settlement(
+        &self,
+        req: SettleUsageRequest,
+    ) -> Result<PlannedUsageSettlement, ManagementError> {
+        let state = self
+            .inner
+            .read()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        Ok(plan_usage_settlement(&state.data, &state.identity, req))
+    }
+
+    /// Atomically publishes a previously persisted sparse usage plan.
+    pub fn apply_planned_usage_settlement(
+        &self,
+        plan: PlannedUsageSettlement,
+    ) -> Result<UsageSettlement, ManagementError> {
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        apply_usage_plan(&mut state.data, plan)
     }
 
     /// Advances the snapshot version without any other change. Options-derived
@@ -723,13 +907,16 @@ impl MemoryManagementStore {
     where
         F: FnOnce(&mut ManagementData) -> Result<T, ManagementError>,
     {
-        let mut data = self
+        let mut state = self
             .inner
             .write()
             .map_err(|_| ManagementError::Poisoned("management"))?;
-        let out = f(&mut data)?;
-        data.version = data.version.saturating_add(1);
-        Ok(out)
+        let out = f(&mut state.data);
+        if out.is_ok() {
+            state.data.version = state.data.version.saturating_add(1);
+        }
+        state.rebuild_identity();
+        out
     }
 }
 
@@ -1215,79 +1402,222 @@ impl Service<AdjustUserQuotaRequest> for MemoryManagementStore {
     }
 }
 
+fn plan_usage_settlement(
+    data: &ManagementData,
+    identity: &ManagementIdentityIndexes,
+    req: SettleUsageRequest,
+) -> PlannedUsageSettlement {
+    let base_version = data.version;
+    if req.events.is_empty() {
+        return PlannedUsageSettlement {
+            settlement: UsageSettlement::default(),
+            base_version,
+            user_indices: Vec::new(),
+            token_indices: Vec::new(),
+            channel_indices: Vec::new(),
+        };
+    }
+
+    let SettleUsageRequest { events, pricing } = req;
+    let now = now_unix();
+    let mut user_states = HashMap::<usize, SettledUserState>::new();
+    let mut token_states = HashMap::<usize, SettledTokenState>::new();
+    let mut channel_states = HashMap::<usize, SettledChannelState>::new();
+    let mut settlement = UsageSettlement::default();
+
+    for event in events {
+        let token_idx = parse_usage_entity_id(&event.token_id)
+            .and_then(|id| identity.tokens_by_id.get(&id).copied())
+            .or_else(|| {
+                identity
+                    .tokens_by_snapshot
+                    .get(event.token_id.as_str())
+                    .copied()
+            });
+        let user_id = token_idx
+            .map(|idx| data.tokens[idx].user_id)
+            .or_else(|| parse_usage_entity_id(&event.user_id));
+        let Some(user_idx) = user_id.and_then(|id| identity.users_by_id.get(&id).copied()) else {
+            settlement.skipped = settlement.skipped.saturating_add(1);
+            continue;
+        };
+        // Channel ids deliberately keep numeric-first semantics: a numeric id
+        // never falls through to a textual snapshot alias with the same bytes.
+        let channel_idx = match parse_usage_entity_id(&event.channel_id) {
+            Some(id) => identity.channels_by_id.get(&id).copied(),
+            None => identity
+                .channels_by_snapshot
+                .get(event.channel_id.as_str())
+                .copied(),
+        };
+
+        if let Some(index) = token_idx {
+            let token = &data.tokens[index];
+            token_states
+                .entry(index)
+                .or_insert(SettledTokenState {
+                    id:           token.id,
+                    accessed_at:  now,
+                    remain_quota: token.remain_quota,
+                    used_quota:   token.used_quota,
+                    status:       token.status,
+                })
+                .accessed_at = now;
+        }
+
+        let token = token_idx.and_then(|index| data.tokens.get(index));
+        let user = data.users.get(user_idx);
+        let channel = channel_idx.and_then(|index| data.channels.get(index));
+        let quota = usage_event_quota(&event, &pricing, token, user, channel);
+        if quota <= 0 {
+            settlement.skipped = settlement.skipped.saturating_add(1);
+            continue;
+        }
+
+        settlement.event_quotas.push(UsageEventQuota {
+            request_id: event.request_id.clone(),
+            quota,
+        });
+
+        let user = &data.users[user_idx];
+        let user_state = user_states.entry(user_idx).or_insert(SettledUserState {
+            id:         user.id,
+            quota:      user.quota,
+            used_quota: user.used_quota,
+        });
+        user_state.quota = user_state.quota.saturating_sub(quota);
+        user_state.used_quota = user_state.used_quota.saturating_add(quota);
+
+        if let Some(index) = token_idx {
+            let token = &data.tokens[index];
+            let token_state = token_states
+                .get_mut(&index)
+                .expect("token post-state initialized above");
+            token_state.remain_quota = token_state.remain_quota.saturating_sub(quota);
+            token_state.used_quota = token_state.used_quota.saturating_add(quota);
+            if !token.unlimited_quota
+                && token_state.remain_quota <= 0
+                && token_state.status != TOKEN_STATUS_EXHAUSTED
+            {
+                token_state.status = TOKEN_STATUS_EXHAUSTED;
+                settlement.tokens_exhausted = settlement.tokens_exhausted.saturating_add(1);
+            }
+        }
+
+        if let Some(index) = channel_idx {
+            let channel = &data.channels[index];
+            let channel_state = channel_states.entry(index).or_insert(SettledChannelState {
+                id:         channel.id,
+                used_quota: channel.used_quota,
+            });
+            channel_state.used_quota = channel_state.used_quota.saturating_add(quota);
+        }
+
+        settlement.settled = settlement.settled.saturating_add(1);
+        settlement.quota = settlement.quota.saturating_add(quota);
+    }
+
+    let mut users = user_states.into_iter().collect::<Vec<_>>();
+    let mut tokens = token_states.into_iter().collect::<Vec<_>>();
+    let mut channels = channel_states.into_iter().collect::<Vec<_>>();
+    users.sort_unstable_by_key(|(_, state)| state.id);
+    tokens.sort_unstable_by_key(|(_, state)| state.id);
+    channels.sort_unstable_by_key(|(_, state)| state.id);
+    let (user_indices, settled_users) = users.into_iter().unzip();
+    let (token_indices, settled_tokens) = tokens.into_iter().unzip();
+    let (channel_indices, settled_channels) = channels.into_iter().unzip();
+    settlement.version = Some(base_version.saturating_add(1));
+    settlement.users = settled_users;
+    settlement.tokens = settled_tokens;
+    settlement.channels = settled_channels;
+
+    PlannedUsageSettlement {
+        settlement,
+        base_version,
+        user_indices,
+        token_indices,
+        channel_indices,
+    }
+}
+
+fn apply_usage_plan(
+    data: &mut ManagementData,
+    plan: PlannedUsageSettlement,
+) -> Result<UsageSettlement, ManagementError> {
+    let PlannedUsageSettlement {
+        settlement,
+        base_version,
+        user_indices,
+        token_indices,
+        channel_indices,
+    } = plan;
+    let Some(version) = settlement.version else {
+        return Ok(settlement);
+    };
+    let indexes_match = data.version == base_version
+        && user_indices.len() == settlement.users.len()
+        && token_indices.len() == settlement.tokens.len()
+        && channel_indices.len() == settlement.channels.len()
+        && user_indices
+            .iter()
+            .zip(&settlement.users)
+            .all(|(index, state)| {
+                data.users
+                    .get(*index)
+                    .is_some_and(|user| user.id == state.id)
+            })
+        && token_indices
+            .iter()
+            .zip(&settlement.tokens)
+            .all(|(index, state)| {
+                data.tokens
+                    .get(*index)
+                    .is_some_and(|token| token.id == state.id)
+            })
+        && channel_indices
+            .iter()
+            .zip(&settlement.channels)
+            .all(|(index, state)| {
+                data.channels
+                    .get(*index)
+                    .is_some_and(|channel| channel.id == state.id)
+            });
+    if !indexes_match {
+        return Err(ManagementError::Storage(
+            "stale usage settlement plan".to_string(),
+        ));
+    }
+
+    for (index, state) in user_indices.into_iter().zip(&settlement.users) {
+        let user = &mut data.users[index];
+        user.quota = state.quota;
+        user.used_quota = state.used_quota;
+    }
+    for (index, state) in token_indices.into_iter().zip(&settlement.tokens) {
+        let token = &mut data.tokens[index];
+        token.accessed_time = state.accessed_at;
+        token.remain_quota = state.remain_quota;
+        token.used_quota = state.used_quota;
+        token.status = state.status;
+    }
+    for (index, state) in channel_indices.into_iter().zip(&settlement.channels) {
+        data.channels[index].used_quota = state.used_quota;
+    }
+    data.version = version;
+    Ok(settlement)
+}
+
 impl Service<SettleUsageRequest> for MemoryManagementStore {
     type Response = UsageSettlement;
     type Error = ManagementError;
 
     async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
-        if req.events.is_empty() {
-            return Ok(UsageSettlement::default());
-        }
-        self.mutate(|data| {
-            let now = now_unix();
-            let mut settlement = UsageSettlement::default();
-            for event in req.events {
-                let token_idx = data
-                    .tokens
-                    .iter()
-                    .position(|token| token_matches_usage_event(token, &event.token_id));
-                let user_id = token_idx
-                    .map(|idx| data.tokens[idx].user_id)
-                    .or_else(|| parse_usage_entity_id(&event.user_id));
-                let Some(user_idx) =
-                    user_id.and_then(|id| data.users.iter().position(|user| user.id == id))
-                else {
-                    settlement.skipped = settlement.skipped.saturating_add(1);
-                    continue;
-                };
-                let channel_idx = data
-                    .channels
-                    .iter()
-                    .position(|channel| channel_matches_usage_event(channel, &event.channel_id));
-                if let Some(idx) = token_idx {
-                    data.tokens[idx].accessed_time = now;
-                }
-                let token = token_idx.and_then(|idx| data.tokens.get(idx));
-                let user = data.users.get(user_idx);
-                let channel = channel_idx.and_then(|idx| data.channels.get(idx));
-                let quota = usage_event_quota(&event, &req.pricing, token, user, channel);
-                if quota <= 0 {
-                    settlement.skipped = settlement.skipped.saturating_add(1);
-                    continue;
-                }
-
-                settlement.event_quotas.push(UsageEventQuota {
-                    request_id: event.request_id.clone(),
-                    quota,
-                });
-
-                let user = &mut data.users[user_idx];
-                user.quota = user.quota.saturating_sub(quota);
-                user.used_quota = user.used_quota.saturating_add(quota);
-
-                if let Some(idx) = token_idx {
-                    let token = &mut data.tokens[idx];
-                    token.remain_quota = token.remain_quota.saturating_sub(quota);
-                    token.used_quota = token.used_quota.saturating_add(quota);
-                    if !token.unlimited_quota
-                        && token.remain_quota <= 0
-                        && token.status != TOKEN_STATUS_EXHAUSTED
-                    {
-                        token.status = TOKEN_STATUS_EXHAUSTED;
-                        settlement.tokens_exhausted = settlement.tokens_exhausted.saturating_add(1);
-                    }
-                }
-
-                if let Some(idx) = channel_idx {
-                    data.channels[idx].used_quota =
-                        data.channels[idx].used_quota.saturating_add(quota);
-                }
-
-                settlement.settled = settlement.settled.saturating_add(1);
-                settlement.quota = settlement.quota.saturating_add(quota);
-            }
-            Ok(settlement)
-        })
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        let plan = plan_usage_settlement(&state.data, &state.identity, req);
+        apply_usage_plan(&mut state.data, plan)
     }
 }
 
@@ -3249,10 +3579,7 @@ fn quota_from_f64(value: f64) -> i64 {
     }
 }
 
-fn token_matches_usage_event(token: &TokenRecord, event_token_id: &str) -> bool {
-    entity_id_matches(event_token_id, token.id, token.snapshot_id.as_deref())
-}
-
+#[cfg(test)]
 fn channel_matches_usage_event(channel: &ChannelRecord, event_channel_id: &str) -> bool {
     match parse_usage_entity_id(event_channel_id) {
         Some(id) => channel.id == id,
@@ -3261,11 +3588,6 @@ fn channel_matches_usage_event(channel: &ChannelRecord, event_channel_id: &str) 
             .as_deref()
             .is_some_and(|snapshot_id| snapshot_id == event_channel_id),
     }
-}
-
-fn entity_id_matches(event_id: &str, numeric_id: u64, snapshot_id: Option<&str>) -> bool {
-    parse_usage_entity_id(event_id).is_some_and(|id| id == numeric_id)
-        || snapshot_id.is_some_and(|snapshot_id| snapshot_id == event_id)
 }
 
 fn parse_usage_entity_id(value: &str) -> Option<u64> {
@@ -3342,6 +3664,97 @@ mod tests {
             group: String::new(),
             cross_group_retry: false,
         }
+    }
+
+    fn usage_event(request_id: &str, token_id: &str, channel_id: &str) -> UsageEvent {
+        UsageEvent {
+            request_id:            request_id.to_string(),
+            user_id:               "1".to_string(),
+            token_id:              token_id.to_string(),
+            channel_id:            channel_id.to_string(),
+            group:                 "default".to_string(),
+            model:                 "gpt-4".to_string(),
+            upstream_model:        "gpt-4".to_string(),
+            prompt_tokens:         Some(1),
+            completion_tokens:     None,
+            total_tokens:          Some(1),
+            cache_read_tokens:     None,
+            cache_creation_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
+            quota:                 None,
+            status:                UsageStatus::Success,
+            latency_ms:            1,
+            first_response_ms:     None,
+            is_stream:             false,
+            ip:                    String::new(),
+            upstream_request_id:   String::new(),
+            created_at_unix_ms:    1,
+        }
+    }
+
+    #[test]
+    fn usage_identity_indexes_rebuild_after_mutation_and_replace() {
+        block_on(async {
+            let mut root = user(1, "root", ROLE_ROOT_USER);
+            root.quota = 1_000;
+            let mut first_token = token(1, 1, "first-key");
+            first_token.snapshot_id = Some("first-token".to_string());
+            let mut kept_token = token(2, 1, "kept-key");
+            kept_token.snapshot_id = Some("kept-token".to_string());
+            let mut first_channel = sample_channel(1, "first", "default");
+            first_channel.snapshot_id = Some("first-route".to_string());
+            let mut kept_channel = sample_channel(2, "kept", "default");
+            kept_channel.snapshot_id = Some("kept-route".to_string());
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                vec![root],
+                vec![first_token, kept_token],
+                vec![first_channel, kept_channel],
+                Vec::new(),
+            ));
+
+            store
+                .call(DeleteTokenRequest {
+                    id:      1,
+                    user_id: None,
+                })
+                .await
+                .expect("delete first token");
+            store
+                .call(DeleteChannelRequest { id: 1 })
+                .await
+                .expect("delete first channel");
+            let shifted = store
+                .call(SettleUsageRequest {
+                    events:  vec![usage_event("shifted", "kept-token", "kept-route")],
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("settle through shifted identity indexes");
+            assert_eq!(shifted.tokens[0].id, 2);
+            assert_eq!(shifted.channels[0].id, 2);
+
+            let mut replacement = store.current_data().expect("read replacement data");
+            replacement.tokens[0].snapshot_id = Some("replacement-token".to_string());
+            replacement.channels[0].snapshot_id = Some("replacement-route".to_string());
+            store
+                .replace_data(replacement)
+                .expect("replace management data");
+            let replaced = store
+                .call(SettleUsageRequest {
+                    events:  vec![usage_event(
+                        "replaced",
+                        "replacement-token",
+                        "replacement-route",
+                    )],
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("settle through replacement identity indexes");
+            assert_eq!(replaced.tokens[0].id, 2);
+            assert_eq!(replaced.channels[0].id, 2);
+        });
     }
 
     #[test]
@@ -3426,6 +3839,30 @@ mod tests {
 
             assert_eq!(settlement.settled, 1);
             assert_eq!(settlement.quota, 42);
+            assert_eq!(
+                settlement
+                    .users
+                    .iter()
+                    .map(|state| state.id)
+                    .collect::<Vec<_>>(),
+                vec![1]
+            );
+            assert_eq!(
+                settlement
+                    .tokens
+                    .iter()
+                    .map(|state| state.id)
+                    .collect::<Vec<_>>(),
+                vec![1]
+            );
+            assert_eq!(
+                settlement
+                    .channels
+                    .iter()
+                    .map(|state| state.id)
+                    .collect::<Vec<_>>(),
+                vec![1]
+            );
             let data = store.current_data().expect("data should be readable");
             assert_eq!(data.users[0].quota, 958);
             assert_eq!(data.users[0].used_quota, 42);
@@ -3535,6 +3972,16 @@ mod tests {
 
             assert_eq!(settlement.settled, 0);
             assert_eq!(settlement.skipped, 1);
+            assert!(settlement.users.is_empty());
+            assert_eq!(
+                settlement
+                    .tokens
+                    .iter()
+                    .map(|state| state.id)
+                    .collect::<Vec<_>>(),
+                vec![1]
+            );
+            assert!(settlement.channels.is_empty());
             let data = store.current_data().expect("data should be readable");
             assert!(data.tokens[0].accessed_time > 0);
             assert_eq!(data.tokens[0].remain_quota, 1000);

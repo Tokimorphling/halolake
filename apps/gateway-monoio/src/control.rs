@@ -1,8 +1,10 @@
 use super::*;
+use crate::relay::{StreamingHttpUpstream, send_pooled_http1};
 use halolake_api_contract::ApiResponse;
 use halolake_control_plane::{
     SnapshotError, SnapshotRequest, SnapshotResponse, UsageAck, UsageError, UsageEventBatch,
 };
+use monoio_transports::{connectors::pollio::PollIo, http::hyper::HyperH1Connector};
 
 const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
 
@@ -11,6 +13,7 @@ pub(crate) struct MonoioHttpSnapshotSource {
     snapshot_url:    Arc<str>,
     internal_key:    Option<Arc<str>>,
     connect_timeout: Option<Duration>,
+    dns:             LocalDnsResolver,
     http:            HttpUpstream,
     https:           HttpsUpstream,
 }
@@ -37,6 +40,7 @@ impl MonoioHttpSnapshotSource {
             snapshot_url: Arc::from(snapshot_url.as_str()),
             internal_key: config.internal_key.as_deref().map(Arc::<str>::from),
             connect_timeout: config.connect_timeout_ms.map(Duration::from_millis),
+            dns: LocalDnsResolver::default(),
             http,
             https,
         }))
@@ -73,11 +77,9 @@ impl MonoioHttpSnapshotSource {
         } else {
             let host = uri.host().context("control snapshot uri missing host")?;
             let port = uri.port_u16().unwrap_or(80);
-            let addr = format!("{host}:{port}")
-                .to_socket_addrs()
-                .with_context(|| format!("resolve control snapshot source {host}:{port}"))?
-                .next()
-                .context("control snapshot source resolved no addresses")?;
+            let addr = timeout_opt(self.connect_timeout, self.dns.resolve(host, port))
+                .await
+                .context("control snapshot DNS timeout")??;
             let connect = self.http.connect(addr);
             let mut conn = timeout_opt(self.connect_timeout, connect)
                 .await
@@ -155,7 +157,9 @@ pub(crate) struct MonoioHttpUsageSink {
     usage_url:       Arc<str>,
     internal_key:    Option<Arc<str>>,
     connect_timeout: Option<Duration>,
-    http:            HttpUpstream,
+    read_timeout:    Option<Duration>,
+    dns:             LocalDnsResolver,
+    http:            Rc<StreamingHttpUpstream>,
     https:           HttpsUpstream,
 }
 
@@ -172,8 +176,6 @@ impl MonoioHttpUsageSink {
         }
 
         let read_timeout = config.read_timeout_ms.map(Duration::from_millis);
-        let mut http = HttpUpstream::build_tcp_http1_only();
-        http.set_read_timeout(read_timeout);
         let mut https = HttpsUpstream::default();
         https.set_read_timeout(read_timeout);
 
@@ -181,7 +183,9 @@ impl MonoioHttpUsageSink {
             usage_url: Arc::from(usage_url.as_str()),
             internal_key: config.internal_key.as_deref().map(Arc::<str>::from),
             connect_timeout: config.connect_timeout_ms.map(Duration::from_millis),
-            http,
+            read_timeout,
+            dns: LocalDnsResolver::default(),
+            http: Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
             https,
         }))
     }
@@ -199,18 +203,19 @@ impl MonoioHttpUsageSink {
         } else {
             let host = uri.host().context("control usage uri missing host")?;
             let port = uri.port_u16().unwrap_or(80);
-            let addr = format!("{host}:{port}")
-                .to_socket_addrs()
-                .with_context(|| format!("resolve control usage sink {host}:{port}"))?
-                .next()
-                .context("control usage sink resolved no addresses")?;
-            let connect = self.http.connect(addr);
-            let mut conn = timeout_opt(self.connect_timeout, connect)
+            let addr = timeout_opt(self.connect_timeout, self.dns.resolve(host, port))
                 .await
-                .context("control usage connect timeout")?
-                .context("connect http control usage sink")?;
-            let (resp, _) = conn.send_request(req).await;
-            resp.context("send http control usage request")
+                .context("control usage DNS timeout")??;
+            send_pooled_http1(
+                &self.http,
+                addr,
+                req,
+                self.connect_timeout,
+                self.read_timeout,
+            )
+            .await
+            .map(|(response, _)| response)
+            .context("send http control usage request")
         }
     }
 }
@@ -282,7 +287,9 @@ pub(crate) struct MonoioHttpChannelFeedbackSink {
     channel_feedback_url: Arc<str>,
     internal_key:         Option<Arc<str>>,
     connect_timeout:      Option<Duration>,
-    http:                 HttpUpstream,
+    read_timeout:         Option<Duration>,
+    dns:                  LocalDnsResolver,
+    http:                 Rc<StreamingHttpUpstream>,
     https:                HttpsUpstream,
 }
 
@@ -299,8 +306,6 @@ impl MonoioHttpChannelFeedbackSink {
         }
 
         let read_timeout = config.read_timeout_ms.map(Duration::from_millis);
-        let mut http = HttpUpstream::build_tcp_http1_only();
-        http.set_read_timeout(read_timeout);
         let mut https = HttpsUpstream::default();
         https.set_read_timeout(read_timeout);
 
@@ -308,7 +313,9 @@ impl MonoioHttpChannelFeedbackSink {
             channel_feedback_url: Arc::from(channel_feedback_url.as_str()),
             internal_key: config.internal_key.as_deref().map(Arc::<str>::from),
             connect_timeout: config.connect_timeout_ms.map(Duration::from_millis),
-            http,
+            read_timeout,
+            dns: LocalDnsResolver::default(),
+            http: Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
             https,
         }))
     }
@@ -331,18 +338,19 @@ impl MonoioHttpChannelFeedbackSink {
                 .host()
                 .context("control channel feedback uri missing host")?;
             let port = uri.port_u16().unwrap_or(80);
-            let addr = format!("{host}:{port}")
-                .to_socket_addrs()
-                .with_context(|| format!("resolve control channel feedback sink {host}:{port}"))?
-                .next()
-                .context("control channel feedback sink resolved no addresses")?;
-            let connect = self.http.connect(addr);
-            let mut conn = timeout_opt(self.connect_timeout, connect)
+            let addr = timeout_opt(self.connect_timeout, self.dns.resolve(host, port))
                 .await
-                .context("control channel feedback connect timeout")?
-                .context("connect http control channel feedback sink")?;
-            let (resp, _) = conn.send_request(req).await;
-            resp.context("send http control channel feedback request")
+                .context("control channel feedback DNS timeout")??;
+            send_pooled_http1(
+                &self.http,
+                addr,
+                req,
+                self.connect_timeout,
+                self.read_timeout,
+            )
+            .await
+            .map(|(response, _)| response)
+            .context("send http control channel feedback request")
         }
     }
 }
@@ -412,86 +420,363 @@ fn channel_feedback_transport(err: anyhow::Error) -> ChannelFeedbackError {
     ChannelFeedbackError::Transport(err.to_string())
 }
 
+/// Single-runtime queue used by the gateway's fire-and-forget control-plane
+/// reporters. Keeping this state worker-local avoids a cross-thread lock or a
+/// task per request on the relay hot path.
+#[derive(Debug)]
+struct LocalReportQueue<T> {
+    pending:             VecDeque<T>,
+    active_workers:      usize,
+    saturation_observed: u64,
+}
+
+impl<T> Default for LocalReportQueue<T> {
+    fn default() -> Self {
+        Self {
+            pending:             VecDeque::new(),
+            active_workers:      0,
+            saturation_observed: 0,
+        }
+    }
+}
+
+impl<T> LocalReportQueue<T> {
+    /// Enqueue one event and scale the bounded worker set when complete batches
+    /// accumulate. The capacity is a saturation threshold, not a drop limit:
+    /// until a durable outbox exists, retaining a backlog is safer than losing
+    /// accounting records or spawning an unbounded task per overflow batch.
+    fn push(
+        &mut self,
+        event: T,
+        batch_size: usize,
+        capacity: usize,
+        max_in_flight: usize,
+    ) -> (bool, Option<(u64, usize)>) {
+        self.pending.push_back(event);
+        let saturation = if self.pending.len() > capacity {
+            self.saturation_observed = self.saturation_observed.saturating_add(1);
+            Some((self.saturation_observed, self.pending.len()))
+        } else {
+            None
+        };
+        let should_start = self.active_workers == 0
+            || (self.pending.len() >= batch_size.saturating_mul(self.active_workers.max(1))
+                && self.active_workers < max_in_flight.max(1));
+        if should_start {
+            self.active_workers = self.active_workers.saturating_add(1);
+        }
+        (should_start, saturation)
+    }
+
+    fn take_batch(&mut self, batch_size: usize) -> Vec<T> {
+        let take = batch_size.min(self.pending.len());
+        self.pending.drain(..take).collect()
+    }
+
+    fn requeue_front(&mut self, events: Vec<T>) {
+        for event in events.into_iter().rev() {
+            self.pending.push_front(event);
+        }
+    }
+
+    fn finish_worker_if_empty(&mut self) -> bool {
+        if self.pending.is_empty() {
+            self.active_workers = self.active_workers.saturating_sub(1);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct UsageReporter {
-    sink: Option<MonoioHttpUsageSink>,
+    sink:                  Option<Rc<MonoioHttpUsageSink>>,
+    queue:                 Option<Rc<RefCell<LocalReportQueue<UsageEvent>>>>,
+    batch_size:            usize,
+    queue_capacity:        usize,
+    max_in_flight_batches: usize,
+    flush_interval:        Duration,
 }
 
 impl UsageReporter {
     pub(crate) fn from_config(config: &ControlPlaneConfig) -> Result<Self> {
+        let Some(sink) = MonoioHttpUsageSink::from_config(config)? else {
+            return Ok(Self::default());
+        };
+        let batch_size = config.report_batch_size.max(1);
         Ok(Self {
-            sink: MonoioHttpUsageSink::from_config(config)?,
+            sink: Some(Rc::new(sink)),
+            queue: Some(Rc::new(RefCell::new(LocalReportQueue::default()))),
+            batch_size,
+            queue_capacity: config.report_queue_capacity.max(batch_size),
+            max_in_flight_batches: config.report_max_in_flight.max(1),
+            flush_interval: Duration::from_millis(config.report_flush_interval_ms),
         })
     }
 
     pub(crate) fn report(&self, event: UsageEvent) {
-        let Some(sink) = self.sink.clone() else {
+        let (Some(sink), Some(queue)) = (self.sink.as_ref(), self.queue.as_ref()) else {
             return;
         };
-        monoio::spawn(async move {
-            let request_id = event.request_id.clone();
-            let batch = UsageEventBatch::new(vec![event]);
-            match sink.call(batch).await {
-                Ok(ack) => {
-                    debug!(%request_id, accepted = ack.accepted, "reported usage event");
-                }
-                Err(err) => {
-                    warn!(%request_id, ?err, "failed to report usage event");
-                }
-            }
-        });
+        let (should_start, saturation) = queue.borrow_mut().push(
+            event,
+            self.batch_size,
+            self.queue_capacity,
+            self.max_in_flight_batches,
+        );
+        if let Some((saturation_observed, pending_events)) = saturation
+            && (saturation_observed == 1 || saturation_observed.is_power_of_two())
+        {
+            warn!(
+                saturation_observed,
+                pending_events,
+                queue_capacity = self.queue_capacity,
+                max_in_flight_batches = self.max_in_flight_batches,
+                "usage report queue saturated; retaining backlog"
+            );
+        }
+        if should_start {
+            let sink = Rc::clone(sink);
+            let queue = Rc::clone(queue);
+            let batch_size = self.batch_size;
+            let flush_interval = self.flush_interval;
+            monoio::spawn(async move {
+                run_usage_report_queue(sink, queue, batch_size, flush_interval).await;
+            });
+        }
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
-        self.sink.is_some()
+        self.queue.is_some()
     }
+}
+
+async fn run_usage_report_queue(
+    sink: Rc<MonoioHttpUsageSink>,
+    queue: Rc<RefCell<LocalReportQueue<UsageEvent>>>,
+    batch_size: usize,
+    flush_interval: Duration,
+) {
+    let mut consecutive_failures = 0u32;
+    loop {
+        let wait_for_batch = queue.borrow().pending.len() < batch_size;
+        if wait_for_batch && !flush_interval.is_zero() {
+            monoio::time::sleep(flush_interval).await;
+        }
+        let events = queue.borrow_mut().take_batch(batch_size);
+        if !events.is_empty() && !submit_usage_batch(&sink, &events).await {
+            queue.borrow_mut().requeue_front(events);
+            consecutive_failures = consecutive_failures.saturating_add(1);
+            monoio::time::sleep(report_retry_delay(consecutive_failures)).await;
+        } else {
+            consecutive_failures = 0;
+        }
+        if queue.borrow_mut().finish_worker_if_empty() {
+            return;
+        }
+    }
+}
+
+async fn submit_usage_batch(sink: &MonoioHttpUsageSink, events: &[UsageEvent]) -> bool {
+    if events.is_empty() {
+        return true;
+    }
+    let event_count = events.len();
+    let first_request_id = events
+        .first()
+        .map(|event| event.request_id.clone())
+        .unwrap_or_default();
+    match sink.call(UsageEventBatch::new(events.to_vec())).await {
+        Ok(ack) => {
+            debug!(
+                %first_request_id,
+                event_count,
+                accepted = ack.accepted,
+                "reported usage batch"
+            );
+            true
+        }
+        Err(err) => {
+            warn!(
+                %first_request_id,
+                event_count,
+                ?err,
+                "failed to report usage batch"
+            );
+            false
+        }
+    }
+}
+
+fn report_retry_delay(consecutive_failures: u32) -> Duration {
+    let exponent = consecutive_failures.saturating_sub(1).min(8);
+    Duration::from_millis(20u64.saturating_mul(1u64 << exponent))
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct ChannelFeedbackReporter {
-    sink: Option<MonoioHttpChannelFeedbackSink>,
+    sink:                  Option<Rc<MonoioHttpChannelFeedbackSink>>,
+    queue:                 Option<Rc<RefCell<LocalReportQueue<ChannelFeedbackEvent>>>>,
+    batch_size:            usize,
+    queue_capacity:        usize,
+    max_in_flight_batches: usize,
+    flush_interval:        Duration,
 }
 
 impl ChannelFeedbackReporter {
     pub(crate) fn from_config(config: &ControlPlaneConfig) -> Result<Self> {
+        let Some(sink) = MonoioHttpChannelFeedbackSink::from_config(config)? else {
+            return Ok(Self::default());
+        };
+        let batch_size = config.report_batch_size.max(1);
         Ok(Self {
-            sink: MonoioHttpChannelFeedbackSink::from_config(config)?,
+            sink: Some(Rc::new(sink)),
+            queue: Some(Rc::new(RefCell::new(LocalReportQueue::default()))),
+            batch_size,
+            queue_capacity: config.report_queue_capacity.max(batch_size),
+            max_in_flight_batches: config.report_max_in_flight.max(1),
+            flush_interval: Duration::from_millis(config.report_flush_interval_ms),
         })
     }
 
     pub(crate) fn report(&self, event: ChannelFeedbackEvent) {
-        let Some(sink) = self.sink.clone() else {
+        let (Some(sink), Some(queue)) = (self.sink.as_ref(), self.queue.as_ref()) else {
             return;
         };
-        monoio::spawn(async move {
-            let request_id = event.request_id.clone();
-            let channel_id = event.channel_id.clone();
-            let batch = ChannelFeedbackBatch::new(vec![event]);
-            match sink.call(batch).await {
-                Ok(ack) => {
-                    debug!(
-                        %request_id,
-                        %channel_id,
-                        accepted = ack.accepted,
-                        disabled_channels = ack.disabled_channels,
-                        disabled_keys = ack.disabled_keys,
-                        "reported channel feedback"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        %request_id,
-                        %channel_id,
-                        ?err,
-                        "failed to report channel feedback"
-                    );
-                }
-            }
-        });
+        let (should_start, saturation) = queue.borrow_mut().push(
+            event,
+            self.batch_size,
+            self.queue_capacity,
+            self.max_in_flight_batches,
+        );
+        if let Some((saturation_observed, pending_events)) = saturation
+            && (saturation_observed == 1 || saturation_observed.is_power_of_two())
+        {
+            warn!(
+                saturation_observed,
+                pending_events,
+                queue_capacity = self.queue_capacity,
+                max_in_flight_batches = self.max_in_flight_batches,
+                "channel feedback queue saturated; retaining backlog"
+            );
+        }
+        if should_start {
+            let sink = Rc::clone(sink);
+            let queue = Rc::clone(queue);
+            let batch_size = self.batch_size;
+            let flush_interval = self.flush_interval;
+            monoio::spawn(async move {
+                run_channel_feedback_queue(sink, queue, batch_size, flush_interval).await;
+            });
+        }
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
-        self.sink.is_some()
+        self.queue.is_some()
+    }
+}
+
+async fn run_channel_feedback_queue(
+    sink: Rc<MonoioHttpChannelFeedbackSink>,
+    queue: Rc<RefCell<LocalReportQueue<ChannelFeedbackEvent>>>,
+    batch_size: usize,
+    flush_interval: Duration,
+) {
+    let mut consecutive_failures = 0u32;
+    loop {
+        let wait_for_batch = queue.borrow().pending.len() < batch_size;
+        if wait_for_batch && !flush_interval.is_zero() {
+            monoio::time::sleep(flush_interval).await;
+        }
+        let events = queue.borrow_mut().take_batch(batch_size);
+        if !events.is_empty() && !submit_channel_feedback_batch(&sink, &events).await {
+            queue.borrow_mut().requeue_front(events);
+            consecutive_failures = consecutive_failures.saturating_add(1);
+            monoio::time::sleep(report_retry_delay(consecutive_failures)).await;
+        } else {
+            consecutive_failures = 0;
+        }
+        if queue.borrow_mut().finish_worker_if_empty() {
+            return;
+        }
+    }
+}
+
+async fn submit_channel_feedback_batch(
+    sink: &MonoioHttpChannelFeedbackSink,
+    events: &[ChannelFeedbackEvent],
+) -> bool {
+    if events.is_empty() {
+        return true;
+    }
+    let event_count = events.len();
+    let (first_request_id, first_channel_id) = events
+        .first()
+        .map(|event| (event.request_id.clone(), event.channel_id.clone()))
+        .unwrap_or_default();
+    match sink.call(ChannelFeedbackBatch::new(events.to_vec())).await {
+        Ok(ack) => {
+            debug!(
+                %first_request_id,
+                %first_channel_id,
+                event_count,
+                accepted = ack.accepted,
+                disabled_channels = ack.disabled_channels,
+                disabled_keys = ack.disabled_keys,
+                "reported channel feedback batch"
+            );
+            true
+        }
+        Err(err) => {
+            warn!(
+                %first_request_id,
+                %first_channel_id,
+                event_count,
+                ?err,
+                "failed to report channel feedback batch"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod report_queue_tests {
+    use super::LocalReportQueue;
+    use std::time::Duration;
+
+    #[test]
+    fn local_queue_bounds_workers_keeps_fifo_and_restarts_after_drain() {
+        let mut queue = LocalReportQueue::default();
+        assert_eq!(queue.push(1, 2, 3, 2), (true, None));
+        assert_eq!(queue.push(2, 2, 3, 2), (true, None));
+        assert_eq!(queue.push(3, 2, 3, 2), (false, None));
+
+        let (should_start, saturation) = queue.push(4, 2, 3, 2);
+        assert!(!should_start);
+        assert_eq!(saturation, Some((1, 4)));
+        assert_eq!(queue.active_workers, 2);
+        assert_eq!(queue.take_batch(2), vec![1, 2]);
+        queue.requeue_front(vec![1, 2]);
+        assert_eq!(queue.take_batch(2), vec![1, 2]);
+        assert_eq!(queue.take_batch(2), vec![3, 4]);
+        assert!(queue.finish_worker_if_empty());
+        assert_eq!(queue.active_workers, 1);
+        assert!(queue.finish_worker_if_empty());
+        assert_eq!(queue.active_workers, 0);
+
+        assert_eq!(queue.push(5, 2, 3, 2), (true, None));
+    }
+
+    #[test]
+    fn report_retry_backoff_is_bounded() {
+        assert_eq!(super::report_retry_delay(1), Duration::from_millis(20));
+        assert_eq!(super::report_retry_delay(2), Duration::from_millis(40));
+        assert_eq!(
+            super::report_retry_delay(u32::MAX),
+            Duration::from_millis(5_120)
+        );
     }
 }
 
@@ -501,6 +786,7 @@ pub(crate) struct SystemInstanceReporter {
     url:             Arc<str>,
     internal_key:    Option<Arc<str>>,
     connect_timeout: Option<Duration>,
+    dns:             LocalDnsResolver,
     http:            HttpUpstream,
     https:           HttpsUpstream,
     started_at:      i64,
@@ -526,6 +812,7 @@ impl SystemInstanceReporter {
             url: Arc::from(url.as_str()),
             internal_key: config.internal_key.as_deref().map(Arc::<str>::from),
             connect_timeout: config.connect_timeout_ms.map(Duration::from_millis),
+            dns: LocalDnsResolver::default(),
             http,
             https,
             started_at: std::time::SystemTime::now()
@@ -553,11 +840,9 @@ impl SystemInstanceReporter {
                 .host()
                 .context("control system instance uri missing host")?;
             let port = uri.port_u16().unwrap_or(80);
-            let addr = format!("{host}:{port}")
-                .to_socket_addrs()
-                .with_context(|| format!("resolve control system instance sink {host}:{port}"))?
-                .next()
-                .context("control system instance sink resolved no addresses")?;
+            let addr = timeout_opt(self.connect_timeout, self.dns.resolve(host, port))
+                .await
+                .context("control system instance DNS timeout")??;
             let connect = self.http.connect(addr);
             let mut conn = timeout_opt(self.connect_timeout, connect)
                 .await

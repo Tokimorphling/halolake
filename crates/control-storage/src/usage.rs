@@ -6,12 +6,42 @@ use halolake_control_plane::{
 use halolake_domain::{UsageEvent, UsageStatus};
 use service_async::Service;
 use sqlx::{
-    MySqlPool, PgPool, Row, SqlitePool,
+    MySqlPool, PgPool, Postgres, QueryBuilder, Row, Sqlite, SqlitePool, Transaction,
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
+
+const USAGE_INSERT_CHUNK_SIZE: usize = 256;
+
+macro_rules! push_usage_event_values {
+    ($query:expr, $events:expr) => {
+        $query.push_values($events, |mut row, event| {
+            row.push_bind(&event.request_id)
+                .push_bind(&event.user_id)
+                .push_bind(&event.token_id)
+                .push_bind(&event.channel_id)
+                .push_bind(&event.group)
+                .push_bind(&event.model)
+                .push_bind(&event.upstream_model)
+                .push_bind(event.prompt_tokens.map(|value| value as i64))
+                .push_bind(event.completion_tokens.map(|value| value as i64))
+                .push_bind(event.total_tokens.map(|value| value as i64))
+                .push_bind(event.cache_read_tokens.map(|value| value as i64))
+                .push_bind(event.cache_creation_tokens.map(|value| value as i64))
+                .push_bind(event.image_tokens.map(|value| value as i64))
+                .push_bind(event.audio_tokens.map(|value| value as i64))
+                .push_bind(event.quota)
+                .push_bind(usage_status_str(event.status))
+                .push_bind(event.latency_ms as i64)
+                .push_bind(event.is_stream)
+                .push_bind(&event.ip)
+                .push_bind(&event.upstream_request_id)
+                .push_bind(event.created_at_unix_ms);
+        });
+    };
+}
 
 #[derive(Debug, Clone)]
 pub enum UsageStore {
@@ -78,24 +108,10 @@ impl UsageStore {
     ) -> Result<RecordedUsageBatch, UsageError> {
         match self {
             Self::Memory(store) => {
-                let existing = store
-                    .events()?
-                    .into_iter()
-                    .map(|event| event.request_id)
-                    .collect::<std::collections::BTreeSet<_>>();
-                let accepted_events = req
-                    .events
-                    .into_iter()
-                    .filter(|event| !existing.contains(&event.request_id))
-                    .collect::<Vec<_>>();
+                let accepted_events = store.record_unique(req.events)?;
                 let ack = UsageAck {
                     accepted: accepted_events.len(),
                 };
-                if !accepted_events.is_empty() {
-                    store
-                        .call(UsageEventBatch::new(accepted_events.clone()))
-                        .await?;
-                }
                 Ok(RecordedUsageBatch {
                     ack,
                     accepted_events,
@@ -143,6 +159,60 @@ impl Service<UsageEventBatch> for UsageStore {
     }
 }
 
+async fn insert_usage_events_sqlite(
+    tx: &mut Transaction<'_, Sqlite>,
+    events: &[UsageEvent],
+) -> Result<HashSet<String>, UsageError> {
+    let mut inserted_ids = HashSet::with_capacity(events.len());
+    for chunk in events.chunks(USAGE_INSERT_CHUNK_SIZE) {
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT OR IGNORE INTO usage_events (
+                request_id, user_id, token_id, channel_id, event_group, model, upstream_model,
+                prompt_tokens, completion_tokens, total_tokens, cache_read_tokens,
+                cache_creation_tokens, image_tokens, audio_tokens, quota, status, latency_ms,
+                is_stream, ip, upstream_request_id, created_at_unix_ms
+             ) ",
+        );
+        push_usage_event_values!(query, chunk);
+        query.push(" RETURNING request_id");
+        inserted_ids.extend(
+            query
+                .build_query_scalar::<String>()
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(usage_storage_err)?,
+        );
+    }
+    Ok(inserted_ids)
+}
+
+async fn insert_usage_events_pg(
+    tx: &mut Transaction<'_, Postgres>,
+    events: &[UsageEvent],
+) -> Result<HashSet<String>, UsageError> {
+    let mut inserted_ids = HashSet::with_capacity(events.len());
+    for chunk in events.chunks(USAGE_INSERT_CHUNK_SIZE) {
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO usage_events (
+                request_id, user_id, token_id, channel_id, event_group, model, upstream_model,
+                prompt_tokens, completion_tokens, total_tokens, cache_read_tokens,
+                cache_creation_tokens, image_tokens, audio_tokens, quota, status, latency_ms,
+                is_stream, ip, upstream_request_id, created_at_unix_ms
+             ) ",
+        );
+        push_usage_event_values!(query, chunk);
+        query.push(" ON CONFLICT (request_id) DO NOTHING RETURNING request_id");
+        inserted_ids.extend(
+            query
+                .build_query_scalar::<String>()
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(usage_storage_err)?,
+        );
+    }
+    Ok(inserted_ids)
+}
+
 #[derive(Debug, Clone)]
 pub struct SqliteUsageStore {
     pool:   SqlitePool,
@@ -172,44 +242,14 @@ impl SqliteUsageStore {
     }
 
     async fn record_batch(&self, req: UsageEventBatch) -> Result<RecordedUsageBatch, UsageError> {
-        let mut accepted_events = Vec::new();
-        for event in req.events {
-            let result = sqlx::query(
-                "INSERT OR IGNORE INTO usage_events (
-                    request_id, user_id, token_id, channel_id, event_group, model, upstream_model,
-                    prompt_tokens, completion_tokens, total_tokens, cache_read_tokens,
-                    cache_creation_tokens, image_tokens, audio_tokens, quota, status, latency_ms,
-                    is_stream, ip, upstream_request_id, created_at_unix_ms
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&event.request_id)
-            .bind(&event.user_id)
-            .bind(&event.token_id)
-            .bind(&event.channel_id)
-            .bind(&event.group)
-            .bind(&event.model)
-            .bind(&event.upstream_model)
-            .bind(event.prompt_tokens.map(|value| value as i64))
-            .bind(event.completion_tokens.map(|value| value as i64))
-            .bind(event.total_tokens.map(|value| value as i64))
-            .bind(event.cache_read_tokens.map(|value| value as i64))
-            .bind(event.cache_creation_tokens.map(|value| value as i64))
-            .bind(event.image_tokens.map(|value| value as i64))
-            .bind(event.audio_tokens.map(|value| value as i64))
-            .bind(event.quota)
-            .bind(usage_status_str(event.status))
-            .bind(event.latency_ms as i64)
-            .bind(event.is_stream)
-            .bind(&event.ip)
-            .bind(&event.upstream_request_id)
-            .bind(event.created_at_unix_ms)
-            .execute(&self.pool)
-            .await
-            .map_err(usage_storage_err)?;
-            if result.rows_affected() > 0 {
-                accepted_events.push(event);
-            }
-        }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
+        let mut inserted_ids = insert_usage_events_sqlite(&mut tx, &req.events).await?;
+        tx.commit().await.map_err(usage_storage_err)?;
+        let accepted_events = req
+            .events
+            .into_iter()
+            .filter(|event| inserted_ids.remove(&event.request_id))
+            .collect::<Vec<_>>();
 
         let ack = UsageAck {
             accepted: accepted_events.len(),
@@ -229,14 +269,16 @@ impl SqliteUsageStore {
         if quotas.is_empty() {
             return Ok(());
         }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
         for quota in quotas {
             sqlx::query("UPDATE usage_events SET quota = ? WHERE request_id = ?")
                 .bind(quota.quota)
                 .bind(&quota.request_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(usage_storage_err)?;
         }
+        tx.commit().await.map_err(usage_storage_err)?;
         self.memory.apply_quotas(quotas)
     }
 }
@@ -502,6 +544,7 @@ impl MySqlUsageStore {
     }
 
     async fn record_batch(&self, req: UsageEventBatch) -> Result<RecordedUsageBatch, UsageError> {
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
         let mut accepted_events = Vec::new();
         for event in req.events {
             let result = sqlx::query(
@@ -533,13 +576,14 @@ impl MySqlUsageStore {
             .bind(&event.ip)
             .bind(&event.upstream_request_id)
             .bind(event.created_at_unix_ms)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(usage_storage_err)?;
             if result.rows_affected() > 0 {
                 accepted_events.push(event);
             }
         }
+        tx.commit().await.map_err(usage_storage_err)?;
 
         let ack = UsageAck {
             accepted: accepted_events.len(),
@@ -559,14 +603,16 @@ impl MySqlUsageStore {
         if quotas.is_empty() {
             return Ok(());
         }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
         for quota in quotas {
             sqlx::query("UPDATE usage_events SET quota = ? WHERE request_id = ?")
                 .bind(quota.quota)
                 .bind(&quota.request_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(usage_storage_err)?;
         }
+        tx.commit().await.map_err(usage_storage_err)?;
         self.memory.apply_quotas(quotas)
     }
 }
@@ -626,46 +672,14 @@ impl PostgresUsageStore {
     }
 
     async fn record_batch(&self, req: UsageEventBatch) -> Result<RecordedUsageBatch, UsageError> {
-        let mut accepted_events = Vec::new();
-        for event in req.events {
-            let result = sqlx::query(
-                "INSERT INTO usage_events (
-                    request_id, user_id, token_id, channel_id, event_group, model, upstream_model,
-                    prompt_tokens, completion_tokens, total_tokens, cache_read_tokens,
-                    cache_creation_tokens, image_tokens, audio_tokens, quota, status, latency_ms,
-                    is_stream, ip, upstream_request_id, created_at_unix_ms
-                 ) VALUES \
-                 ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-                 ON CONFLICT (request_id) DO NOTHING",
-            )
-            .bind(&event.request_id)
-            .bind(&event.user_id)
-            .bind(&event.token_id)
-            .bind(&event.channel_id)
-            .bind(&event.group)
-            .bind(&event.model)
-            .bind(&event.upstream_model)
-            .bind(event.prompt_tokens.map(|value| value as i64))
-            .bind(event.completion_tokens.map(|value| value as i64))
-            .bind(event.total_tokens.map(|value| value as i64))
-            .bind(event.cache_read_tokens.map(|value| value as i64))
-            .bind(event.cache_creation_tokens.map(|value| value as i64))
-            .bind(event.image_tokens.map(|value| value as i64))
-            .bind(event.audio_tokens.map(|value| value as i64))
-            .bind(event.quota)
-            .bind(usage_status_str(event.status))
-            .bind(event.latency_ms as i64)
-            .bind(event.is_stream)
-            .bind(&event.ip)
-            .bind(&event.upstream_request_id)
-            .bind(event.created_at_unix_ms)
-            .execute(&self.pool)
-            .await
-            .map_err(usage_storage_err)?;
-            if result.rows_affected() > 0 {
-                accepted_events.push(event);
-            }
-        }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
+        let mut inserted_ids = insert_usage_events_pg(&mut tx, &req.events).await?;
+        tx.commit().await.map_err(usage_storage_err)?;
+        let accepted_events = req
+            .events
+            .into_iter()
+            .filter(|event| inserted_ids.remove(&event.request_id))
+            .collect::<Vec<_>>();
 
         let ack = UsageAck {
             accepted: accepted_events.len(),
@@ -685,14 +699,16 @@ impl PostgresUsageStore {
         if quotas.is_empty() {
             return Ok(());
         }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
         for quota in quotas {
             sqlx::query("UPDATE usage_events SET quota = $1 WHERE request_id = $2")
                 .bind(quota.quota)
                 .bind(&quota.request_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(usage_storage_err)?;
         }
+        tx.commit().await.map_err(usage_storage_err)?;
         self.memory.apply_quotas(quotas)
     }
 }
@@ -923,4 +939,226 @@ fn usage_bool_col_mysql(row: &sqlx::mysql::MySqlRow, name: &str) -> Result<bool,
 
 fn usage_storage_err(err: impl std::fmt::Display) -> UsageError {
     UsageError::Storage(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        path::PathBuf,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use tokio::sync::Barrier;
+
+    struct TempSqlite {
+        path: PathBuf,
+    }
+
+    impl TempSqlite {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos();
+            Self {
+                path: std::env::temp_dir().join(format!(
+                    "halolake-usage-{}-{unique}.sqlite",
+                    std::process::id()
+                )),
+            }
+        }
+
+        fn url(&self) -> String {
+            format!("sqlite://{}", self.path.display())
+        }
+    }
+
+    impl Drop for TempSqlite {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    fn event(request_id: &str) -> UsageEvent {
+        UsageEvent {
+            request_id:            request_id.to_string(),
+            user_id:               "1".to_string(),
+            token_id:              "2".to_string(),
+            channel_id:            "3".to_string(),
+            group:                 "default".to_string(),
+            model:                 "test-model".to_string(),
+            upstream_model:        "test-model".to_string(),
+            prompt_tokens:         Some(10),
+            completion_tokens:     Some(5),
+            total_tokens:          Some(15),
+            cache_read_tokens:     None,
+            cache_creation_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
+            quota:                 None,
+            status:                UsageStatus::Success,
+            latency_ms:            20,
+            first_response_ms:     None,
+            is_stream:             true,
+            ip:                    "127.0.0.1".to_string(),
+            upstream_request_id:   String::new(),
+            created_at_unix_ms:    1_700_000_000_000,
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_usage_batch_deduplicates_within_and_across_batches() {
+        let store = UsageStore::memory();
+        let first = event("memory-1");
+        let recorded = store
+            .record_batch(UsageEventBatch::new(vec![first.clone(), first.clone()]))
+            .await
+            .expect("record memory batch");
+        assert_eq!(recorded.ack.accepted, 1);
+        assert_eq!(recorded.accepted_events, vec![first.clone()]);
+
+        let duplicate = store
+            .record_batch(UsageEventBatch::new(vec![first]))
+            .await
+            .expect("record memory duplicate");
+        assert_eq!(duplicate.ack.accepted, 0);
+        assert_eq!(store.events().expect("memory events").len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn memory_usage_dedup_is_atomic_across_concurrent_batches() {
+        const TASKS: usize = 64;
+
+        let store = UsageStore::memory();
+        let barrier = Arc::new(Barrier::new(TASKS));
+        let mut handles = Vec::with_capacity(TASKS);
+        for _ in 0..TASKS {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .record_batch(UsageEventBatch::new(vec![event("same-request")]))
+                    .await
+                    .expect("record concurrent batch")
+                    .ack
+                    .accepted
+            }));
+        }
+
+        let mut accepted = 0usize;
+        for handle in handles {
+            accepted += handle.await.expect("join recorder");
+        }
+        assert_eq!(accepted, 1);
+        assert_eq!(store.events().expect("memory events").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_usage_batches_are_atomic_and_keep_dedup_semantics() {
+        let db = TempSqlite::new();
+        let store = SqliteUsageStore::connect(&db.url())
+            .await
+            .expect("open sqlite usage store");
+
+        sqlx::query(
+            "CREATE TRIGGER reject_usage_insert BEFORE INSERT ON usage_events
+             WHEN NEW.request_id = 'reject'
+             BEGIN
+                 SELECT RAISE(ABORT, 'forced insert failure');
+             END",
+        )
+        .execute(&store.pool)
+        .await
+        .expect("create insert trigger");
+        assert!(
+            store
+                .record_batch(UsageEventBatch::new(vec![
+                    event("rolled-back"),
+                    event("reject")
+                ]))
+                .await
+                .is_err()
+        );
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM usage_events")
+            .fetch_one(&store.pool)
+            .await
+            .expect("count usage rows");
+        assert_eq!(count, 0, "the first insert must roll back with the batch");
+        assert!(store.events().expect("memory events").is_empty());
+        sqlx::query("DROP TRIGGER reject_usage_insert")
+            .execute(&store.pool)
+            .await
+            .expect("drop insert trigger");
+
+        let first = event("req-1");
+        let second = event("req-2");
+        let recorded = store
+            .record_batch(UsageEventBatch::new(vec![
+                first.clone(),
+                first.clone(),
+                second.clone(),
+            ]))
+            .await
+            .expect("record batch");
+        assert_eq!(recorded.ack.accepted, 2);
+        assert_eq!(recorded.accepted_events, vec![first.clone(), second]);
+        let duplicate = store
+            .record_batch(UsageEventBatch::new(vec![first]))
+            .await
+            .expect("record duplicate batch");
+        assert_eq!(duplicate.ack.accepted, 0);
+        assert!(duplicate.accepted_events.is_empty());
+
+        sqlx::query(
+            "CREATE TRIGGER reject_usage_quota BEFORE UPDATE OF quota ON usage_events
+             WHEN NEW.request_id = 'req-2'
+             BEGIN
+                 SELECT RAISE(ABORT, 'forced quota failure');
+             END",
+        )
+        .execute(&store.pool)
+        .await
+        .expect("create quota trigger");
+        let quotas = vec![
+            UsageEventQuota {
+                request_id: "req-1".to_string(),
+                quota:      41,
+            },
+            UsageEventQuota {
+                request_id: "req-2".to_string(),
+                quota:      42,
+            },
+        ];
+        assert!(store.apply_quotas(&quotas).await.is_err());
+        let persisted = load_usage_events(&store.pool)
+            .await
+            .expect("load persisted usage");
+        assert!(persisted.iter().all(|event| event.quota.is_none()));
+        assert!(
+            store
+                .events()
+                .expect("memory events")
+                .iter()
+                .all(|event| event.quota.is_none())
+        );
+        sqlx::query("DROP TRIGGER reject_usage_quota")
+            .execute(&store.pool)
+            .await
+            .expect("drop quota trigger");
+
+        store.apply_quotas(&quotas).await.expect("apply quotas");
+        let persisted = load_usage_events(&store.pool)
+            .await
+            .expect("load persisted usage");
+        for event in persisted {
+            let expected = if event.request_id == "req-1" { 41 } else { 42 };
+            assert_eq!(event.quota, Some(expected));
+        }
+        for event in store.events().expect("memory events") {
+            let expected = if event.request_id == "req-1" { 41 } else { 42 };
+            assert_eq!(event.quota, Some(expected));
+        }
+    }
 }

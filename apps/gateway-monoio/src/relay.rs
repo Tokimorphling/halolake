@@ -5,6 +5,15 @@ use crate::{
     },
     upstream_proxy::{ProxyTransportRequest, ProxyTransportService, parse_proxy_endpoint},
 };
+use monoio_transports::{
+    connectors::pollio::PollIo,
+    http::hyper::{HyperBody, HyperH1Connector, MonoioBody as HyperIncomingBody},
+};
+
+pub(crate) type HyperRequestBody =
+    HyperBody<HttpBody, Option<std::result::Result<Bytes, HttpError>>>;
+pub(crate) type StreamingHttpUpstream =
+    HyperH1Connector<PollIo<TcpConnector>, SocketAddr, HyperRequestBody>;
 
 const CODEX_DEFAULT_ORIGINATOR: &str = "codex-tui";
 const CODEX_DEFAULT_USER_AGENT: &str =
@@ -17,7 +26,8 @@ pub(crate) struct RelayService {
     gemini_api_version:  Arc<str>,
     connect_timeout:     Option<Duration>,
     read_timeout:        Option<Duration>,
-    http:                HttpUpstream,
+    dns:                 LocalDnsResolver,
+    http:                Rc<StreamingHttpUpstream>,
     https:               HttpsUpstream,
     proxy_transport:     ProxyTransportService,
 }
@@ -33,8 +43,6 @@ impl RelayService {
             + Param<ProxyTransportService>,
     {
         let read_timeout = <C as Param<UpstreamReadTimeout>>::param(params).0;
-        let mut http = HttpUpstream::build_tcp_http1_only();
-        http.set_read_timeout(read_timeout);
         let mut https = HttpsUpstream::default();
         https.set_read_timeout(read_timeout);
 
@@ -44,7 +52,8 @@ impl RelayService {
             gemini_api_version: <C as Param<GeminiApiVersion>>::param(params).0,
             connect_timeout: <C as Param<ConnectTimeout>>::param(params).0,
             read_timeout,
-            http,
+            dns: LocalDnsResolver::default(),
+            http: Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
             https,
             proxy_transport: <C as Param<ProxyTransportService>>::param(params),
         }
@@ -131,39 +140,19 @@ impl RelayService {
         } else {
             let host = uri.host().context("http upstream uri missing host")?;
             let port = uri.port_u16().unwrap_or(80);
-            let addr = format!("{host}:{port}")
-                .to_socket_addrs()
-                .with_context(|| format!("resolve http upstream {host}:{port}"))?
-                .next()
-                .context("http upstream resolved no addresses")?;
-            debug!(%host, port, %addr, "acquiring http upstream connection");
-            let connect = self.http.connect(addr);
-            let mut conn = timeout_opt(self.connect_timeout, connect)
+            let addr = timeout_opt(self.connect_timeout, self.dns.resolve(host, port))
                 .await
-                .with_context(|| format!("acquire http upstream connection {host}:{port}"))??;
-            match &conn {
-                HttpConnection::Http1(conn) => {
-                    debug!(
-                        %host,
-                        port,
-                        %addr,
-                        protocol = "http/1.1",
-                        http1_reused = conn.is_reused(),
-                        "http upstream connection acquired"
-                    );
-                }
-                HttpConnection::Http2(_) => {
-                    debug!(
-                        %host,
-                        port,
-                        %addr,
-                        protocol = "h2",
-                        "http upstream connection acquired"
-                    );
-                }
-            }
-            let (resp, can_reuse) = conn.send_request(req).await;
-            let resp = resp.with_context(|| format!("send http upstream request {host}{path}"))?;
+                .context("http upstream DNS timeout")??;
+            debug!(%host, port, %addr, "acquiring http upstream connection");
+            let (resp, can_reuse) = send_pooled_http1(
+                &self.http,
+                addr,
+                req,
+                self.connect_timeout,
+                self.read_timeout,
+            )
+            .await
+            .with_context(|| format!("send http upstream request {host}{path}"))?;
             debug!(
                 %host,
                 %path,
@@ -214,6 +203,118 @@ impl RelayService {
             .map_err(anyhow::Error::from)
             .with_context(|| format!("send request via proxy to {target_host}:{target_port}"))
     }
+}
+
+/// Worker-local pooled HTTP/1 client that returns after response headers and
+/// pumps the body concurrently. The native monoio-transports H1 connection
+/// drains the complete response inside `send_request`, which breaks SSE TTFT
+/// and prevents keep-alive reuse.
+pub(crate) async fn send_pooled_http1(
+    connector: &StreamingHttpUpstream,
+    addr: SocketAddr,
+    mut req: Request<HttpBody>,
+    connect_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+) -> Result<(Response<HttpBody>, bool)> {
+    let connect = connector.connect(addr);
+    let mut conn = timeout_opt(connect_timeout, connect)
+        .await
+        .context("acquire pooled HTTP/1 connection")??;
+    let reused = conn.is_reused();
+    prepare_hyper_request_headers(&mut req);
+    let req = req.map(HyperRequestBody::new);
+    let response = match read_timeout {
+        Some(read_timeout) => monoio::time::timeout(read_timeout, conn.send_request(req))
+            .await
+            .map_err(|_| anyhow::anyhow!("upstream response head idle timeout"))?,
+        None => conn.send_request(req).await,
+    }
+    .context("send pooled HTTP/1 request")?;
+    let can_reuse = !conn.is_closed();
+    let (parts, incoming) = response.into_parts();
+    // Keep the pooled H1 lease out of the idle queue until the response body
+    // reaches EOF. Returning the sender immediately after the response head
+    // makes a concurrent request wait on this busy connection instead of
+    // opening another socket, which serializes long-lived SSE requests.
+    let body = streaming_hyper_response_body(HyperIncomingBody::new(incoming), read_timeout, conn);
+    debug!(%addr, http1_reused = reused, can_reuse, "pooled HTTP/1 response head received");
+    Ok((Response::from_parts(parts, body), can_reuse))
+}
+
+fn prepare_hyper_request_headers(req: &mut Request<HttpBody>) {
+    // Framing follows the actual body, never downstream or channel override
+    // headers. Keeping stale CL/TE can truncate a request, poison H1 reuse, or
+    // create an ambiguous smuggling boundary. Hyper supplies chunked encoding
+    // automatically when a streaming body has no content length.
+    req.headers_mut().remove(header::CONTENT_LENGTH);
+    req.headers_mut().remove(header::TRANSFER_ENCODING);
+
+    let content_length = match req.body().stream_hint() {
+        monoio_http::common::body::StreamHint::None => Some(0),
+        monoio_http::common::body::StreamHint::Fixed => {
+            req.body().ready_data().map(|body| body.len())
+        }
+        monoio_http::common::body::StreamHint::Stream => None,
+    };
+    if let Some(content_length) = content_length {
+        let value = HeaderValue::from_str(&content_length.to_string())
+            .expect("usize content length is always a valid header value");
+        req.headers_mut().insert(header::CONTENT_LENGTH, value);
+    }
+}
+
+fn streaming_hyper_response_body<B, G>(
+    mut body: B,
+    read_timeout: Option<Duration>,
+    connection_guard: G,
+) -> HttpBody
+where
+    B: MonoioBody<Data = Bytes> + 'static,
+    B::Error: std::fmt::Display + 'static,
+    G: 'static,
+{
+    let (payload, mut sender) = stream_payload_pair::<Bytes, HttpError>();
+    monoio::spawn(async move {
+        loop {
+            let next = match read_timeout {
+                Some(read_timeout) => {
+                    match monoio::time::timeout(read_timeout, body.next_data()).await {
+                        Ok(next) => next,
+                        Err(_) => {
+                            sender.feed_error(HttpError::IOError(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "upstream response body idle timeout",
+                            )));
+                            sender.feed_data(None);
+                            break;
+                        }
+                    }
+                }
+                None => body.next_data().await,
+            };
+
+            match next {
+                Some(Ok(data)) => sender.feed_data(Some(data)),
+                Some(Err(error)) => {
+                    sender.feed_error(HttpError::IOError(std::io::Error::other(format!(
+                        "hyper upstream response body: {error}"
+                    ))));
+                    sender.feed_data(None);
+                    break;
+                }
+                None => {
+                    sender.feed_data(None);
+                    break;
+                }
+            }
+        }
+        // Drop the incoming body before returning the sender lease to the
+        // connector pool. On cancellation/error this lets Hyper mark the
+        // connection unusable before `Pooled::drop` evaluates it.
+        drop(body);
+        drop(connection_guard);
+    });
+    HttpBody::H1(Payload::Stream(payload))
 }
 
 pub(crate) struct OpenAiChatRelayRequest<CX> {
@@ -962,10 +1063,10 @@ impl RelayService {
             builder = builder.header("x-api-key", route.api_key.as_str());
         }
 
-        if self.pass_anthropic_beta {
-            if let Some(beta) = downstream_headers.get("anthropic-beta") {
-                builder = builder.header("anthropic-beta", beta);
-            }
+        if self.pass_anthropic_beta
+            && let Some(beta) = downstream_headers.get("anthropic-beta")
+        {
+            builder = builder.header("anthropic-beta", beta);
         }
         if let Some(user_agent) = downstream_headers.get(header::USER_AGENT) {
             builder = builder.header(header::USER_AGENT, user_agent);
@@ -2051,6 +2152,297 @@ fn resolve_header_override_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_channel::oneshot;
+    use monoio::{
+        io::{AsyncReadRent, AsyncWriteRentExt},
+        net::TcpListener,
+    };
+
+    #[test]
+    fn hyper_request_framing_is_rebuilt_from_the_actual_body() {
+        let mut fixed = Request::builder()
+            .header(header::CONTENT_LENGTH, "999")
+            .header(header::TRANSFER_ENCODING, "chunked")
+            .body(HttpBody::fixed_body(Some(Bytes::from_static(b"hello"))))
+            .expect("fixed request");
+        prepare_hyper_request_headers(&mut fixed);
+        assert_eq!(fixed.headers().get(header::CONTENT_LENGTH).unwrap(), "5");
+        assert!(!fixed.headers().contains_key(header::TRANSFER_ENCODING));
+
+        let (payload, _sender) = stream_payload_pair::<Bytes, HttpError>();
+        let mut streaming = Request::builder()
+            .header(header::CONTENT_LENGTH, "5")
+            .header(header::TRANSFER_ENCODING, "identity")
+            .body(HttpBody::H1(Payload::Stream(payload)))
+            .expect("streaming request");
+        prepare_hyper_request_headers(&mut streaming);
+        assert!(!streaming.headers().contains_key(header::CONTENT_LENGTH));
+        assert!(!streaming.headers().contains_key(header::TRANSFER_ENCODING));
+    }
+
+    #[monoio::test_all(enable_timer = true)]
+    async fn direct_http_returns_sse_before_eof_and_reuses_connection() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind slow SSE upstream");
+        let address = listener.local_addr().expect("slow SSE upstream address");
+        let (release_eof_tx, release_eof_rx) = oneshot::channel::<()>();
+
+        let server = monoio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept upstream connection");
+            let first = read_http_head(&mut stream).await;
+            assert!(first.starts_with(b"GET /events HTTP/1.1\r\n"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/event-stream\r\n\r\nd\r\ndata: first\n\n\r\n"
+                        .to_vec(),
+                )
+                .await
+                .0
+                .expect("write first SSE event");
+
+            release_eof_rx.await.expect("release first response EOF");
+            stream
+                .write_all(b"0\r\n\r\n".to_vec())
+                .await
+                .0
+                .expect("write first response EOF");
+
+            let second =
+                monoio::time::timeout(Duration::from_millis(500), read_http_head(&mut stream))
+                    .await
+                    .expect("second request must reuse the first TCP connection");
+            assert!(second.starts_with(b"GET /second HTTP/1.1\r\n"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+                        .to_vec(),
+                )
+                .await
+                .0
+                .expect("write second response");
+        });
+
+        let relay = RelayService {
+            claude_version:      Arc::from("2023-06-01"),
+            pass_anthropic_beta: true,
+            gemini_api_version:  Arc::from("v1beta"),
+            connect_timeout:     Some(Duration::from_millis(500)),
+            read_timeout:        Some(Duration::from_millis(500)),
+            dns:                 LocalDnsResolver::default(),
+            http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
+            https:               HttpsUpstream::default(),
+            proxy_transport:     ProxyTransportService::new(
+                Some(Duration::from_millis(500)),
+                Some(Duration::from_millis(500)),
+                crate::upstream_proxy::ProxyCircuitPolicy::new(3, Duration::from_millis(100)),
+            ),
+        };
+        let base_uri: Uri = format!("http://{address}/events")
+            .parse()
+            .expect("parse test URI");
+        let first_request = Request::builder()
+            .method(Method::GET)
+            .uri("/events")
+            .header(header::HOST, address.to_string())
+            .body(HttpBody::default())
+            .expect("build first request");
+
+        let first_response = monoio::time::timeout(
+            Duration::from_millis(500),
+            relay.send_upstream("test-channel", base_uri, first_request, &ProxyRoute::Direct),
+        )
+        .await
+        .expect("response head must arrive before upstream EOF")
+        .expect("first upstream response");
+        assert_eq!(first_response.status(), StatusCode::OK);
+        let mut first_body = first_response.into_body();
+        let first_chunk = monoio::time::timeout(Duration::from_millis(500), first_body.next_data())
+            .await
+            .expect("first SSE chunk must arrive before EOF")
+            .expect("first SSE body chunk")
+            .expect("valid first SSE body chunk");
+        assert_eq!(first_chunk, Bytes::from_static(b"data: first\n\n"));
+
+        release_eof_tx.send(()).expect("release first response EOF");
+        assert!(
+            monoio::time::timeout(Duration::from_millis(500), first_body.next_data())
+                .await
+                .expect("first response EOF timeout")
+                .is_none()
+        );
+
+        let second_uri: Uri = format!("http://{address}/second")
+            .parse()
+            .expect("parse second test URI");
+        let second_request = Request::builder()
+            .method(Method::GET)
+            .uri("/second")
+            .header(header::HOST, address.to_string())
+            .body(HttpBody::default())
+            .expect("build second request");
+        let second_response = monoio::time::timeout(
+            Duration::from_millis(500),
+            relay.send_upstream(
+                "test-channel",
+                second_uri,
+                second_request,
+                &ProxyRoute::Direct,
+            ),
+        )
+        .await
+        .expect("second response must use the pooled connection")
+        .expect("second upstream response");
+        let mut second_body = second_response.into_body();
+        assert_eq!(
+            second_body
+                .next_data()
+                .await
+                .expect("second response body")
+                .expect("valid second response body"),
+            Bytes::from_static(b"ok")
+        );
+        assert!(second_body.next_data().await.is_none());
+        server.await;
+    }
+
+    #[monoio::test_all(enable_timer = true)]
+    async fn concurrent_sse_requests_do_not_lease_the_same_http1_connection() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind concurrent SSE upstream");
+        let address = listener
+            .local_addr()
+            .expect("concurrent SSE upstream address");
+
+        let server = monoio::spawn(async move {
+            let (mut first_stream, _) = listener.accept().await.expect("accept first connection");
+            let first = read_http_head(&mut first_stream).await;
+            assert!(first.starts_with(b"GET /first HTTP/1.1\r\n"));
+            first_stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/event-stream\r\n\r\nd\r\ndata: first\n\n\r\n"
+                        .to_vec(),
+                )
+                .await
+                .0
+                .expect("write first in-flight SSE event");
+
+            // The first response deliberately remains open. A correct H1 pool
+            // therefore establishes a second TCP connection instead of waiting
+            // for the first sender to become ready.
+            let (mut second_stream, _) =
+                monoio::time::timeout(Duration::from_millis(500), listener.accept())
+                    .await
+                    .expect("concurrent request must open another TCP connection")
+                    .expect("accept second connection");
+            let second = read_http_head(&mut second_stream).await;
+            assert!(second.starts_with(b"GET /second HTTP/1.1\r\n"));
+            second_stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+                        .to_vec(),
+                )
+                .await
+                .0
+                .expect("write concurrent response");
+            first_stream
+                .write_all(b"0\r\n\r\n".to_vec())
+                .await
+                .0
+                .expect("finish first response");
+        });
+
+        let relay = RelayService {
+            claude_version:      Arc::from("2023-06-01"),
+            pass_anthropic_beta: true,
+            gemini_api_version:  Arc::from("v1beta"),
+            connect_timeout:     Some(Duration::from_millis(500)),
+            read_timeout:        Some(Duration::from_millis(500)),
+            dns:                 LocalDnsResolver::default(),
+            http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
+            https:               HttpsUpstream::default(),
+            proxy_transport:     ProxyTransportService::new(
+                Some(Duration::from_millis(500)),
+                Some(Duration::from_millis(500)),
+                crate::upstream_proxy::ProxyCircuitPolicy::new(3, Duration::from_millis(100)),
+            ),
+        };
+
+        let first_uri: Uri = format!("http://{address}/first")
+            .parse()
+            .expect("parse first URI");
+        let first_request = Request::builder()
+            .method(Method::GET)
+            .uri("/first")
+            .header(header::HOST, address.to_string())
+            .body(HttpBody::default())
+            .expect("build first request");
+        let first_response = relay
+            .send_upstream(
+                "test-channel",
+                first_uri,
+                first_request,
+                &ProxyRoute::Direct,
+            )
+            .await
+            .expect("first upstream response");
+        let mut first_body = first_response.into_body();
+        assert_eq!(
+            first_body
+                .next_data()
+                .await
+                .expect("first SSE body chunk")
+                .expect("valid first SSE body chunk"),
+            Bytes::from_static(b"data: first\n\n")
+        );
+
+        let second_uri: Uri = format!("http://{address}/second")
+            .parse()
+            .expect("parse second URI");
+        let second_request = Request::builder()
+            .method(Method::GET)
+            .uri("/second")
+            .header(header::HOST, address.to_string())
+            .body(HttpBody::default())
+            .expect("build second request");
+        let second_response = monoio::time::timeout(
+            Duration::from_millis(500),
+            relay.send_upstream(
+                "test-channel",
+                second_uri,
+                second_request,
+                &ProxyRoute::Direct,
+            ),
+        )
+        .await
+        .expect("concurrent response must not wait for first SSE EOF")
+        .expect("second upstream response");
+        let mut second_body = second_response.into_body();
+        assert_eq!(
+            second_body
+                .next_data()
+                .await
+                .expect("second response body")
+                .expect("valid second response body"),
+            Bytes::from_static(b"ok")
+        );
+        assert!(second_body.next_data().await.is_none());
+        assert!(first_body.next_data().await.is_none());
+        server.await;
+    }
+
+    async fn read_http_head(stream: &mut TcpStream) -> Vec<u8> {
+        let mut head = Vec::new();
+        loop {
+            let (result, buffer) = stream.read(vec![0u8; 1024]).await;
+            let read = result.expect("read HTTP request head");
+            assert!(read > 0, "unexpected EOF while reading HTTP request head");
+            head.extend_from_slice(&buffer[..read]);
+            if head.windows(4).any(|window| window == b"\r\n\r\n") {
+                return head;
+            }
+            assert!(head.len() <= 16 * 1024, "HTTP request head too large");
+        }
+    }
 
     #[test]
     fn authorization_override_suppresses_provider_api_key_header() {

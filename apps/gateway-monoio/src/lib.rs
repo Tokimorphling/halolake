@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use certain_map::{Param, ParamRef, ParamSet};
-use futures_channel::mpsc;
-use futures_util::StreamExt;
 use halolake_api_contract::{JsonValue, claude, gemini, openai};
 use halolake_control_plane::{
     ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError, ChannelFeedbackEvent,
@@ -19,8 +17,8 @@ use halolake_protocol::{
     openai_chat_to_gemini_response, openai_image_to_gemini_imagen_request,
 };
 use halolake_router_core::{
-    ChannelAffinityCache, ChannelAffinityCandidate, ChannelConfig, GatewaySnapshot,
-    IndexedSnapshot, Provider, RouteError,
+    ChannelAffinityCache, ChannelAffinityCandidate, ChannelAffinityRequest, ChannelConfig,
+    GatewaySnapshot, IndexedSnapshot, Provider, RouteError,
 };
 use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, header,
@@ -40,14 +38,14 @@ use monoio_transports::{
 use serde::{Deserialize, Serialize};
 use service_async::Service;
 use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
     convert::Infallible,
     error::Error,
     fs,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    rc::Rc,
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tracing::{Instrument, debug, error, info, warn};

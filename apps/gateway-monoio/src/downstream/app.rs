@@ -1,7 +1,7 @@
 //! Application routing service (business layer).
 
 use super::super::*;
-use monoio_http::common::body::{BodyExt, HttpBody};
+use monoio_http::common::body::HttpBody;
 use service_async::{
     MakeService,
     layer::{FactoryLayer, layer_fn},
@@ -61,14 +61,12 @@ impl Gateway {
         peer: SocketAddr,
     ) -> Response<HttpBody> {
         let request_id = RequestId(Uuid::new_v4().simple().to_string());
-        let method = req.method().clone();
-        let path = req.uri().path().to_string();
         let span = tracing::debug_span!(
             "gateway.request",
             request_id = %request_id.0,
             peer_addr = %peer,
-            %method,
-            %path,
+            method = %req.method(),
+            path = %req.uri().path(),
         );
 
         async move {
@@ -161,23 +159,33 @@ impl Gateway {
             .map_or(req.uri().path(), |pq| pq.as_str())
             .to_string();
         let headers = req.headers().clone();
-        let body = match req.into_body().bytes().await {
-            Ok(bytes) => bytes,
-            Err(err) => {
+        let mut source = req.into_body();
+        let mut collected = Vec::with_capacity(self.request_body_limit_bytes.min(8 * 1024));
+        while let Some(chunk) = MonoioBody::next_data(&mut source).await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    return Err(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request_error",
+                        &format!("failed to read request body: {err}"),
+                    ));
+                }
+            };
+            if chunk.len()
+                > self
+                    .request_body_limit_bytes
+                    .saturating_sub(collected.len())
+            {
                 return Err(json_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::PAYLOAD_TOO_LARGE,
                     "invalid_request_error",
-                    &format!("failed to read request body: {err}"),
+                    "request body exceeds configured limit",
                 ));
             }
-        };
-        if body.len() > self.request_body_limit_bytes {
-            return Err(json_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "invalid_request_error",
-                "request body exceeds configured limit",
-            ));
+            collected.extend_from_slice(&chunk);
         }
+        let body = Bytes::from(collected);
         Ok(GatewayRequest {
             headers,
             path,

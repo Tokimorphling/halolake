@@ -1,11 +1,14 @@
 use crate::{
     PublishSnapshotRequest, SnapshotError, SnapshotPublished, SnapshotRequest, SnapshotResponse,
-    UsageAck, UsageError, UsageEventBatch, UsageEventQuota, snapshot::snapshot_response,
+    UsageAck, UsageError, UsageEventBatch, UsageEventQuota,
 };
 use halolake_domain::UsageEvent;
 use halolake_router_core::GatewaySnapshot;
 use service_async::Service;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, RwLock},
+};
 
 #[derive(Debug, Clone)]
 pub struct MemorySnapshotBus {
@@ -35,9 +38,14 @@ impl Service<SnapshotRequest> for MemorySnapshotBus {
         let snapshot = self
             .inner
             .read()
-            .map_err(|_| SnapshotError::Poisoned("snapshot"))?
-            .clone();
-        Ok(snapshot_response(snapshot, req.since_version))
+            .map_err(|_| SnapshotError::Poisoned("snapshot"))?;
+        let version = snapshot.version;
+        if req.since_version.is_some_and(|since| since >= version) {
+            return Ok(SnapshotResponse::NotModified { version });
+        }
+        Ok(SnapshotResponse::Updated {
+            snapshot: snapshot.clone(),
+        })
     }
 }
 
@@ -62,31 +70,61 @@ impl Service<PublishSnapshotRequest> for MemorySnapshotBus {
     }
 }
 
+#[derive(Debug, Default)]
+struct MemoryUsageState {
+    events:      Vec<UsageEvent>,
+    request_ids: HashSet<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MemoryUsageEventSink {
-    inner: Arc<RwLock<Vec<UsageEvent>>>,
+    inner: Arc<RwLock<MemoryUsageState>>,
 }
 
 impl MemoryUsageEventSink {
     pub fn events(&self) -> Result<Vec<UsageEvent>, UsageError> {
         self.inner
             .read()
-            .map(|events| events.clone())
+            .map(|state| state.events.clone())
             .map_err(|_| UsageError::Poisoned("usage_events"))
+    }
+
+    /// Records only request ids that are not already present. The membership
+    /// check and append intentionally share one write lock so concurrent retry
+    /// batches cannot both be acknowledged and settled.
+    pub fn record_unique(&self, events: Vec<UsageEvent>) -> Result<Vec<UsageEvent>, UsageError> {
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| UsageError::Poisoned("usage_events"))?;
+        let mut accepted = Vec::with_capacity(events.len());
+        for event in events {
+            if state.request_ids.insert(event.request_id.clone()) {
+                accepted.push(event.clone());
+                state.events.push(event);
+            }
+        }
+        Ok(accepted)
     }
 
     pub fn delete_before_unix_seconds(&self, target_timestamp: i64) -> Result<usize, UsageError> {
         let mut removed = 0usize;
-        self.inner
+        let mut state = self
+            .inner
             .write()
-            .map_err(|_| UsageError::Poisoned("usage_events"))?
-            .retain(|event| {
-                let keep = event.created_at_unix_ms / 1000 >= target_timestamp;
-                if !keep {
-                    removed = removed.saturating_add(1);
-                }
-                keep
-            });
+            .map_err(|_| UsageError::Poisoned("usage_events"))?;
+        state.events.retain(|event| {
+            let keep = event.created_at_unix_ms / 1000 >= target_timestamp;
+            if !keep {
+                removed = removed.saturating_add(1);
+            }
+            keep
+        });
+        state.request_ids = state
+            .events
+            .iter()
+            .map(|event| event.request_id.clone())
+            .collect();
         Ok(removed)
     }
 
@@ -94,16 +132,17 @@ impl MemoryUsageEventSink {
         if quotas.is_empty() {
             return Ok(());
         }
-        let mut events = self
+        let mut state = self
             .inner
             .write()
             .map_err(|_| UsageError::Poisoned("usage_events"))?;
-        for quota in quotas {
-            if let Some(event) = events
-                .iter_mut()
-                .find(|event| event.request_id == quota.request_id)
-            {
-                event.quota = Some(quota.quota);
+        let quota_by_request = quotas
+            .iter()
+            .map(|quota| (quota.request_id.as_str(), quota.quota))
+            .collect::<HashMap<_, _>>();
+        for event in &mut state.events {
+            if let Some(quota) = quota_by_request.get(event.request_id.as_str()) {
+                event.quota = Some(*quota);
             }
         }
         Ok(())
@@ -115,11 +154,7 @@ impl Service<UsageEventBatch> for MemoryUsageEventSink {
     type Error = UsageError;
 
     async fn call(&self, req: UsageEventBatch) -> Result<Self::Response, Self::Error> {
-        let accepted = req.len();
-        self.inner
-            .write()
-            .map_err(|_| UsageError::Poisoned("usage_events"))?
-            .extend(req.events);
+        let accepted = self.record_unique(req.events)?.len();
         Ok(UsageAck { accepted })
     }
 }

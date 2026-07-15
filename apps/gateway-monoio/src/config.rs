@@ -32,6 +32,11 @@ pub struct ServerConfig {
     pub listen:                   SocketAddr,
     #[serde(default = "default_body_limit")]
     pub request_body_limit_bytes: usize,
+    /// Total time allowed to receive a downstream request body. This deadline
+    /// stops once the body decoder reaches EOF, so upstream model latency is
+    /// not included.
+    #[serde(default = "default_request_body_timeout_ms")]
+    pub request_body_timeout_ms:  u64,
     /// Number of thread-per-core workers. Each worker runs its own monoio
     /// runtime and binds the listen address with SO_REUSEPORT, so the kernel
     /// load-balances connections across cores with no shared accept lock.
@@ -45,6 +50,7 @@ impl Default for ServerConfig {
         Self {
             listen:                   default_listen(),
             request_body_limit_bytes: default_body_limit(),
+            request_body_timeout_ms:  default_request_body_timeout_ms(),
             workers:                  0,
         }
     }
@@ -104,7 +110,7 @@ pub struct AuthConfig {
     pub accept_x_api_key: bool,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ControlPlaneConfig {
     #[serde(default)]
     pub snapshot_url:              Option<String>,
@@ -116,12 +122,45 @@ pub struct ControlPlaneConfig {
     pub system_instance_url:       Option<String>,
     #[serde(default)]
     pub internal_key:              Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_control_connect_timeout_ms")]
     pub connect_timeout_ms:        Option<u64>,
-    #[serde(default)]
+    #[serde(default = "default_control_read_timeout_ms")]
     pub read_timeout_ms:           Option<u64>,
     #[serde(default)]
     pub snapshot_poll_interval_ms: Option<u64>,
+    /// Maximum events per worker-local control-plane request. Batching keeps
+    /// accounting and feedback traffic out of the gateway request hot path.
+    #[serde(default = "default_report_batch_size")]
+    pub report_batch_size:         usize,
+    /// How long the worker-local reporter may wait for a partial batch.
+    #[serde(default = "default_report_flush_interval_ms")]
+    pub report_flush_interval_ms:  u64,
+    /// Soft per-worker pending-event threshold used for saturation warnings.
+    /// Events remain queued until a durable outbox is available.
+    #[serde(default = "default_report_queue_capacity")]
+    pub report_queue_capacity:     usize,
+    /// Maximum concurrent control-plane batch requests per worker and reporter.
+    #[serde(default = "default_report_max_in_flight")]
+    pub report_max_in_flight:      usize,
+}
+
+impl Default for ControlPlaneConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_url:              None,
+            usage_url:                 None,
+            channel_feedback_url:      None,
+            system_instance_url:       None,
+            internal_key:              None,
+            connect_timeout_ms:        default_control_connect_timeout_ms(),
+            read_timeout_ms:           default_control_read_timeout_ms(),
+            snapshot_poll_interval_ms: None,
+            report_batch_size:         default_report_batch_size(),
+            report_flush_interval_ms:  default_report_flush_interval_ms(),
+            report_queue_capacity:     default_report_queue_capacity(),
+            report_max_in_flight:      default_report_max_in_flight(),
+        }
+    }
 }
 
 impl Default for AuthConfig {
@@ -139,6 +178,10 @@ fn default_listen() -> SocketAddr {
 
 fn default_body_limit() -> usize {
     16 * 1024 * 1024
+}
+
+fn default_request_body_timeout_ms() -> u64 {
+    30_000
 }
 
 fn default_claude_version() -> String {
@@ -159,6 +202,30 @@ fn default_proxy_failure_threshold() -> u32 {
 
 fn default_proxy_cooldown_ms() -> u64 {
     15_000
+}
+
+fn default_report_batch_size() -> usize {
+    128
+}
+
+fn default_control_connect_timeout_ms() -> Option<u64> {
+    Some(10_000)
+}
+
+fn default_control_read_timeout_ms() -> Option<u64> {
+    Some(30_000)
+}
+
+fn default_report_flush_interval_ms() -> u64 {
+    5
+}
+
+fn default_report_queue_capacity() -> usize {
+    2_048
+}
+
+fn default_report_max_in_flight() -> usize {
+    4
 }
 
 fn default_true() -> bool {
@@ -184,5 +251,20 @@ proxy_cooldown_ms = 1
         .expect("disabled proxy circuit config");
         assert_eq!(disabled.proxy_failure_threshold, 0);
         assert_eq!(disabled.proxy_cooldown_ms, 1);
+    }
+
+    #[test]
+    fn control_reporter_uses_throughput_oriented_defaults() {
+        let config: ControlPlaneConfig = toml::from_str("").expect("default control config");
+        assert_eq!(config.report_batch_size, 128);
+        assert_eq!(config.report_flush_interval_ms, 5);
+        assert_eq!(config.report_queue_capacity, 2_048);
+        assert_eq!(config.report_max_in_flight, 4);
+        assert_eq!(config.connect_timeout_ms, Some(10_000));
+        assert_eq!(config.read_timeout_ms, Some(30_000));
+        assert_eq!(
+            config.report_batch_size,
+            ControlPlaneConfig::default().report_batch_size
+        );
     }
 }

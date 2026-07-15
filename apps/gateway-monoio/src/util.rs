@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
@@ -44,6 +45,66 @@ where
     }
 }
 
+const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone, Copy)]
+struct CachedDnsAddress {
+    address:    SocketAddr,
+    expires_at: Instant,
+}
+
+/// Worker-local DNS cache. Blocking libc resolution runs on the shared monoio
+/// blocking pool so a cache miss cannot stall every connection on a
+/// thread-per-core worker.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LocalDnsResolver {
+    entries: Rc<RefCell<HashMap<String, HashMap<u16, CachedDnsAddress>>>>,
+}
+
+impl LocalDnsResolver {
+    pub(crate) async fn resolve(&self, host: &str, port: u16) -> Result<SocketAddr> {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Ok(SocketAddr::new(ip, port));
+        }
+        let now = Instant::now();
+        if let Some(address) = self
+            .entries
+            .borrow()
+            .get(host)
+            .and_then(|ports| ports.get(&port))
+            .filter(|entry| entry.expires_at > now)
+            .map(|entry| entry.address)
+        {
+            return Ok(address);
+        }
+
+        let host_owned = host.to_string();
+        let lookup = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        let address = monoio::spawn_blocking(move || {
+            lookup
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| std::io::Error::other("DNS returned no addresses"))
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("DNS worker failed: {err:?}"))?
+        .with_context(|| format!("resolve {host}:{port}"))?;
+        self.entries
+            .borrow_mut()
+            .entry(host_owned)
+            .or_default()
+            .insert(port, CachedDnsAddress {
+                address,
+                expires_at: Instant::now() + DNS_CACHE_TTL,
+            });
+        Ok(address)
+    }
+}
+
 pub(crate) fn debug_relay<CX>(cx: &CX, stream: bool, body: Option<&[u8]>)
 where
     CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
@@ -52,10 +113,10 @@ where
     let auth = ParamRef::<RequestAuth>::param_ref(cx);
     let request_id = ParamRef::<RequestId>::param_ref(cx);
     let peer = ParamRef::<PeerAddr>::param_ref(cx);
-    let summary = body.map(request_body_summary).unwrap_or_default();
-    // Keep hot-path body previews off the default info level: even redacted
-    // previews can leak prompt fragments into production logs.
-    info!(
+    // Per-request access logs stay at DEBUG. Usage accounting and aggregate
+    // telemetry carry production metrics without formatting two INFO events
+    // for every proxied request.
+    debug!(
         request_id = %request_id.0,
         peer_addr = %peer.0,
         user_id = %auth.user_id,
@@ -68,23 +129,35 @@ where
         upstream_model = %route.upstream_model,
         stream,
         body_bytes = body.map(|b| b.len()).unwrap_or(0),
-        message_count = summary.message_count,
-        max_tokens = ?summary.max_tokens,
-        temperature = ?summary.temperature,
-        top_p = ?summary.top_p,
-        reasoning_effort = ?summary.reasoning_effort,
-        thinking_budget = ?summary.thinking_budget,
-        has_tools = summary.has_tools,
-        has_images = summary.has_images,
         "relay request"
     );
-    if tracing::enabled!(tracing::Level::DEBUG) {
+
+    // Parsing and recursively redacting a prompt-sized JSON value is expensive.
+    // Only pay that cost when a DEBUG subscriber will actually record the
+    // structural summary and preview.
+    if let Some(summary) = debug_body_summary(tracing::enabled!(tracing::Level::DEBUG), body) {
         debug!(
             request_id = %request_id.0,
+            message_count = summary.message_count,
+            max_tokens = ?summary.max_tokens,
+            temperature = ?summary.temperature,
+            top_p = ?summary.top_p,
+            reasoning_effort = ?summary.reasoning_effort,
+            thinking_budget = ?summary.thinking_budget,
+            has_tools = summary.has_tools,
+            has_images = summary.has_images,
             body_preview = %summary.preview,
-            "relay request body preview"
+            "relay request body summary"
         );
     }
+}
+
+#[inline]
+fn debug_body_summary(enabled: bool, body: Option<&[u8]>) -> Option<RequestBodySummary> {
+    if !enabled {
+        return None;
+    }
+    Some(body.map(request_body_summary).unwrap_or_default())
 }
 
 /// Redacted structural summary of a chat-like request body.
@@ -102,6 +175,9 @@ pub(crate) struct RequestBodySummary {
 }
 
 pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
+    #[cfg(test)]
+    REQUEST_BODY_SUMMARY_INVOCATIONS.with(|count| count.set(count.get() + 1));
+
     let Ok(value) = serde_json::from_slice::<JsonValue>(body) else {
         return RequestBodySummary {
             preview: format!("<non-json body {}B>", body.len()),
@@ -139,6 +215,18 @@ pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
         || value.get("tools").is_some() && value.get("tool_config").is_some();
     summary.preview = redact_json_preview(&value, 512);
     summary
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static REQUEST_BODY_SUMMARY_INVOCATIONS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn request_body_summary_invocations() -> usize {
+    REQUEST_BODY_SUMMARY_INVOCATIONS.with(std::cell::Cell::get)
 }
 
 /// Align with new-api `ForceStreamOption` / OpenAI adaptor:
@@ -365,7 +453,7 @@ pub(crate) fn log_response_usage(
     upstream_request_id: &str,
     is_stream: bool,
 ) {
-    info!(
+    debug!(
         %request_id,
         status = status.as_u16(),
         latency_ms,
@@ -386,6 +474,18 @@ pub(crate) fn log_response_usage(
 mod redact_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn skips_body_parse_and_redaction_when_debug_is_disabled() {
+        let body = br#"{"messages":[{"role":"user","content":"large prompt"}]}"#;
+        let before = request_body_summary_invocations();
+
+        assert!(debug_body_summary(false, Some(body)).is_none());
+        assert_eq!(request_body_summary_invocations(), before);
+
+        assert!(debug_body_summary(true, Some(body)).is_some());
+        assert_eq!(request_body_summary_invocations(), before + 1);
+    }
 
     #[test]
     fn redacts_message_content_and_api_keys() {
@@ -521,12 +621,12 @@ pub(crate) fn write_sse_data(out: &mut Vec<u8>, event: &str) {
 }
 
 pub(crate) fn write_claude_sse_event(out: &mut Vec<u8>, event: &str) {
-    if let Ok(value) = serde_json::from_str::<JsonValue>(event) {
-        if let Some(event_type) = value.get("type").and_then(JsonValue::as_str) {
-            out.extend_from_slice(b"event: ");
-            out.extend_from_slice(event_type.as_bytes());
-            out.extend_from_slice(b"\n");
-        }
+    if let Ok(value) = serde_json::from_str::<JsonValue>(event)
+        && let Some(event_type) = value.get("type").and_then(JsonValue::as_str)
+    {
+        out.extend_from_slice(b"event: ");
+        out.extend_from_slice(event_type.as_bytes());
+        out.extend_from_slice(b"\n");
     }
     out.extend_from_slice(b"data: ");
     out.extend_from_slice(event.as_bytes());
@@ -563,6 +663,53 @@ pub(crate) fn now_unix_ms_i64() -> i64 {
         .unwrap_or_default()
 }
 
+/// Cheap prefilter for SSE frames before attempting full JSON deserialization.
+///
+/// Most token-stream frames only carry deltas. Usage is emitted in a small
+/// terminal subset: OpenAI/Claude use `usage`, Gemini uses `usageMetadata`, and
+/// the Responses API terminates with `response.completed`. A false positive is
+/// harmless (the regular parser still validates the payload), while a false
+/// negative would lose accounting data, so the check deliberately stays broad.
+#[inline]
+pub(crate) fn may_contain_response_usage(payload: &[u8]) -> bool {
+    contains_json_key(payload, b"\"usage\"")
+        || contains_json_key(payload, b"\"usageMetadata\"")
+        || contains_bytes(payload, b"response.completed")
+}
+
+#[inline]
+fn contains_json_key(payload: &[u8], quoted_key: &[u8]) -> bool {
+    let mut offset = 0;
+    while let Some(relative) = find_bytes(&payload[offset..], quoted_key) {
+        let after_key = offset + relative + quoted_key.len();
+        if payload[after_key..]
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace())
+            == Some(b':')
+        {
+            return true;
+        }
+        offset = after_key;
+    }
+    false
+}
+
+#[inline]
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    find_bytes(haystack, needle).is_some()
+}
+
+#[inline]
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 #[derive(Default)]
 pub(crate) struct SseBuffer {
     pending: Vec<u8>,
@@ -574,6 +721,19 @@ impl SseBuffer {
     }
 
     pub(crate) fn push_with_done(&mut self, bytes: &[u8], include_done: bool) -> Vec<String> {
+        let mut payloads = Vec::new();
+        self.for_each_payload(bytes, include_done, |payload| {
+            payloads.push(String::from_utf8_lossy(payload).into_owned());
+        });
+        payloads
+    }
+
+    pub(crate) fn for_each_payload(
+        &mut self,
+        bytes: &[u8],
+        include_done: bool,
+        mut on_payload: impl FnMut(&[u8]),
+    ) {
         // Buffer raw bytes and only decode complete events. Decoding each
         // network chunk eagerly (the previous `from_utf8_lossy` per chunk) turned
         // any multi-byte scalar split across a chunk boundary into U+FFFD, which
@@ -581,19 +741,23 @@ impl SseBuffer {
         // Event boundaries are blank lines whose bytes (`\n`/`\r`) never appear
         // inside a UTF-8 scalar, so a complete event always holds whole scalars.
         self.pending.extend_from_slice(bytes);
-        let mut payloads = Vec::new();
+        let mut consumed = 0;
 
-        while let Some((content_end, sep_len)) = find_event_boundary(&self.pending) {
-            let event: Vec<u8> = self.pending.drain(..content_end + sep_len).collect();
-            let event = String::from_utf8_lossy(&event[..content_end]);
-            for payload in sse_event_payloads(&event) {
-                if include_done || payload != "[DONE]" {
-                    payloads.push(payload);
-                }
-            }
+        while let Some((content_len, sep_len)) = find_event_boundary(&self.pending[consumed..]) {
+            let content_end = consumed + content_len;
+            emit_sse_event_payload(
+                &self.pending[consumed..content_end],
+                include_done,
+                &mut on_payload,
+            );
+            consumed = content_end + sep_len;
         }
-
-        payloads
+        if consumed > 0 {
+            // Compact once per network chunk rather than once per SSE event.
+            // A chunk containing hundreds of deltas otherwise repeatedly moved
+            // the same tail bytes and degraded toward quadratic work.
+            self.pending.drain(..consumed);
+        }
     }
 }
 
@@ -618,25 +782,86 @@ fn find_event_boundary(buf: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-fn sse_event_payloads(event: &str) -> Vec<String> {
-    let mut data = Vec::new();
-    for line in event.lines() {
-        if let Some(payload) = line.strip_prefix("data:") {
-            // Trim a trailing CR: `str::lines()` strips interior `\r\n`, but the
-            // event's final line keeps its `\r` when the separator was `\r\n\r\n`.
-            data.push(payload.trim_start().trim_end_matches('\r'));
+fn emit_sse_event_payload(event: &[u8], include_done: bool, on_payload: &mut impl FnMut(&[u8])) {
+    let mut first: Option<&[u8]> = None;
+    let mut joined = Vec::new();
+    for line in event.split(|byte| *byte == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if let Some(payload) = line.strip_prefix(b"data:") {
+            let payload = trim_ascii_start(payload);
+            if let Some(previous) = first.take() {
+                joined.reserve(previous.len() + payload.len() + 1);
+                joined.extend_from_slice(previous);
+                joined.push(b'\n');
+                joined.extend_from_slice(payload);
+            } else if joined.is_empty() {
+                first = Some(payload);
+            } else {
+                joined.push(b'\n');
+                joined.extend_from_slice(payload);
+            }
         }
     }
-    if data.is_empty() {
-        Vec::new()
+    let payload = if joined.is_empty() {
+        first
     } else {
-        vec![data.join("\n")]
+        Some(joined.as_slice())
+    };
+    if let Some(payload) = payload
+        && !payload.is_empty()
+        && (include_done || payload != b"[DONE]")
+    {
+        on_payload(payload);
     }
+}
+
+fn trim_ascii_start(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    value
 }
 
 #[cfg(test)]
 mod sse_buffer_tests {
-    use super::SseBuffer;
+    use super::{SseBuffer, may_contain_response_usage};
+
+    #[test]
+    fn usage_prefilter_skips_regular_provider_deltas() {
+        assert!(!may_contain_response_usage(
+            br#"{"choices":[{"delta":{"content":"hello"}}]}"#,
+        ));
+        assert!(!may_contain_response_usage(
+            br#"{"type":"content_block_delta","delta":{"text":"hello"}}"#,
+        ));
+        assert!(!may_contain_response_usage(
+            br#"{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}"#,
+        ));
+    }
+
+    #[test]
+    fn usage_prefilter_keeps_all_supported_usage_shapes() {
+        assert!(may_contain_response_usage(
+            br#"{"usage":{"prompt_tokens":12,"completion_tokens":4}}"#,
+        ));
+        assert!(may_contain_response_usage(
+            br#"{"type":"message_delta","usage" : {"output_tokens":5}}"#,
+        ));
+        assert!(may_contain_response_usage(
+            br#"{"usageMetadata":{"promptTokenCount":9}}"#,
+        ));
+        assert!(may_contain_response_usage(
+            br#"{"type":"response.completed","response":{"id":"resp_1"}}"#,
+        ));
+    }
+
+    #[test]
+    fn usage_prefilter_requires_usage_to_be_a_json_key() {
+        assert!(!may_contain_response_usage(
+            br#"{"message":"the word usage is not accounting data"}"#,
+        ));
+        assert!(!may_contain_response_usage(br#"{"kind":"usage"}"#));
+    }
 
     #[test]
     fn reassembles_multibyte_scalar_split_across_chunks() {
@@ -656,6 +881,15 @@ mod sse_buffer_tests {
         let mut buffer = SseBuffer::default();
         let payloads = buffer.push(b"data: one\r\n\r\ndata: two\r\n\r\n");
         assert_eq!(payloads, vec!["one".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn joins_multiple_data_lines_without_changing_sse_semantics() {
+        let mut buffer = SseBuffer::default();
+        assert_eq!(
+            buffer.push(b"event: message\ndata: first\ndata: second\n\n"),
+            vec!["first\nsecond".to_string()]
+        );
     }
 
     #[test]

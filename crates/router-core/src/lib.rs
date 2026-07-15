@@ -3,9 +3,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::IpAddr,
-    sync::RwLock,
+    sync::{
+        Mutex, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -225,9 +228,10 @@ impl ChannelConfig {
         self.groups.dedup();
     }
 
-    fn serves_group(&self, group: &str) -> bool {
-        let group = normalize_group(group);
-        self.groups.iter().any(|item| item == &group)
+    fn serves_normalized_group(&self, group: &str) -> bool {
+        self.groups
+            .binary_search_by(|candidate| candidate.as_str().cmp(group))
+            .is_ok()
     }
 }
 
@@ -321,6 +325,15 @@ pub struct ChannelAffinityCandidate {
     pub rule_name:         String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ChannelAffinityRequest<'a> {
+    pub requested_model: &'a str,
+    pub path:            &'a str,
+    pub user_agent:      &'a str,
+    pub using_group:     &'a str,
+    pub body:            &'a [u8],
+}
+
 #[derive(Debug, Clone)]
 struct IndexedChannelAffinity {
     config: ChannelAffinityConfig,
@@ -352,9 +365,25 @@ struct ChannelAffinityCacheEntry {
 ///
 /// Owning it separately lets a worker keep one cache alive across snapshot
 /// swaps. It is `Send + Sync` so it can also be shared behind an `Arc`.
-#[derive(Debug, Default)]
+const AFFINITY_CACHE_SHARDS: usize = 64;
+
+#[derive(Debug)]
 pub struct ChannelAffinityCache {
-    entries: RwLock<HashMap<String, ChannelAffinityCacheEntry>>,
+    shards:          [RwLock<HashMap<String, ChannelAffinityCacheEntry>>; AFFINITY_CACHE_SHARDS],
+    entry_count:     AtomicUsize,
+    insertion_lock:  Mutex<()>,
+    eviction_cursor: AtomicUsize,
+}
+
+impl Default for ChannelAffinityCache {
+    fn default() -> Self {
+        Self {
+            shards:          std::array::from_fn(|_| RwLock::new(HashMap::new())),
+            entry_count:     AtomicUsize::new(0),
+            insertion_lock:  Mutex::new(()),
+            eviction_cursor: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl ChannelAffinityCache {
@@ -364,55 +393,165 @@ impl ChannelAffinityCache {
 
     fn get(&self, cache_key: &str) -> Option<String> {
         let now = Instant::now();
-        let mut cache = self.entries.write().ok()?;
-        let entry = cache.get(cache_key)?;
-        if entry.expires_at <= now {
-            cache.remove(cache_key);
-            return None;
+        let shard = self.shard(cache_key);
+        {
+            let cache = shard.read().ok()?;
+            let entry = cache.get(cache_key)?;
+            if entry.expires_at > now {
+                return Some(entry.channel_id.clone());
+            }
         }
-        Some(entry.channel_id.clone())
+        let mut cache = shard.write().ok()?;
+        match cache.get(cache_key) {
+            Some(entry) if entry.expires_at > now => Some(entry.channel_id.clone()),
+            Some(_) => {
+                if cache.remove(cache_key).is_some() {
+                    self.entry_count.fetch_sub(1, Ordering::Relaxed);
+                }
+                None
+            }
+            None => None,
+        }
     }
 
     fn clear(&self, cache_key: &str) {
-        if let Ok(mut cache) = self.entries.write() {
-            cache.remove(cache_key);
+        if let Ok(mut cache) = self.shard(cache_key).write()
+            && cache.remove(cache_key).is_some()
+        {
+            self.entry_count.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
     fn record(&self, affinity: &ChannelAffinityCandidate, channel_id: &str, max_entries: usize) {
         let ttl = Duration::from_secs(affinity.ttl_seconds.max(1));
-        let mut cache = match self.entries.write() {
+        let expires_at = Instant::now() + ttl;
+        let shard = self.shard(&affinity.cache_key);
+        let mut cache = match shard.write() {
             Ok(cache) => cache,
             Err(_) => return,
         };
-        if cache.len() >= max_entries.max(1)
-            && !cache.contains_key(&affinity.cache_key)
-            && let Some(expired_key) = cache
+        if let Some(entry) = cache.get_mut(&affinity.cache_key) {
+            entry.channel_id.clear();
+            entry.channel_id.push_str(channel_id);
+            entry.expires_at = expires_at;
+            return;
+        }
+        drop(cache);
+
+        // Cache hits only touch one shard. Serialize new-key admission so the
+        // process-wide capacity remains bounded without putting a global lock
+        // on every affinity read.
+        let _insertion = match self.insertion_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        let mut cache = match shard.write() {
+            Ok(cache) => cache,
+            Err(_) => return,
+        };
+        if let Some(entry) = cache.get_mut(&affinity.cache_key) {
+            entry.channel_id.clear();
+            entry.channel_id.push_str(channel_id);
+            entry.expires_at = expires_at;
+            return;
+        }
+        drop(cache);
+
+        if self.entry_count.load(Ordering::Relaxed) >= max_entries.max(1) {
+            self.evict_one();
+        }
+
+        let mut cache = match shard.write() {
+            Ok(cache) => cache,
+            Err(_) => return,
+        };
+        cache.insert(affinity.cache_key.clone(), ChannelAffinityCacheEntry {
+            channel_id: channel_id.to_string(),
+            expires_at,
+        });
+        self.entry_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn shard(&self, cache_key: &str) -> &RwLock<HashMap<String, ChannelAffinityCacheEntry>> {
+        &self.shards[affinity_shard_index(cache_key)]
+    }
+
+    fn evict_one(&self) {
+        let start = self.eviction_cursor.fetch_add(1, Ordering::Relaxed);
+        for offset in 0..AFFINITY_CACHE_SHARDS {
+            let index = (start + offset) % AFFINITY_CACHE_SHARDS;
+            let Ok(mut cache) = self.shards[index].write() else {
+                continue;
+            };
+            let Some(victim) = cache
                 .iter()
                 .min_by_key(|(_, entry)| entry.expires_at)
                 .map(|(key, _)| key.clone())
-        {
-            cache.remove(&expired_key);
+            else {
+                continue;
+            };
+            cache.remove(&victim);
+            self.entry_count.fetch_sub(1, Ordering::Relaxed);
+            return;
         }
-        cache.insert(affinity.cache_key.clone(), ChannelAffinityCacheEntry {
-            channel_id: channel_id.to_string(),
-            expires_at: Instant::now() + ttl,
-        });
     }
+}
+
+#[inline]
+fn affinity_shard_index(cache_key: &str) -> usize {
+    // Stable FNV-1a is cheaper than constructing a randomized hasher solely to
+    // select one of a power-of-two number of shards.
+    let hash = cache_key
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+    hash as usize & (AFFINITY_CACHE_SHARDS - 1)
 }
 
 #[derive(Debug)]
 pub struct IndexedSnapshot {
     version:  u64,
     tokens:   HashMap<String, IndexedToken>,
-    channels: HashMap<String, ChannelConfig>,
-    mappings: HashMap<String, Vec<ModelMapping>>,
+    channels: Vec<ChannelConfig>,
+    mappings: HashMap<String, IndexedModelRoutes>,
     affinity: IndexedChannelAffinity,
+}
+
+#[derive(Debug)]
+struct IndexedModelRoutes {
+    mappings:    Vec<ModelMapping>,
+    by_channel:  HashMap<String, IndexedRouteCandidate>,
+    groups:      HashMap<String, IndexedRouteGroup>,
+    has_channel: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IndexedRouteCandidate {
+    mapping_index:  usize,
+    channel_index:  usize,
+    serves_mapping: bool,
+}
+
+#[derive(Debug, Default)]
+struct IndexedRouteGroup {
+    has_enabled_channel: bool,
+    total_weight:        u64,
+    candidates:          Vec<IndexedWeightedRoute>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IndexedWeightedRoute {
+    mapping_index:     usize,
+    channel_index:     usize,
+    cumulative_weight: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct IndexedToken {
     config:                   TokenConfig,
+    allowed_model_index:      Option<HashSet<Box<str>>>,
     ip_restricted:            bool,
     ip_rules:                 Vec<IpAllowRule>,
     usable_groups:            Vec<String>,
@@ -441,8 +580,16 @@ impl IndexedToken {
         } else {
             vec![config.group.clone()]
         };
+        let allowed_model_index = (config.allowed_models.len() > 8).then(|| {
+            config
+                .allowed_models
+                .iter()
+                .map(|model| Box::<str>::from(model.as_str()))
+                .collect()
+        });
         Self {
             config,
+            allowed_model_index,
             ip_restricted,
             ip_rules,
             usable_groups,
@@ -474,6 +621,19 @@ impl IndexedToken {
 
     pub fn allowed_models(&self) -> &[String] {
         &self.config.allowed_models
+    }
+
+    fn allows_model(&self, model: &str) -> bool {
+        self.config.allowed_models.is_empty()
+            || self.allowed_model_index.as_ref().map_or_else(
+                || {
+                    self.config
+                        .allowed_models
+                        .iter()
+                        .any(|allowed| allowed == model)
+                },
+                |allowed| allowed.contains(model),
+            )
     }
 
     fn allows_ip(&self, ip: IpAddr) -> bool {
@@ -546,6 +706,60 @@ impl IpAllowRule {
     }
 }
 
+impl IndexedModelRoutes {
+    fn new(
+        mappings: Vec<ModelMapping>,
+        channels: &[ChannelConfig],
+        channel_indices: &HashMap<String, usize>,
+    ) -> Self {
+        let mut by_channel = HashMap::with_capacity(mappings.len());
+        let mut groups = HashMap::<String, IndexedRouteGroup>::new();
+        let mut has_channel = false;
+
+        for (mapping_index, mapping) in mappings.iter().enumerate() {
+            let Some(channel_index) = channel_indices.get(&mapping.channel_id).copied() else {
+                continue;
+            };
+            has_channel = true;
+            let channel = &channels[channel_index];
+            let serves_mapping = channel_serves_mapping(channel, mapping);
+            by_channel
+                .entry(mapping.channel_id.clone())
+                .or_insert(IndexedRouteCandidate {
+                    mapping_index,
+                    channel_index,
+                    serves_mapping,
+                });
+
+            for using_group in &channel.groups {
+                let group = groups.entry(using_group.clone()).or_default();
+                if !channel.enabled {
+                    continue;
+                }
+                group.has_enabled_channel = true;
+                if !serves_mapping {
+                    continue;
+                }
+                group.total_weight = group
+                    .total_weight
+                    .saturating_add(u64::from(channel.weight.max(1)));
+                group.candidates.push(IndexedWeightedRoute {
+                    mapping_index,
+                    channel_index,
+                    cumulative_weight: group.total_weight,
+                });
+            }
+        }
+
+        Self {
+            mappings,
+            by_channel,
+            groups,
+            has_channel,
+        }
+    }
+}
+
 impl IndexedSnapshot {
     pub fn version(&self) -> u64 {
         self.version
@@ -600,13 +814,7 @@ impl IndexedSnapshot {
     ) -> Result<RouteDecision<'a>, RouteError> {
         // No affinity candidate, so the affinity cache is never consulted; go
         // straight to weighted routing rather than requiring a cache handle.
-        if !auth.token.allowed_models().is_empty()
-            && !auth
-                .token
-                .allowed_models()
-                .iter()
-                .any(|model| model == requested_model)
-        {
+        if !auth.token.allows_model(requested_model) {
             return Err(RouteError::ModelForbidden);
         }
         self.route_weighted(auth, requested_model, seed)
@@ -620,13 +828,7 @@ impl IndexedSnapshot {
         cache: &ChannelAffinityCache,
         seed: u64,
     ) -> Result<(RouteDecision<'a>, bool), RouteError> {
-        if !auth.token.allowed_models().is_empty()
-            && !auth
-                .token
-                .allowed_models()
-                .iter()
-                .any(|model| model == requested_model)
-        {
+        if !auth.token.allows_model(requested_model) {
             return Err(RouteError::ModelForbidden);
         }
 
@@ -647,17 +849,20 @@ impl IndexedSnapshot {
 
     pub fn resolve_affinity<F>(
         &self,
-        requested_model: &str,
-        path: &str,
-        user_agent: &str,
-        using_group: &str,
-        body: &[u8],
+        request: ChannelAffinityRequest<'_>,
         cache: &ChannelAffinityCache,
         mut header_value: F,
     ) -> Option<ChannelAffinityCandidate>
     where
         F: FnMut(&str) -> Option<String>,
     {
+        let ChannelAffinityRequest {
+            requested_model,
+            path,
+            user_agent,
+            using_group,
+            body,
+        } = request;
         if !self.affinity.config.enabled {
             return None;
         }
@@ -755,63 +960,38 @@ impl IndexedSnapshot {
             .mappings
             .get(requested_model)
             .ok_or(RouteError::ModelNotFound)?;
-        let mut saw_channel = false;
         let mut saw_enabled = false;
         for using_group in &auth.token.route_groups {
-            let mut total_weight = 0u64;
-            for mapping in mappings {
-                let Some(channel) = self.channels.get(&mapping.channel_id) else {
-                    continue;
-                };
-                saw_channel = true;
-                if !channel.enabled {
-                    continue;
-                }
-                if !channel.serves_group(using_group) {
-                    continue;
-                }
-                saw_enabled = true;
-                if !channel_serves_mapping(channel, mapping) {
-                    continue;
-                }
-                total_weight = total_weight.saturating_add(u64::from(channel.weight.max(1)));
-            }
-            if total_weight == 0 {
+            let Some(group) = mappings.groups.get(using_group) else {
+                continue;
+            };
+            saw_enabled |= group.has_enabled_channel;
+            if group.total_weight == 0 {
                 continue;
             }
-
-            let mut slot = seed % total_weight;
-            for mapping in mappings {
-                let Some(channel) = self.channels.get(&mapping.channel_id) else {
-                    continue;
-                };
-                if !channel.enabled
-                    || !channel.serves_group(using_group)
-                    || !channel_serves_mapping(channel, mapping)
-                {
-                    continue;
-                }
-                let weight = u64::from(channel.weight.max(1));
-                if slot < weight {
-                    return Ok(RouteDecision {
-                        user_id: auth.token.user_id(),
-                        channel,
-                        using_group,
-                        requested_model,
-                        upstream_model: &mapping.upstream_model,
-                    });
-                }
-                slot -= weight;
-            }
-            unreachable!("positive total route weight must select a candidate")
+            let slot = seed % group.total_weight;
+            let candidate_index = group
+                .candidates
+                .partition_point(|candidate| candidate.cumulative_weight <= slot);
+            let candidate = &group.candidates[candidate_index];
+            let mapping = &mappings.mappings[candidate.mapping_index];
+            return Ok(RouteDecision {
+                user_id: auth.token.user_id(),
+                channel: &self.channels[candidate.channel_index],
+                using_group,
+                requested_model,
+                upstream_model: &mapping.upstream_model,
+            });
         }
-        Err(if !saw_channel {
-            RouteError::ChannelNotFound
-        } else if !saw_enabled {
-            RouteError::ChannelDisabled
-        } else {
-            RouteError::ChannelModelMismatch
-        })
+        Err(
+            if auth.token.route_groups.is_empty() || !mappings.has_channel {
+                RouteError::ChannelNotFound
+            } else if !saw_enabled {
+                RouteError::ChannelDisabled
+            } else {
+                RouteError::ChannelModelMismatch
+            },
+        )
     }
 
     fn route_specific_channel<'a>(
@@ -821,28 +1001,23 @@ impl IndexedSnapshot {
         channel_id: &str,
     ) -> Option<RouteDecision<'a>> {
         let mappings = self.mappings.get(requested_model)?;
-        for mapping in mappings {
-            if mapping.channel_id != channel_id {
-                continue;
-            }
-            let channel = self.channels.get(&mapping.channel_id)?;
-            let using_group = auth
-                .token
-                .route_groups
-                .iter()
-                .find(|group| channel.serves_group(group))?;
-            if !channel.enabled || !channel_serves_mapping(channel, mapping) {
-                return None;
-            }
-            return Some(RouteDecision {
-                user_id: auth.token.user_id(),
-                channel,
-                using_group,
-                requested_model,
-                upstream_model: &mapping.upstream_model,
-            });
+        let candidate = mappings.by_channel.get(channel_id)?;
+        let channel = &self.channels[candidate.channel_index];
+        let using_group = auth
+            .token
+            .route_groups
+            .iter()
+            .find(|group| channel.serves_normalized_group(group))?;
+        if !channel.enabled || !candidate.serves_mapping {
+            return None;
         }
-        None
+        Some(RouteDecision {
+            user_id: auth.token.user_id(),
+            channel,
+            using_group,
+            requested_model,
+            upstream_model: &mappings.mappings[candidate.mapping_index].upstream_model,
+        })
     }
 }
 
@@ -864,23 +1039,34 @@ impl TryFrom<GatewaySnapshot> for IndexedSnapshot {
                 (indexed.config.token.clone(), indexed)
             })
             .collect();
-        let mut channels = HashMap::with_capacity(snapshot.channels.len());
+        let mut channels = Vec::with_capacity(snapshot.channels.len());
+        let mut channel_indices = HashMap::with_capacity(snapshot.channels.len());
         for mut channel in snapshot.channels {
             channel.normalize_api_keys();
             channel.normalize_groups();
             let channel_id = channel.id.clone();
-            if channels.contains_key(&channel_id) {
+            if channel_indices.contains_key(&channel_id) {
                 return Err(SnapshotError::DuplicateChannelId { channel_id });
             }
-            channels.insert(channel_id, channel);
+            channel_indices.insert(channel_id, channels.len());
+            channels.push(channel);
         }
-        let mut mappings = HashMap::<String, Vec<ModelMapping>>::new();
+        let mut model_mappings = HashMap::<String, Vec<ModelMapping>>::new();
         for mapping in snapshot.model_mappings {
-            mappings
+            model_mappings
                 .entry(mapping.requested_model.clone())
                 .or_default()
                 .push(mapping);
         }
+        let mappings = model_mappings
+            .into_iter()
+            .map(|(model, mappings)| {
+                (
+                    model,
+                    IndexedModelRoutes::new(mappings, &channels, &channel_indices),
+                )
+            })
+            .collect();
         let affinity = IndexedChannelAffinity::from_config(snapshot.channel_affinity);
 
         Ok(Self {
@@ -1334,6 +1520,187 @@ mod tests {
     }
 
     #[test]
+    fn indexed_routes_preserve_group_priority_and_error_semantics() {
+        let channel = |id: &str, enabled: bool, models: &[&str], groups: &[&str]| ChannelConfig {
+            id: id.to_string(),
+            management_id: None,
+            provider: Provider::OpenAi,
+            base_url: format!("https://{id}.example.com"),
+            api_key: format!("key-{id}"),
+            api_keys: Vec::new(),
+            api_key_indexes: Vec::new(),
+            api_key_env: None,
+            enabled,
+            weight: 1,
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+            groups: groups.iter().map(|group| (*group).to_string()).collect(),
+            proxy: None,
+            proxy_required: false,
+            header_override: Default::default(),
+            upstream_endpoint_type: String::new(),
+        };
+        let token = TokenConfig {
+            id:             "token-a".to_string(),
+            token:          "token-a".to_string(),
+            user_id:        "user-a".to_string(),
+            user_group:     "default".to_string(),
+            token_group:    "auto".to_string(),
+            group:          "auto".to_string(),
+            enabled:        true,
+            allowed_models: Vec::new(),
+            allowed_ips:    Vec::new(),
+        };
+        let group_routing = GroupRoutingConfig {
+            auto_groups: vec!["first".to_string(), "second".to_string()],
+            user_usable_groups: HashMap::from([
+                ("auto".to_string(), String::new()),
+                ("default".to_string(), String::new()),
+                ("first".to_string(), String::new()),
+                ("second".to_string(), String::new()),
+            ]),
+            known_groups: vec![
+                "default".to_string(),
+                "first".to_string(),
+                "second".to_string(),
+            ],
+            ..GroupRoutingConfig::default()
+        };
+
+        let indexed = GatewaySnapshot {
+            version:          1,
+            tokens:           vec![token.clone()],
+            channels:         vec![
+                channel("first-mismatch", true, &["other-upstream"], &["first"]),
+                channel("second-route", true, &["upstream"], &["second"]),
+            ],
+            model_mappings:   vec![
+                ModelMapping {
+                    requested_model: "requested".to_string(),
+                    channel_id:      "first-mismatch".to_string(),
+                    upstream_model:  "upstream".to_string(),
+                },
+                ModelMapping {
+                    requested_model: "requested".to_string(),
+                    channel_id:      "second-route".to_string(),
+                    upstream_model:  "upstream".to_string(),
+                },
+            ],
+            channel_affinity: Default::default(),
+            group_routing:    group_routing.clone(),
+        }
+        .index()
+        .expect("snapshot should index");
+        let auth = indexed.authenticate("token-a").expect("auth");
+        let route = indexed
+            .route_with_seed(&auth, "requested", 0)
+            .expect("second group should route");
+        assert_eq!(route.channel.id, "second-route");
+        assert_eq!(route.using_group, "second");
+
+        let error_for = |channels: Vec<ChannelConfig>, mappings: Vec<ModelMapping>| {
+            let indexed = GatewaySnapshot {
+                version: 1,
+                tokens: vec![token.clone()],
+                channels,
+                model_mappings: mappings,
+                channel_affinity: Default::default(),
+                group_routing: group_routing.clone(),
+            }
+            .index()
+            .expect("snapshot should index");
+            let auth = indexed.authenticate("token-a").expect("auth");
+            indexed
+                .route_with_seed(&auth, "requested", 0)
+                .expect_err("route should fail")
+                .to_string()
+        };
+        let mapping = |channel_id: &str| ModelMapping {
+            requested_model: "requested".to_string(),
+            channel_id:      channel_id.to_string(),
+            upstream_model:  "upstream".to_string(),
+        };
+
+        assert_eq!(
+            error_for(Vec::new(), vec![mapping("missing")]),
+            RouteError::ChannelNotFound.to_string()
+        );
+        assert_eq!(
+            error_for(
+                vec![channel("disabled", false, &["upstream"], &["first"])],
+                vec![mapping("disabled")],
+            ),
+            RouteError::ChannelDisabled.to_string()
+        );
+        assert_eq!(
+            error_for(
+                vec![channel("wrong-group", true, &["upstream"], &["third"])],
+                vec![mapping("wrong-group")],
+            ),
+            RouteError::ChannelDisabled.to_string()
+        );
+        assert_eq!(
+            error_for(
+                vec![channel("mismatch", true, &["other"], &["first"])],
+                vec![mapping("mismatch")],
+            ),
+            RouteError::ChannelModelMismatch.to_string()
+        );
+    }
+
+    #[test]
+    fn affinity_preserves_first_mapping_for_duplicate_channel_entries() {
+        let mut snapshot = snapshot_with_channel(ChannelConfig {
+            id:                     "channel-a".to_string(),
+            management_id:          None,
+            provider:               Provider::OpenAi,
+            base_url:               "https://example.com".to_string(),
+            api_key:                "key-a".to_string(),
+            api_keys:               Vec::new(),
+            api_key_indexes:        Vec::new(),
+            api_key_env:            None,
+            enabled:                true,
+            weight:                 1,
+            models:                 vec!["valid-upstream".to_string()],
+            groups:                 Vec::new(),
+            proxy:                  None,
+            proxy_required:         false,
+            header_override:        Default::default(),
+            upstream_endpoint_type: String::new(),
+        });
+        snapshot.model_mappings = vec![
+            ModelMapping {
+                requested_model: "gpt-4o".to_string(),
+                channel_id:      "channel-a".to_string(),
+                upstream_model:  "invalid-upstream".to_string(),
+            },
+            ModelMapping {
+                requested_model: "gpt-4o".to_string(),
+                channel_id:      "channel-a".to_string(),
+                upstream_model:  "valid-upstream".to_string(),
+            },
+        ];
+
+        let indexed = snapshot.index().expect("snapshot should index");
+        let auth = indexed.authenticate("token-a").expect("auth");
+        let cache = ChannelAffinityCache::new();
+        let affinity = ChannelAffinityCandidate {
+            cache_key:         "duplicate-mapping".to_string(),
+            ttl_seconds:       60,
+            cached_channel_id: Some("channel-a".to_string()),
+            rule_name:         String::new(),
+        };
+        let (route, affinity_hit) = indexed
+            .route_with_affinity_seed(&auth, "gpt-4o", Some(&affinity), &cache, 1)
+            .expect("weighted fallback should use the second mapping");
+
+        assert!(
+            !affinity_hit,
+            "the first mismatching mapping rejects affinity"
+        );
+        assert_eq!(route.upstream_model, "valid-upstream");
+    }
+
+    #[test]
     fn affinity_records_successful_channel_for_matching_request_key() {
         let snapshot = GatewaySnapshot {
             version:          1,
@@ -1424,11 +1791,13 @@ mod tests {
         let body = br#"{"prompt_cache_key":"session-a"}"#;
         let candidate = indexed
             .resolve_affinity(
-                "gpt-4o",
-                "/v1/responses",
-                "",
-                "default",
-                body,
+                ChannelAffinityRequest {
+                    requested_model: "gpt-4o",
+                    path: "/v1/responses",
+                    user_agent: "",
+                    using_group: "default",
+                    body,
+                },
                 &cache,
                 |_| None,
             )
@@ -1443,11 +1812,13 @@ mod tests {
 
         let candidate = indexed
             .resolve_affinity(
-                "gpt-4o",
-                "/v1/responses",
-                "",
-                "default",
-                body,
+                ChannelAffinityRequest {
+                    requested_model: "gpt-4o",
+                    path: "/v1/responses",
+                    user_agent: "",
+                    using_group: "default",
+                    body,
+                },
                 &cache,
                 |_| None,
             )
@@ -1464,11 +1835,13 @@ mod tests {
         let reindexed = snapshot_clone.index().expect("snapshot should re-index");
         let candidate = reindexed
             .resolve_affinity(
-                "gpt-4o",
-                "/v1/responses",
-                "",
-                "default",
-                body,
+                ChannelAffinityRequest {
+                    requested_model: "gpt-4o",
+                    path: "/v1/responses",
+                    user_agent: "",
+                    using_group: "default",
+                    body,
+                },
                 &cache,
                 |_| None,
             )
@@ -1767,6 +2140,35 @@ mod tests {
             indexed.authenticate("sk-wrong"),
             Err(RouteError::Unauthorized)
         ));
+    }
+
+    #[test]
+    fn affinity_cache_shards_hits_and_keeps_the_global_capacity_bound() {
+        let cache = ChannelAffinityCache::new();
+        for index in 0..256 {
+            cache.record(
+                &ChannelAffinityCandidate {
+                    cache_key:         format!("session-{index}"),
+                    ttl_seconds:       60,
+                    cached_channel_id: None,
+                    rule_name:         "test".to_string(),
+                },
+                &format!("channel-{index}"),
+                32,
+            );
+        }
+
+        assert_eq!(cache.entry_count.load(Ordering::Relaxed), 32);
+        assert_eq!(cache.get("session-255").as_deref(), Some("channel-255"));
+        let populated_shards = cache
+            .shards
+            .iter()
+            .filter(|shard| shard.read().is_ok_and(|entries| !entries.is_empty()))
+            .count();
+        assert!(
+            populated_shards > 1,
+            "test keys should exercise cache sharding"
+        );
     }
 
     fn snapshot_with_channel(channel: ChannelConfig) -> GatewaySnapshot {

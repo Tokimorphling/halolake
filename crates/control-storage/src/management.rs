@@ -23,7 +23,8 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub enum ManagementStore {
@@ -70,21 +71,27 @@ impl ManagementStore {
         match self {
             Self::Memory(store) => store.bump_version(),
             Self::Sqlite(store) => {
-                let version = store.memory.bump_version()?;
+                let _guard = store.write_lock.lock().await;
+                let candidate = store.candidate()?;
+                let version = candidate.bump_version()?;
                 // Persist so the bumped version survives a restart; otherwise the
                 // DB would still hold the old version and the gateway could see a
                 // lower version after control-api restarts.
-                store.persist().await?;
+                store.commit_candidate(candidate.into_data()?).await?;
                 Ok(version)
             }
             Self::MySql(store) => {
-                let version = store.memory.bump_version()?;
-                store.persist().await?;
+                let _guard = store.write_lock.lock().await;
+                let candidate = store.candidate()?;
+                let version = candidate.bump_version()?;
+                store.commit_candidate(candidate.into_data()?).await?;
                 Ok(version)
             }
             Self::Postgres(store) => {
-                let version = store.memory.bump_version()?;
-                store.persist().await?;
+                let _guard = store.write_lock.lock().await;
+                let candidate = store.candidate()?;
+                let version = candidate.bump_version()?;
+                store.commit_candidate(candidate.into_data()?).await?;
                 Ok(version)
             }
         }
@@ -93,8 +100,9 @@ impl ManagementStore {
 
 #[derive(Debug, Clone)]
 pub struct SqliteManagementStore {
-    pool:   SqlitePool,
-    memory: MemoryManagementStore,
+    pool:       SqlitePool,
+    memory:     MemoryManagementStore,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl SqliteManagementStore {
@@ -120,6 +128,7 @@ impl SqliteManagementStore {
         Ok(Self {
             pool,
             memory: MemoryManagementStore::new(data),
+            write_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -127,9 +136,13 @@ impl SqliteManagementStore {
         self.memory.current_data()
     }
 
-    async fn persist(&self) -> Result<(), ManagementError> {
-        let data = self.memory.current_data()?;
-        save_data(&self.pool, &data).await
+    fn candidate(&self) -> Result<MemoryManagementStore, ManagementError> {
+        self.memory.current_data().map(MemoryManagementStore::new)
+    }
+
+    async fn commit_candidate(&self, data: ManagementData) -> Result<(), ManagementError> {
+        save_data(&self.pool, &data).await?;
+        self.memory.replace_data(data)
     }
 }
 
@@ -199,8 +212,10 @@ macro_rules! impl_write_service {
             type Error = ManagementError;
 
             async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
-                let resp = self.memory.call(req).await?;
-                self.persist().await?;
+                let _guard = self.write_lock.lock().await;
+                let candidate = self.candidate()?;
+                let resp = candidate.call(req).await?;
+                self.commit_candidate(candidate.into_data()?).await?;
                 Ok(resp)
             }
         }
@@ -210,8 +225,10 @@ macro_rules! impl_write_service {
             type Error = ManagementError;
 
             async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
-                let resp = self.memory.call(req).await?;
-                self.persist().await?;
+                let _guard = self.write_lock.lock().await;
+                let candidate = self.candidate()?;
+                let resp = candidate.call(req).await?;
+                self.commit_candidate(candidate.into_data()?).await?;
                 Ok(resp)
             }
         }
@@ -221,8 +238,10 @@ macro_rules! impl_write_service {
             type Error = ManagementError;
 
             async fn call(&self, req: $req) -> Result<Self::Response, Self::Error> {
-                let resp = self.memory.call(req).await?;
-                self.persist().await?;
+                let _guard = self.write_lock.lock().await;
+                let candidate = self.candidate()?;
+                let resp = candidate.call(req).await?;
+                self.commit_candidate(candidate.into_data()?).await?;
                 Ok(resp)
             }
         }
@@ -251,7 +270,6 @@ impl_write_service!(UpdateUserRequest, UserRecord);
 impl_write_service!(DeleteUserRequest, ());
 impl_write_service!(ManageUserRequest, UserRecord);
 impl_write_service!(AdjustUserQuotaRequest, UserRecord);
-impl_write_service!(SettleUsageRequest, UsageSettlement);
 impl_write_service!(CreateTokenRequest, TokenRecord);
 impl_write_service!(UpdateTokenRequest, TokenRecord);
 impl_write_service!(DeleteTokenRequest, ());
@@ -266,6 +284,56 @@ impl_write_service!(PatchChannelBalanceRequest, ChannelRecord);
 impl_write_service!(PatchChannelModelStateRequest, ChannelRecord);
 impl_write_service!(RotateChannelCredentialRequest, ChannelRecord);
 
+impl Service<SettleUsageRequest> for ManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
+        match self {
+            Self::Memory(store) => store.call(req).await,
+            Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
+        }
+    }
+}
+
+impl Service<SettleUsageRequest> for SqliteManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        let plan = self.memory.plan_usage_settlement(req)?;
+        persist_usage_settlement_sqlite(&self.pool, plan.settlement()).await?;
+        self.memory.apply_planned_usage_settlement(plan)
+    }
+}
+
+impl Service<SettleUsageRequest> for MySqlManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        let plan = self.memory.plan_usage_settlement(req)?;
+        persist_usage_settlement_mysql(&self.pool, plan.settlement()).await?;
+        self.memory.apply_planned_usage_settlement(plan)
+    }
+}
+
+impl Service<SettleUsageRequest> for PostgresManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        let plan = self.memory.plan_usage_settlement(req)?;
+        persist_usage_settlement_pg(&self.pool, plan.settlement()).await?;
+        self.memory.apply_planned_usage_settlement(plan)
+    }
+}
+
 impl Service<AutoDisableChannelRequest> for ManagementStore {
     type Response = AutoDisableChannelResult;
     type Error = ManagementError;
@@ -274,18 +342,24 @@ impl Service<AutoDisableChannelRequest> for ManagementStore {
         match self {
             Self::Memory(store) => store.call(req).await,
             Self::Sqlite(store) => {
-                let resp = store.memory.call(req).await?;
-                store.persist().await?;
+                let _guard = store.write_lock.lock().await;
+                let candidate = store.candidate()?;
+                let resp = candidate.call(req).await?;
+                store.commit_candidate(candidate.into_data()?).await?;
                 Ok(resp)
             }
             Self::MySql(store) => {
-                let resp = store.memory.call(req).await?;
-                store.persist().await?;
+                let _guard = store.write_lock.lock().await;
+                let candidate = store.candidate()?;
+                let resp = candidate.call(req).await?;
+                store.commit_candidate(candidate.into_data()?).await?;
                 Ok(resp)
             }
             Self::Postgres(store) => {
-                let resp = store.memory.call(req).await?;
-                store.persist().await?;
+                let _guard = store.write_lock.lock().await;
+                let candidate = store.candidate()?;
+                let resp = candidate.call(req).await?;
+                store.commit_candidate(candidate.into_data()?).await?;
                 Ok(resp)
             }
         }
@@ -363,8 +437,9 @@ where
 
 #[derive(Debug, Clone)]
 pub struct MySqlManagementStore {
-    pool:   MySqlPool,
-    memory: MemoryManagementStore,
+    pool:       MySqlPool,
+    memory:     MemoryManagementStore,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl MySqlManagementStore {
@@ -387,6 +462,7 @@ impl MySqlManagementStore {
         Ok(Self {
             pool,
             memory: MemoryManagementStore::new(data),
+            write_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -394,16 +470,21 @@ impl MySqlManagementStore {
         self.memory.current_data()
     }
 
-    async fn persist(&self) -> Result<(), ManagementError> {
-        let data = self.memory.current_data()?;
-        save_data_mysql(&self.pool, &data).await
+    fn candidate(&self) -> Result<MemoryManagementStore, ManagementError> {
+        self.memory.current_data().map(MemoryManagementStore::new)
+    }
+
+    async fn commit_candidate(&self, data: ManagementData) -> Result<(), ManagementError> {
+        save_data_mysql(&self.pool, &data).await?;
+        self.memory.replace_data(data)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PostgresManagementStore {
-    pool:   PgPool,
-    memory: MemoryManagementStore,
+    pool:       PgPool,
+    memory:     MemoryManagementStore,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl PostgresManagementStore {
@@ -426,6 +507,7 @@ impl PostgresManagementStore {
         Ok(Self {
             pool,
             memory: MemoryManagementStore::new(data),
+            write_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -433,9 +515,13 @@ impl PostgresManagementStore {
         self.memory.current_data()
     }
 
-    async fn persist(&self) -> Result<(), ManagementError> {
-        let data = self.memory.current_data()?;
-        save_data_pg(&self.pool, &data).await
+    fn candidate(&self) -> Result<MemoryManagementStore, ManagementError> {
+        self.memory.current_data().map(MemoryManagementStore::new)
+    }
+
+    async fn commit_candidate(&self, data: ManagementData) -> Result<(), ManagementError> {
+        save_data_pg(&self.pool, &data).await?;
+        self.memory.replace_data(data)
     }
 }
 
@@ -899,6 +985,162 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
         channels,
         model_mappings,
     ))
+}
+
+/// Persist only rows touched by a usage settlement. Full management writes
+/// intentionally snapshot all tables, but accounting cost must scale with the
+/// distinct entities in the batch rather than total tenant cardinality.
+async fn persist_usage_settlement_sqlite(
+    pool: &SqlitePool,
+    settlement: &UsageSettlement,
+) -> Result<(), ManagementError> {
+    let Some(version) = settlement.version else {
+        return Ok(());
+    };
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query(
+        "INSERT INTO control_meta (key, value) VALUES ('version', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(version.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(storage_err)?;
+
+    for user in &settlement.users {
+        sqlx::query("UPDATE users SET quota = ?, used_quota = ? WHERE id = ?")
+            .bind(user.quota)
+            .bind(user.used_quota)
+            .bind(user.id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
+    for token in &settlement.tokens {
+        sqlx::query(
+            "UPDATE tokens SET accessed_time = ?, remain_quota = ?, used_quota = ?, status = ? \
+             WHERE id = ?",
+        )
+        .bind(token.accessed_at)
+        .bind(token.remain_quota)
+        .bind(token.used_quota)
+        .bind(token.status as i64)
+        .bind(token.id as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    for channel in &settlement.channels {
+        sqlx::query("UPDATE channels SET used_quota = ? WHERE id = ?")
+            .bind(channel.used_quota)
+            .bind(channel.id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
+    tx.commit().await.map_err(storage_err)
+}
+
+async fn persist_usage_settlement_mysql(
+    pool: &MySqlPool,
+    settlement: &UsageSettlement,
+) -> Result<(), ManagementError> {
+    let Some(version) = settlement.version else {
+        return Ok(());
+    };
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query(
+        "INSERT INTO control_meta (`key`, value) VALUES ('version', ?)
+         ON DUPLICATE KEY UPDATE value = VALUES(value)",
+    )
+    .bind(version.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(storage_err)?;
+
+    for user in &settlement.users {
+        sqlx::query("UPDATE users SET quota = ?, used_quota = ? WHERE id = ?")
+            .bind(user.quota)
+            .bind(user.used_quota)
+            .bind(user.id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
+    for token in &settlement.tokens {
+        sqlx::query(
+            "UPDATE tokens SET accessed_time = ?, remain_quota = ?, used_quota = ?, status = ? \
+             WHERE id = ?",
+        )
+        .bind(token.accessed_at)
+        .bind(token.remain_quota)
+        .bind(token.used_quota)
+        .bind(token.status as i64)
+        .bind(token.id as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    for channel in &settlement.channels {
+        sqlx::query("UPDATE channels SET used_quota = ? WHERE id = ?")
+            .bind(channel.used_quota)
+            .bind(channel.id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
+    tx.commit().await.map_err(storage_err)
+}
+
+async fn persist_usage_settlement_pg(
+    pool: &PgPool,
+    settlement: &UsageSettlement,
+) -> Result<(), ManagementError> {
+    let Some(version) = settlement.version else {
+        return Ok(());
+    };
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query(
+        "INSERT INTO control_meta (key, value) VALUES ('version', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(version.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(storage_err)?;
+
+    for user in &settlement.users {
+        sqlx::query("UPDATE users SET quota = $1, used_quota = $2 WHERE id = $3")
+            .bind(user.quota)
+            .bind(user.used_quota)
+            .bind(user.id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
+    for token in &settlement.tokens {
+        sqlx::query(
+            "UPDATE tokens SET accessed_time = $1, remain_quota = $2, used_quota = $3, status = \
+             $4 WHERE id = $5",
+        )
+        .bind(token.accessed_at)
+        .bind(token.remain_quota)
+        .bind(token.used_quota)
+        .bind(token.status)
+        .bind(token.id as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    }
+    for channel in &settlement.channels {
+        sqlx::query("UPDATE channels SET used_quota = $1 WHERE id = $2")
+            .bind(channel.used_quota)
+            .bind(channel.id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
+    tx.commit().await.map_err(storage_err)
 }
 
 async fn save_data(pool: &SqlitePool, data: &ManagementData) -> Result<(), ManagementError> {
@@ -1799,8 +2041,8 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
         .bind(&user.password)
         .bind(&user.access_token)
         .bind(&user.display_name)
-        .bind(user.role as i32)
-        .bind(user.status as i32)
+        .bind(user.role)
+        .bind(user.status)
         .bind(&user.email)
         .bind(user.quota)
         .bind(user.used_quota)
@@ -1848,7 +2090,7 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
         .bind(token.user_id as i64)
         .bind(&token.snapshot_user_id)
         .bind(&token.key)
-        .bind(token.status as i32)
+        .bind(token.status)
         .bind(&token.name)
         .bind(token.created_time)
         .bind(token.accessed_time)
@@ -1907,14 +2149,14 @@ async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), Manage
         )
         .bind(channel.id as i64)
         .bind(&channel.snapshot_id)
-        .bind(channel.channel_type as i32)
+        .bind(channel.channel_type)
         .bind(&channel.key)
-        .bind(channel.status as i32)
+        .bind(channel.status)
         .bind(&channel.name)
         .bind(channel.weight.map(|w| w as i32))
         .bind(channel.created_time)
         .bind(channel.test_time)
-        .bind(channel.response_time as i32)
+        .bind(channel.response_time)
         .bind(&channel.base_url)
         .bind(channel.balance)
         .bind(channel.balance_updated_time)
@@ -2118,4 +2360,334 @@ pub fn pg_bool_col(row: &sqlx::postgres::PgRow, name: &str) -> Result<bool, Mana
         return Ok(v);
     }
     pg_i32_col(row, name).map(|value| value != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halolake_control_plane::UsagePricing;
+    use halolake_domain::{STATUS_ENABLED, UsageEvent, UsageStatus};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn sqlite_usage_settlement_only_updates_affected_rows() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "halolake-management-{}-{suffix}.db",
+            std::process::id()
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let seed = ManagementData::new(
+            7,
+            vec![test_user(1), test_user(2)],
+            vec![test_token(1, 1), test_token(2, 2)],
+            vec![test_channel(1), test_channel(2)],
+            Vec::new(),
+        );
+        let store = ManagementStore::sqlite(&url, seed)
+            .await
+            .expect("sqlite management store");
+        let ManagementStore::Sqlite(sqlite) = &store else {
+            unreachable!();
+        };
+
+        // A full-snapshot persist would touch these rows and trip the guards.
+        for (name, table) in [
+            ("guard_user", "users"),
+            ("guard_token", "tokens"),
+            ("guard_channel", "channels"),
+        ] {
+            let sql = format!(
+                "CREATE TRIGGER {name} BEFORE UPDATE ON {table} WHEN OLD.id = 2 BEGIN SELECT \
+                 RAISE(ABORT, 'unrelated row updated'); END"
+            );
+            sqlx::query(&sql)
+                .execute(&sqlite.pool)
+                .await
+                .expect("create update guard");
+        }
+
+        let settlement = store
+            .call(SettleUsageRequest {
+                events:  vec![UsageEvent {
+                    request_id:            "req-1".to_string(),
+                    user_id:               "1".to_string(),
+                    token_id:              "1".to_string(),
+                    channel_id:            "1".to_string(),
+                    group:                 "default".to_string(),
+                    model:                 "gpt-4o".to_string(),
+                    upstream_model:        "gpt-4o".to_string(),
+                    prompt_tokens:         Some(10),
+                    completion_tokens:     Some(5),
+                    total_tokens:          Some(15),
+                    cache_read_tokens:     None,
+                    cache_creation_tokens: None,
+                    image_tokens:          None,
+                    audio_tokens:          None,
+                    quota:                 None,
+                    status:                UsageStatus::Success,
+                    latency_ms:            1,
+                    first_response_ms:     None,
+                    is_stream:             false,
+                    ip:                    String::new(),
+                    upstream_request_id:   String::new(),
+                    created_at_unix_ms:    1,
+                }],
+                pricing: UsagePricing::default(),
+            })
+            .await
+            .expect("settle usage without touching unrelated rows");
+        assert_eq!(settlement.quota, 15);
+        assert_eq!(
+            settlement
+                .users
+                .iter()
+                .map(|state| state.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+
+        let user_quota: i64 = sqlx::query_scalar("SELECT quota FROM users WHERE id = 1")
+            .fetch_one(&sqlite.pool)
+            .await
+            .expect("read user quota");
+        let unrelated_quota: i64 = sqlx::query_scalar("SELECT quota FROM users WHERE id = 2")
+            .fetch_one(&sqlite.pool)
+            .await
+            .expect("read unrelated quota");
+        assert_eq!(user_quota, 985);
+        assert_eq!(unrelated_quota, 1_000);
+
+        sqlite.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn sqlite_failed_writes_do_not_publish_candidate_memory() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "halolake-management-rollback-{}-{suffix}.db",
+            std::process::id()
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let seed = ManagementData::new(
+            7,
+            vec![test_user(1)],
+            vec![test_token(1, 1)],
+            vec![test_channel(1)],
+            Vec::new(),
+        );
+        let store = ManagementStore::sqlite(&url, seed)
+            .await
+            .expect("sqlite management store");
+        let ManagementStore::Sqlite(sqlite) = &store else {
+            unreachable!();
+        };
+
+        sqlx::query(
+            "CREATE TRIGGER reject_user_quota BEFORE UPDATE OF quota ON users
+             WHEN OLD.id = 1 BEGIN SELECT RAISE(ABORT, 'forced user failure'); END",
+        )
+        .execute(&sqlite.pool)
+        .await
+        .expect("create user trigger");
+
+        assert!(
+            store
+                .call(AdjustUserQuotaRequest {
+                    id:    1,
+                    delta: -10,
+                })
+                .await
+                .is_err()
+        );
+        assert_management_seed_unchanged(&store);
+
+        assert!(
+            store
+                .call(SettleUsageRequest {
+                    events:  vec![test_usage_event("rollback-settlement")],
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .is_err()
+        );
+        assert_management_seed_unchanged(&store);
+        sqlx::query("DROP TRIGGER reject_user_quota")
+            .execute(&sqlite.pool)
+            .await
+            .expect("drop user trigger");
+
+        sqlx::query(
+            "CREATE TRIGGER reject_version BEFORE UPDATE OF value ON control_meta
+             WHEN OLD.key = 'version' BEGIN SELECT RAISE(ABORT, 'forced version failure'); END",
+        )
+        .execute(&sqlite.pool)
+        .await
+        .expect("create version trigger");
+        assert!(store.bump_version().await.is_err());
+        assert_management_seed_unchanged(&store);
+        sqlx::query("DROP TRIGGER reject_version")
+            .execute(&sqlite.pool)
+            .await
+            .expect("drop version trigger");
+
+        sqlx::query(
+            "CREATE TRIGGER reject_channel_status BEFORE UPDATE OF status ON channels
+             WHEN OLD.id = 1 BEGIN SELECT RAISE(ABORT, 'forced channel failure'); END",
+        )
+        .execute(&sqlite.pool)
+        .await
+        .expect("create channel trigger");
+        assert!(
+            store
+                .call(AutoDisableChannelRequest {
+                    id:                  1,
+                    reason:              "forced failure".to_string(),
+                    api_key_index:       None,
+                    api_key_fingerprint: None,
+                    created_at_unix_ms:  1,
+                })
+                .await
+                .is_err()
+        );
+        assert_management_seed_unchanged(&store);
+
+        let persisted_version: String =
+            sqlx::query_scalar("SELECT value FROM control_meta WHERE key = 'version'")
+                .fetch_one(&sqlite.pool)
+                .await
+                .expect("read persisted version");
+        let persisted_quota: i64 = sqlx::query_scalar("SELECT quota FROM users WHERE id = 1")
+            .fetch_one(&sqlite.pool)
+            .await
+            .expect("read persisted quota");
+        let persisted_status: i64 = sqlx::query_scalar("SELECT status FROM channels WHERE id = 1")
+            .fetch_one(&sqlite.pool)
+            .await
+            .expect("read persisted status");
+        assert_eq!(persisted_version, "7");
+        assert_eq!(persisted_quota, 1_000);
+        assert_eq!(persisted_status, STATUS_ENABLED as i64);
+
+        sqlite.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn assert_management_seed_unchanged(store: &ManagementStore) {
+        let data = store.current_data().expect("read management memory");
+        assert_eq!(data.version, 7);
+        assert_eq!(data.users[0].quota, 1_000);
+        assert_eq!(data.users[0].used_quota, 0);
+        assert_eq!(data.tokens[0].remain_quota, 1_000);
+        assert_eq!(data.tokens[0].used_quota, 0);
+        assert_eq!(data.channels[0].status, STATUS_ENABLED);
+        assert_eq!(data.channels[0].used_quota, 0);
+    }
+
+    fn test_usage_event(request_id: &str) -> UsageEvent {
+        UsageEvent {
+            request_id:            request_id.to_string(),
+            user_id:               "1".to_string(),
+            token_id:              "1".to_string(),
+            channel_id:            "1".to_string(),
+            group:                 "default".to_string(),
+            model:                 "gpt-4o".to_string(),
+            upstream_model:        "gpt-4o".to_string(),
+            prompt_tokens:         Some(10),
+            completion_tokens:     Some(5),
+            total_tokens:          Some(15),
+            cache_read_tokens:     None,
+            cache_creation_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
+            quota:                 None,
+            status:                UsageStatus::Success,
+            latency_ms:            1,
+            first_response_ms:     None,
+            is_stream:             false,
+            ip:                    String::new(),
+            upstream_request_id:   String::new(),
+            created_at_unix_ms:    1,
+        }
+    }
+
+    fn test_user(id: u64) -> UserRecord {
+        UserRecord {
+            id,
+            username: format!("user-{id}"),
+            password: "password".to_string(),
+            access_token: None,
+            display_name: String::new(),
+            role: 1,
+            status: STATUS_ENABLED,
+            email: String::new(),
+            quota: 1_000,
+            used_quota: 0,
+            group: "default".to_string(),
+            setting: String::new(),
+            remark: String::new(),
+            created_at: 0,
+            last_login_at: 0,
+        }
+    }
+
+    fn test_token(id: u64, user_id: u64) -> TokenRecord {
+        TokenRecord {
+            id,
+            snapshot_id: None,
+            user_id,
+            snapshot_user_id: None,
+            key: format!("token-{id}"),
+            status: STATUS_ENABLED,
+            name: format!("token-{id}"),
+            created_time: 0,
+            accessed_time: 0,
+            expired_time: -1,
+            remain_quota: 1_000,
+            unlimited_quota: false,
+            model_limits_enabled: false,
+            model_limits: String::new(),
+            allow_ips: None,
+            used_quota: 0,
+            group: "default".to_string(),
+            cross_group_retry: false,
+        }
+    }
+
+    fn test_channel(id: u64) -> ChannelRecord {
+        ChannelRecord {
+            id,
+            snapshot_id: None,
+            channel_type: 1,
+            key: format!("channel-key-{id}"),
+            status: STATUS_ENABLED,
+            name: format!("channel-{id}"),
+            weight: Some(1),
+            created_time: 0,
+            test_time: 0,
+            response_time: 0,
+            base_url: None,
+            balance: 0.0,
+            balance_updated_time: 0,
+            models: "gpt-4o".to_string(),
+            group: "default".to_string(),
+            used_quota: 0,
+            model_mapping: None,
+            priority: None,
+            auto_ban: None,
+            tag: None,
+            setting: None,
+            param_override: None,
+            header_override: None,
+            remark: None,
+            proxy_id: None,
+        }
+    }
 }

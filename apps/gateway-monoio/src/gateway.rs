@@ -7,6 +7,7 @@ use service_async::stack::FactoryStack;
 pub struct Gateway {
     pub(crate) snapshots:                SnapshotStore,
     pub(crate) request_body_limit_bytes: usize,
+    pub(crate) request_body_timeout:     Duration,
     pub(crate) chat:                     ChatGatewayService,
     pub(crate) image:                    ImageGatewayService,
     pub(crate) claude:                   ClaudeMessagesGatewayService,
@@ -24,6 +25,7 @@ pub(crate) struct AppParams {
     channel_feedback:         ChannelFeedbackReporter,
     proxy_transport:          ProxyTransportService,
     request_body_limit_bytes: usize,
+    request_body_timeout:     Duration,
 }
 
 #[derive(Clone)]
@@ -105,6 +107,9 @@ pub(crate) struct UpstreamReadTimeout(pub(crate) Option<Duration>);
 pub(crate) struct RequestBodyLimit(pub(crate) usize);
 
 #[derive(Clone, Copy)]
+pub(crate) struct RequestBodyTimeout(pub(crate) Duration);
+
+#[derive(Clone, Copy)]
 pub(crate) struct GatewayAuthPolicy(pub(crate) AuthConfig);
 
 /// Loads the config and runs the gateway as a thread-per-core fleet.
@@ -122,6 +127,7 @@ pub fn run_from_config_file(path: &str) -> Result<()> {
     let config = GatewayConfig::load(path)?;
     let worker_count = resolve_worker_count(config.server.workers);
     let listen = config.server.listen;
+    let blocking_pool = monoio::blocking::DefaultThreadPool::new(worker_count.clamp(2, 8));
     // Affinity is process-wide: workers share nothing else on the request hot
     // path, but session stickiness must survive SO_REUSEPORT fan-out.
     let affinity_cache = Arc::new(ChannelAffinityCache::new());
@@ -137,9 +143,10 @@ pub fn run_from_config_file(path: &str) -> Result<()> {
         // store; only the affinity cache is shared across cores.
         let worker_config = config.clone();
         let affinity_cache = affinity_cache.clone();
+        let blocking_pool = blocking_pool.clone();
         let handle = std::thread::Builder::new()
             .name(format!("halolake-gw-{worker_id}"))
-            .spawn(move || run_worker(worker_id, worker_config, affinity_cache))
+            .spawn(move || run_worker(worker_id, worker_config, affinity_cache, blocking_pool))
             .with_context(|| format!("spawn gateway worker {worker_id}"))?;
         handles.push(handle);
     }
@@ -180,9 +187,11 @@ fn run_worker(
     worker_id: usize,
     config: GatewayConfig,
     affinity_cache: Arc<ChannelAffinityCache>,
+    blocking_pool: monoio::blocking::DefaultThreadPool,
 ) -> Result<()> {
     let mut rt = monoio::RuntimeBuilder::<monoio::FusionDriver>::new()
         .enable_timer()
+        .attach_thread_pool(Box::new(blocking_pool))
         .build()
         .with_context(|| format!("build monoio runtime for worker {worker_id}"))?;
     rt.block_on(run_worker_async(worker_id, config, affinity_cache))
@@ -326,18 +335,28 @@ pub async fn serve(addr: SocketAddr, gateway: Gateway) -> Result<()> {
     //       -> ConnectionReuseService
     //         -> HttpH1CoreService
     // accept(TcpStream, peer) drives the outer core.
-    let conn_svc = FactoryStack::new(())
-        .replace(gateway)
-        .push(crate::downstream::GatewayAppService::layer())
-        .push(crate::downstream::ConnectionReuseService::layer())
-        .push(crate::downstream::HttpH1CoreService::layer())
-        .make()
-        .map_err(|err| anyhow::anyhow!("build downstream http service stack: {err:?}"))?;
+    let request_body_limit_bytes = gateway.request_body_limit_bytes;
+    let request_body_timeout = gateway.request_body_timeout;
+    let conn_svc = Rc::new(
+        FactoryStack::new(())
+            .replace(gateway)
+            .push(crate::downstream::GatewayAppService::layer())
+            .push(crate::downstream::ConnectionReuseService::layer())
+            .push(crate::downstream::HttpH1CoreService::layer(
+                request_body_limit_bytes,
+                request_body_timeout,
+            ))
+            .make()
+            .map_err(|err| anyhow::anyhow!("build downstream http service stack: {err:?}"))?,
+    );
 
     loop {
         let (stream, peer) = listener.accept().await.context("accept connection")?;
+        if let Err(err) = stream.set_nodelay(true) {
+            debug!(?err, %peer, "failed to enable TCP_NODELAY for downstream connection");
+        }
         debug!(%peer, "accepted downstream connection");
-        let conn_svc = conn_svc.clone();
+        let conn_svc = Rc::clone(&conn_svc);
         monoio::spawn(async move {
             if let Err(err) = conn_svc.call((stream, peer)).await {
                 warn!(?err, %peer, "downstream http connection failed");
@@ -379,12 +398,12 @@ impl GatewayConfig {
 
     fn resolve_channel_env_keys(&mut self) -> Result<()> {
         for channel in &mut self.channels {
-            if channel.api_key.is_empty() {
-                if let Some(env_name) = &channel.api_key_env {
-                    channel.api_key = std::env::var(env_name).with_context(|| {
-                        format!("read env var {env_name} for channel {}", channel.id)
-                    })?;
-                }
+            if channel.api_key.is_empty()
+                && let Some(env_name) = &channel.api_key_env
+            {
+                channel.api_key = std::env::var(env_name).with_context(|| {
+                    format!("read env var {env_name} for channel {}", channel.id)
+                })?;
             }
         }
         Ok(())
@@ -420,6 +439,7 @@ impl Gateway {
         Ok(Self {
             snapshots:                params.param(),
             request_body_limit_bytes: Param::<RequestBodyLimit>::param(&params).0,
+            request_body_timeout:     Param::<RequestBodyTimeout>::param(&params).0,
             chat:                     ChatGatewayService::from_params(&params),
             image:                    ImageGatewayService::from_params(&params),
             claude:                   ClaudeMessagesGatewayService::from_params(&params),
@@ -439,6 +459,8 @@ impl AppParams {
         affinity_cache: Arc<ChannelAffinityCache>,
     ) -> Result<Self> {
         let request_body_limit_bytes = config.server.request_body_limit_bytes;
+        let request_body_timeout =
+            Duration::from_millis(config.server.request_body_timeout_ms.max(1));
         let protocol = config.protocol.clone();
         let upstream = config.upstream;
         let auth = config.auth;
@@ -464,6 +486,7 @@ impl AppParams {
             channel_feedback,
             proxy_transport,
             request_body_limit_bytes,
+            request_body_timeout,
         })
     }
 }
@@ -531,5 +554,11 @@ impl Param<UpstreamReadTimeout> for AppParams {
 impl Param<RequestBodyLimit> for AppParams {
     fn param(&self) -> RequestBodyLimit {
         RequestBodyLimit(self.request_body_limit_bytes)
+    }
+}
+
+impl Param<RequestBodyTimeout> for AppParams {
+    fn param(&self) -> RequestBodyTimeout {
+        RequestBodyTimeout(self.request_body_timeout)
     }
 }

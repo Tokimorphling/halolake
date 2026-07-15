@@ -1,6 +1,7 @@
 [server]
 listen = "127.0.0.1:8082"
 request_body_limit_bytes = 16777216
+request_body_timeout_ms = 30000
 
 [protocol]
 claude_version = "2023-06-01"
@@ -26,3 +27,7 @@ internal_key = "dev-internal-secret"
 connect_timeout_ms = 10000
 read_timeout_ms = 30000
 snapshot_poll_interval_ms = 5000
+report_batch_size = 128
+report_flush_interval_ms = 5
+report_queue_capacity = 2048
+report_max_in_flight = 4

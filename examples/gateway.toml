@@ -3,6 +3,7 @@ version = 1
 [server]
 listen = "0.0.0.0:8081"
 request_body_limit_bytes = 16777216
+request_body_timeout_ms = 30000
 
 [protocol]
 claude_version = "2023-06-01"
@@ -31,6 +32,12 @@ accept_x_api_key = true
 # connect_timeout_ms = 10000
 # read_timeout_ms = 30000
 # snapshot_poll_interval_ms = 5000
+# Worker-local control-plane batching. The defaults favor high request volume
+# while keeping accounting lag below one scheduler tick.
+# report_batch_size = 128
+# report_flush_interval_ms = 5
+# report_queue_capacity = 2048
+# report_max_in_flight = 4
 
 [[tokens]]
 id = "dev-token"

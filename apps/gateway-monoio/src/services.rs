@@ -52,7 +52,7 @@ pub(crate) struct RawOpenAiGatewayService {
 pub(crate) struct AuthRouteService {
     snapshots: SnapshotStore,
     auth:      AuthConfig,
-    next_key:  Arc<AtomicU64>,
+    next_key:  Rc<Cell<u64>>,
 }
 
 impl ChatGatewayService {
@@ -73,7 +73,7 @@ impl ChatGatewayService {
             router:           AuthRouteService {
                 snapshots: params.param(),
                 auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Arc::new(AtomicU64::new(0)),
+                next_key:  Rc::new(Cell::new(0)),
             },
             relay:            RelayService::from_params(params),
             usage:            Param::<UsageReporter>::param(params),
@@ -173,7 +173,7 @@ impl ImageGatewayService {
             router:           AuthRouteService {
                 snapshots: params.param(),
                 auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Arc::new(AtomicU64::new(0)),
+                next_key:  Rc::new(Cell::new(0)),
             },
             relay:            RelayService::from_params(params),
             usage:            Param::<UsageReporter>::param(params),
@@ -270,7 +270,7 @@ impl ClaudeMessagesGatewayService {
             router:           AuthRouteService {
                 snapshots: params.param(),
                 auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Arc::new(AtomicU64::new(0)),
+                next_key:  Rc::new(Cell::new(0)),
             },
             relay:            RelayService::from_params(params),
             usage:            Param::<UsageReporter>::param(params),
@@ -385,7 +385,7 @@ impl GeminiGatewayService {
             router:           AuthRouteService {
                 snapshots: params.param(),
                 auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Arc::new(AtomicU64::new(0)),
+                next_key:  Rc::new(Cell::new(0)),
             },
             relay:            RelayService::from_params(params),
             usage:            Param::<UsageReporter>::param(params),
@@ -483,7 +483,7 @@ impl RawOpenAiGatewayService {
             router:           AuthRouteService {
                 snapshots: params.param(),
                 auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Arc::new(AtomicU64::new(0)),
+                next_key:  Rc::new(Cell::new(0)),
             },
             relay:            RelayService::from_params(params),
             usage:            Param::<UsageReporter>::param(params),
@@ -613,18 +613,21 @@ impl Service<RouteLookup> for AuthRouteService {
         let affinity_cache = self.snapshots.affinity_cache();
         let auth = snapshot.authenticate(&lookup.token)?;
         snapshot.authorize_ip(&auth, lookup.peer_ip)?;
-        let key_seed = self.next_key.fetch_add(1, Ordering::Relaxed);
+        let key_seed = self.next_key.get();
+        self.next_key.set(key_seed.wrapping_add(1));
         let user_agent = lookup
             .headers
             .get(header::USER_AGENT)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
         let affinity = snapshot.resolve_affinity(
-            &lookup.requested_model,
-            &lookup.path,
-            user_agent,
-            auth.token.group(),
-            &lookup.body,
+            ChannelAffinityRequest {
+                requested_model: &lookup.requested_model,
+                path: &lookup.path,
+                user_agent,
+                using_group: auth.token.group(),
+                body: &lookup.body,
+            },
             affinity_cache,
             |name| {
                 lookup
@@ -774,17 +777,10 @@ fn finalize_response_usage(
     if reporter.is_enabled() && is_gateway_event_stream_response(&resp) {
         let status = usage_status_from_http(resp.status());
         let body = std::mem::replace(resp.body_mut(), full_body(Bytes::new()));
-        let (report_tx, mut report_rx) = mpsc::unbounded();
-        let reporter = reporter.clone();
-        monoio::spawn(async move {
-            if let Some(event) = report_rx.next().await {
-                reporter.report(event);
-            }
-        });
         // Tee the stream into a monoio-http payload while collecting usage from
         // SSE frames via monoio-http stream payload.
-
-        *resp.body_mut() = wrap_streaming_usage_body(body, report_tx, parts, status, started);
+        *resp.body_mut() =
+            wrap_streaming_usage_body(body, reporter.clone(), parts, status, started);
         resp
     } else {
         report_response_usage(reporter, parts, &resp, started.elapsed().as_millis() as u64);
@@ -911,7 +907,7 @@ fn usage_status_from_http(status: StatusCode) -> UsageStatus {
 
 fn wrap_streaming_usage_body(
     inner: GatewayBody,
-    report_tx: mpsc::UnboundedSender<UsageEvent>,
+    reporter: UsageReporter,
     parts: UsageEventParts,
     status: UsageStatus,
     started: Instant,
@@ -957,7 +953,7 @@ fn wrap_streaming_usage_body(
             &parts.upstream_request_id,
             parts.is_stream,
         );
-        let _ = report_tx.unbounded_send(UsageEvent {
+        reporter.report(UsageEvent {
             request_id: parts.request_id,
             user_id: parts.user_id,
             token_id: parts.token_id,
@@ -992,14 +988,15 @@ struct SseUsageCollector {
 
 impl SseUsageCollector {
     fn push(&mut self, bytes: &[u8]) {
-        for payload in self.decoder.push_with_done(bytes, true) {
-            if payload == "[DONE]" {
-                continue;
+        let usage = &mut self.usage;
+        self.decoder.for_each_payload(bytes, false, |payload| {
+            if !may_contain_response_usage(payload) {
+                return;
             }
-            if let Some(usage) = response_usage_from_json_bytes(payload.as_bytes()) {
-                merge_response_usage(&mut self.usage, usage);
+            if let Some(next) = response_usage_from_json_bytes(payload) {
+                merge_response_usage(usage, next);
             }
-        }
+        });
     }
 
     fn usage(&self) -> Option<ResponseUsage> {
@@ -1068,10 +1065,10 @@ fn upstream_request_id_from_headers(headers: &HeaderMap) -> String {
 
 impl AuthRouteService {
     fn extract_token(&self, headers: &HeaderMap) -> Option<String> {
-        if self.auth.accept_bearer {
-            if let Some(token) = bearer_token(headers) {
-                return Some(token);
-            }
+        if self.auth.accept_bearer
+            && let Some(token) = bearer_token(headers)
+        {
+            return Some(token);
         }
         if self.auth.accept_x_api_key {
             return headers

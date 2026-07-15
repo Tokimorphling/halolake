@@ -14,3 +14,4 @@ halolake-router-core = { workspace = true }
 serde = { workspace = true }
 service-async = { workspace = true }
 sqlx = { workspace = true }
+tokio = { workspace = true }
