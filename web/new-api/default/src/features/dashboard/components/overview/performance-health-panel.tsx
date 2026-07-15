@@ -21,6 +21,7 @@ import { Gauge, HeartPulse, Timer } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import {
@@ -51,7 +52,7 @@ function simpleAverage(
     total += value
     count++
   }
-  return count > 0 ? total / count : NaN
+  return count > 0 ? total / count : Number.NaN
 }
 
 export function PerformanceHealthPanel() {
@@ -93,10 +94,9 @@ export function PerformanceHealthPanel() {
   return (
     <section className='bg-card ring-foreground/6 h-full overflow-hidden rounded-2xl shadow-[0_1px_0_0_var(--hairline),0_1px_2px_oklch(0_0_0/0.04)] ring-1 dark:shadow-[0_1px_0_0_var(--hairline)]'>
       <div className='border-border/60 flex items-center gap-2 border-b px-4 py-3.5 sm:px-5'>
-        <HeartPulse
-          className='text-muted-foreground/55 size-4 shrink-0'
-          aria-hidden='true'
-        />
+        <IconBadge tone='success' size='sm'>
+          <HeartPulse />
+        </IconBadge>
         <h3 className='text-[15px] leading-snug font-semibold tracking-tight'>
           {t('Performance health')}
         </h3>
@@ -113,25 +113,28 @@ export function PerformanceHealthPanel() {
             value={formatUptimePct(summary.successRate)}
             loading={loading}
             valueClassName={getSuccessRateTextClass(summary.successRate)}
+            tone='success'
           />
           <MetricCell
             icon={Timer}
             label={t('Average latency')}
             value={formatLatency(summary.avgLatencyMs)}
             loading={loading}
+            tone='warning'
           />
           <MetricCell
             icon={Gauge}
             label={t('Throughput')}
             value={formatThroughput(summary.avgTps)}
             loading={loading}
+            tone='info'
           />
         </div>
 
         {loading ? (
           <div className='space-y-1.5'>
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className='h-5 w-full rounded-lg' />
+            {['success', 'latency', 'throughput'].map((key) => (
+              <Skeleton key={key} className='h-5 w-full rounded-lg' />
             ))}
           </div>
         ) : (
@@ -183,12 +186,15 @@ function MetricCell(props: {
   value: string
   loading: boolean
   valueClassName?: string
+  tone: IconBadgeTone
 }) {
   const Icon = props.icon
   return (
     <div className='bg-muted/35 ring-foreground/5 rounded-2xl px-3 py-2.5 ring-1'>
       <div className='text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide'>
-        <Icon className='size-3 shrink-0' aria-hidden='true' />
+        <IconBadge tone={props.tone} size='xs'>
+          <Icon />
+        </IconBadge>
         <span className='truncate'>{props.label}</span>
       </div>
       {props.loading ? (

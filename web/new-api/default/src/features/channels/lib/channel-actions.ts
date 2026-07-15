@@ -21,6 +21,7 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 
 import { formatCurrencyFromUSD } from '@/lib/currency'
+import { isVerificationRequiredError } from '@/lib/secure-verification'
 
 import {
   copyChannel,
@@ -427,7 +428,8 @@ export async function handleBatchDelete(
     } else {
       toast.error(response.message || i18next.t(ERROR_MESSAGES.DELETE_FAILED))
     }
-  } catch {
+  } catch (error) {
+    if (isVerificationRequiredError(error)) throw error
     toast.error(i18next.t(ERROR_MESSAGES.DELETE_FAILED))
   }
 }
@@ -623,7 +625,8 @@ export async function handleDeleteAllDisabled(
         response.message || i18next.t('Failed to delete disabled channels')
       )
     }
-  } catch {
+  } catch (error) {
+    if (isVerificationRequiredError(error)) throw error
     toast.error(i18next.t('Failed to delete disabled channels'))
   }
 }

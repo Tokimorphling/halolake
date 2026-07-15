@@ -1,5 +1,6 @@
 use crate::{PublishSnapshotRequest, SnapshotError, SnapshotPublished, SnapshotPublisher};
 use bcrypt::{DEFAULT_COST, hash, verify};
+use data_encoding::{BASE64URL, BASE64URL_NOPAD};
 use halolake_domain::{
     CHANNEL_TYPE_ANTHROPIC, CHANNEL_TYPE_GEMINI, CHANNEL_TYPE_OPENAI, ChannelRecord, PageRequest,
     PageResult, ROLE_ADMIN_USER, ROLE_COMMON_USER, ROLE_ROOT_USER, STATUS_AUTO_DISABLED,
@@ -343,6 +344,11 @@ pub enum ManagementError {
     InvalidModelMapping { channel_id: u64, message: String },
     #[error("channel {0} changed while an operation was in flight")]
     StaleChannelUpdate(u64),
+    #[error(
+        "management data changed in another instance (expected version {expected}, current \
+         version {current}); retry the request"
+    )]
+    StaleManagementVersion { expected: u64, current: u64 },
     #[error("snapshot publish failed: {0}")]
     Snapshot(#[from] SnapshotError),
 }
@@ -495,6 +501,10 @@ pub struct PlannedUsageSettlement {
 impl PlannedUsageSettlement {
     pub fn settlement(&self) -> &UsageSettlement {
         &self.settlement
+    }
+
+    pub fn base_version(&self) -> u64 {
+        self.base_version
     }
 }
 
@@ -3092,6 +3102,8 @@ fn parse_codex_oauth_runtime_credential(raw: &str) -> Option<CodexOAuthRuntimeCr
         "chatgptAccountId",
         "account_id",
         "accountId",
+        "organization_id",
+        "organizationId",
     ])
     .or_else(|| {
         account.and_then(|account| {
@@ -3102,6 +3114,11 @@ fn parse_codex_oauth_runtime_credential(raw: &str) -> Option<CodexOAuthRuntimeCr
                 "id",
             ])
         })
+    })
+    .or_else(|| {
+        access_token
+            .as_deref()
+            .and_then(codex_account_id_from_access_token)
     });
     let is_codex_type =
         json_string_field(object, &["type"]).is_some_and(|kind| kind.eq_ignore_ascii_case("codex"));
@@ -3117,6 +3134,46 @@ fn parse_codex_oauth_runtime_credential(raw: &str) -> Option<CodexOAuthRuntimeCr
         access_token,
         account_id,
     })
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct CodexAccessTokenClaims {
+    #[serde(default, rename = "https://api.openai.com/auth")]
+    openai_auth: Option<CodexAccessTokenAuthClaims>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct CodexAccessTokenAuthClaims {
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    poid:               Option<String>,
+}
+
+fn codex_account_id_from_access_token(token: &str) -> Option<String> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let _signature = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let bytes = BASE64URL_NOPAD
+        .decode(payload.as_bytes())
+        .ok()
+        .or_else(|| {
+            let mut padded = payload.to_string();
+            while !padded.len().is_multiple_of(4) {
+                padded.push('=');
+            }
+            BASE64URL.decode(padded.as_bytes()).ok()
+        })?;
+    let claims = serde_json::from_slice::<CodexAccessTokenClaims>(&bytes).ok()?;
+    let auth = claims.openai_auth?;
+    auth.chatgpt_account_id
+        .or(auth.poid)
+        .map(|account_id| account_id.trim().to_string())
+        .filter(|account_id| !account_id.is_empty())
 }
 
 fn json_string_field(
@@ -5257,6 +5314,44 @@ mod tests {
         assert!(!codex.header_override.contains_key("User-Agent"));
         let published = serde_json::to_string(&snapshot).expect("snapshot should serialize");
         assert!(!published.contains("refresh-token-must-not-leak"));
+    }
+
+    #[test]
+    fn build_snapshot_uses_codex_poid_when_account_id_is_absent() {
+        let claims = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "poid": "org-from-access-token"
+            }
+        });
+        let payload = BASE64URL_NOPAD.encode(claims.to_string().as_bytes());
+        let access_token = format!("header.{payload}.signature");
+        let oauth_key = serde_json::json!({
+            "type": "codex",
+            "access_token": access_token,
+            "refresh_token": "refresh-token-must-not-leak"
+        })
+        .to_string();
+        let data = ManagementData::new(
+            5,
+            Vec::new(),
+            Vec::new(),
+            vec![sample_codex_channel(&oauth_key)],
+            Vec::new(),
+        );
+
+        let snapshot = data.build_snapshot().expect("snapshot should build");
+        let codex = &snapshot.channels[0];
+
+        assert_eq!(codex.api_key, access_token);
+        assert_eq!(codex.base_url, "https://chatgpt.com/backend-api/codex");
+        assert_eq!(codex.upstream_endpoint_type, "codex");
+        assert_eq!(
+            codex
+                .header_override
+                .get("chatgpt-account-id")
+                .map(String::as_str),
+            Some("org-from-access-token")
+        );
     }
 
     #[test]

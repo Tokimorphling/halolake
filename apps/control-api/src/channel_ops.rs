@@ -51,6 +51,9 @@ const ENDPOINT_GEMINI: &str = "gemini";
 const ENDPOINT_JINA_RERANK: &str = "jina-rerank";
 const ENDPOINT_IMAGE_GENERATION: &str = "image-generation";
 const ENDPOINT_EMBEDDINGS: &str = "embeddings";
+const CODEX_TEST_VERSION: &str = "0.144.1";
+const CODEX_TEST_USER_AGENT: &str =
+    "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color";
 
 #[allow(async_fn_in_trait)]
 pub(crate) trait ChannelOpsProgress {
@@ -367,7 +370,8 @@ impl ChannelOpsService {
         endpoint: &str,
         stream: bool,
     ) -> Result<(), ManagementError> {
-        let key = first_key(&channel.key);
+        let credential = channel_test_credential(channel)?;
+        let key = credential.api_key;
         let base_url = channel_base_url(channel);
         let (url, body, auth) =
             build_test_http_request(channel, &base_url, &key, model, endpoint, stream);
@@ -387,6 +391,27 @@ impl ChannelOpsService {
                     .header("anthropic-version", "2023-06-01");
             }
             TestAuth::GeminiQuery => {}
+        }
+        if channel.channel_type == CHANNEL_TYPE_CODEX {
+            let account_id = credential
+                .account_id
+                .ok_or(ManagementError::InvalidRequest(
+                    "codex channel: account_id is required (chatgpt_account_id or organization_id)",
+                ))?;
+            request = request
+                .header("chatgpt-account-id", account_id)
+                .header("openai-beta", "responses=experimental")
+                .header("originator", "codex_cli_rs")
+                .header("user-agent", CODEX_TEST_USER_AGENT)
+                .header("version", CODEX_TEST_VERSION)
+                .header(
+                    "accept",
+                    if stream {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                );
         }
         // Apply channel header_override last (xAI chat-proxy CLI identity, etc.).
         for (name, value) in channel_header_overrides(channel, &key) {
@@ -1298,17 +1323,49 @@ fn build_test_http_request(
             TestAuth::Bearer,
         ),
         ENDPOINT_OPENAI_RESPONSE => (
-            format!("{base_url}/v1/responses"),
-            json!({
-                "model": model,
-                "input": [{"role": "user", "content": "hi"}],
-                "stream": stream
-            }),
+            format!(
+                "{base_url}{}",
+                if channel.channel_type == CHANNEL_TYPE_CODEX {
+                    "/responses"
+                } else {
+                    "/v1/responses"
+                }
+            ),
+            if channel.channel_type == CHANNEL_TYPE_CODEX {
+                json!({
+                    "model": model,
+                    "instructions": "",
+                    "input": [{"role": "user", "content": "hi"}],
+                    "store": false,
+                    "stream": stream
+                })
+            } else {
+                json!({
+                    "model": model,
+                    "input": [{"role": "user", "content": "hi"}],
+                    "stream": stream
+                })
+            },
             TestAuth::Bearer,
         ),
         ENDPOINT_OPENAI_RESPONSE_COMPACT => (
-            format!("{base_url}/v1/responses/compact"),
-            json!({"model": model, "input": [{"role": "user", "content": "hi"}]}),
+            format!(
+                "{base_url}{}",
+                if channel.channel_type == CHANNEL_TYPE_CODEX {
+                    "/responses/compact"
+                } else {
+                    "/v1/responses/compact"
+                }
+            ),
+            if channel.channel_type == CHANNEL_TYPE_CODEX {
+                json!({
+                    "model": model,
+                    "instructions": "",
+                    "input": [{"role": "user", "content": "hi"}]
+                })
+            } else {
+                json!({"model": model, "input": [{"role": "user", "content": "hi"}]})
+            },
             TestAuth::Bearer,
         ),
         _ => {
@@ -1392,7 +1449,16 @@ fn channel_base_url(channel: &ChannelRecord) -> String {
         .as_deref()
         .map(str::trim)
         .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| default_channel_base_url(channel.channel_type))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if channel.channel_type == CHANNEL_TYPE_CODEX
+                && crate::control_api_ext::parse_flexible_codex_key(&channel.key).is_ok()
+            {
+                "https://chatgpt.com/backend-api/codex".to_string()
+            } else {
+                default_channel_base_url(channel.channel_type).to_string()
+            }
+        })
         .trim_end_matches('/')
         .to_string()
 }
@@ -1557,6 +1623,41 @@ fn first_key(key: &str) -> String {
         .to_string()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelTestCredential {
+    api_key:    String,
+    account_id: Option<String>,
+}
+
+fn channel_test_credential(
+    channel: &ChannelRecord,
+) -> Result<ChannelTestCredential, ManagementError> {
+    if channel.channel_type != CHANNEL_TYPE_CODEX {
+        return Ok(ChannelTestCredential {
+            api_key:    first_key(&channel.key),
+            account_id: None,
+        });
+    }
+
+    let key = crate::control_api_ext::parse_flexible_codex_key(&channel.key)?;
+    let api_key = key
+        .access_token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+        .ok_or(ManagementError::InvalidRequest(
+            "codex channel: access_token is required",
+        ))?;
+    let account_id = key
+        .account_id
+        .map(|account_id| account_id.trim().to_string())
+        .filter(|account_id| !account_id.is_empty());
+
+    Ok(ChannelTestCredential {
+        api_key,
+        account_id,
+    })
+}
+
 fn is_multi_key(key: &str) -> bool {
     key.lines()
         .filter(|line| !line.trim().is_empty())
@@ -1644,6 +1745,36 @@ fn default_true() -> bool {
 mod tests {
     use super::*;
 
+    fn codex_channel(key: String) -> ChannelRecord {
+        ChannelRecord {
+            id: 1,
+            snapshot_id: None,
+            channel_type: CHANNEL_TYPE_CODEX,
+            key,
+            status: STATUS_ENABLED,
+            name: "codex-oauth".to_string(),
+            weight: Some(1),
+            created_time: 0,
+            test_time: 0,
+            response_time: 0,
+            base_url: None,
+            balance: 0.0,
+            balance_updated_time: 0,
+            models: "gpt-5".to_string(),
+            group: "default".to_string(),
+            used_quota: 0,
+            model_mapping: None,
+            priority: Some(0),
+            auto_ban: Some(1),
+            tag: None,
+            setting: None,
+            param_override: None,
+            header_override: None,
+            remark: None,
+            proxy_id: None,
+        }
+    }
+
     #[test]
     fn model_change_apply_adds_and_removes_with_add_wins() {
         let origin = vec!["a".to_string(), "b".to_string()];
@@ -1676,5 +1807,38 @@ mod tests {
     fn civil_date_formats_unix_epoch() {
         assert_eq!(ymd_string_from_days(0), "1970-01-01");
         assert_eq!(ymd_string_from_days(20_643), "2026-07-09");
+    }
+
+    #[test]
+    fn codex_test_unwraps_oauth_key_and_targets_chatgpt_responses() {
+        let channel = codex_channel(
+            json!({
+                "type": "codex",
+                "access_token": "oauth-access",
+                "refresh_token": "oauth-refresh",
+                "account_id": "org-account"
+            })
+            .to_string(),
+        );
+
+        let credential = channel_test_credential(&channel).expect("credential should parse");
+        let base_url = channel_base_url(&channel);
+        let (url, body, auth) = build_test_http_request(
+            &channel,
+            &base_url,
+            &credential.api_key,
+            "gpt-5",
+            ENDPOINT_OPENAI_RESPONSE,
+            true,
+        );
+
+        assert_eq!(credential.api_key, "oauth-access");
+        assert_eq!(credential.account_id.as_deref(), Some("org-account"));
+        assert_eq!(base_url, "https://chatgpt.com/backend-api/codex");
+        assert_eq!(url, "https://chatgpt.com/backend-api/codex/responses");
+        assert_eq!(body["instructions"], "");
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+        assert!(matches!(auth, TestAuth::Bearer));
     }
 }

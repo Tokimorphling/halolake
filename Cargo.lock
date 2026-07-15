@@ -1483,6 +1483,7 @@ version = "0.1.0"
 dependencies = [
  "bcrypt",
  "certain-map",
+ "data-encoding",
  "halolake-domain",
  "halolake-router-core",
  "serde",

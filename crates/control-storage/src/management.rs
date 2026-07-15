@@ -329,8 +329,15 @@ impl Service<SettleUsageRequest> for PostgresManagementStore {
     async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
         let _guard = self.write_lock.lock().await;
         let plan = self.memory.plan_usage_settlement(req)?;
-        persist_usage_settlement_pg(&self.pool, plan.settlement()).await?;
-        self.memory.apply_planned_usage_settlement(plan)
+        match persist_usage_settlement_pg(&self.pool, plan.settlement(), plan.base_version()).await
+        {
+            Ok(()) => self.memory.apply_planned_usage_settlement(plan),
+            Err(err @ ManagementError::StaleManagementVersion { .. }) => {
+                self.refresh_from_database().await?;
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -497,12 +504,7 @@ impl PostgresManagementStore {
             .map_err(storage_err)?;
         migrate_pg(&pool).await?;
 
-        let data = if is_empty_pg(&pool).await? {
-            save_data_pg(&pool, &seed).await?;
-            seed
-        } else {
-            load_data_pg(&pool).await?
-        };
+        let data = load_or_seed_pg(&pool, seed).await?;
 
         Ok(Self {
             pool,
@@ -520,8 +522,19 @@ impl PostgresManagementStore {
     }
 
     async fn commit_candidate(&self, data: ManagementData) -> Result<(), ManagementError> {
-        save_data_pg(&self.pool, &data).await?;
-        self.memory.replace_data(data)
+        let expected_version = self.memory.current_data()?.version;
+        match save_data_pg_if_current(&self.pool, &data, expected_version).await {
+            Ok(()) => self.memory.replace_data(data),
+            Err(err @ ManagementError::StaleManagementVersion { .. }) => {
+                self.refresh_from_database().await?;
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn refresh_from_database(&self) -> Result<(), ManagementError> {
+        self.memory.replace_data(load_data_pg(&self.pool).await?)
     }
 }
 
@@ -1095,11 +1108,13 @@ async fn persist_usage_settlement_mysql(
 async fn persist_usage_settlement_pg(
     pool: &PgPool,
     settlement: &UsageSettlement,
+    expected_version: u64,
 ) -> Result<(), ManagementError> {
     let Some(version) = settlement.version else {
         return Ok(());
     };
     let mut tx = pool.begin().await.map_err(storage_err)?;
+    lock_expected_management_version_pg(&mut tx, expected_version).await?;
     sqlx::query(
         "INSERT INTO control_meta (key, value) VALUES ('version', $1)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -1851,12 +1866,26 @@ async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
     Ok(())
 }
 
-async fn is_empty_pg(pool: &PgPool) -> Result<bool, ManagementError> {
-    let row = sqlx::query("SELECT COUNT(*) AS count FROM control_meta")
-        .fetch_one(pool)
+async fn load_or_seed_pg(
+    pool: &PgPool,
+    seed: ManagementData,
+) -> Result<ManagementData, ManagementError> {
+    let mut tx = pool.begin().await.map_err(storage_err)?;
+    sqlx::query("LOCK TABLE control_meta IN EXCLUSIVE MODE")
+        .execute(&mut *tx)
         .await
         .map_err(storage_err)?;
-    Ok(row.try_get::<i64, _>("count").map_err(storage_err)? == 0)
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM control_meta")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage_err)?;
+    if count == 0 {
+        save_data_tx_pg(tx, &seed).await?;
+        Ok(seed)
+    } else {
+        tx.commit().await.map_err(storage_err)?;
+        load_data_pg(pool).await
+    }
 }
 
 async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> {
@@ -2000,9 +2029,51 @@ async fn load_data_pg(pool: &PgPool) -> Result<ManagementData, ManagementError> 
     ))
 }
 
-async fn save_data_pg(pool: &PgPool, data: &ManagementData) -> Result<(), ManagementError> {
+async fn save_data_pg_if_current(
+    pool: &PgPool,
+    data: &ManagementData,
+    expected_version: u64,
+) -> Result<(), ManagementError> {
     let mut tx = pool.begin().await.map_err(storage_err)?;
+    lock_expected_management_version_pg(&mut tx, expected_version).await?;
+    save_data_tx_pg(tx, data).await
+}
 
+async fn lock_expected_management_version_pg(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    expected_version: u64,
+) -> Result<(), ManagementError> {
+    let value = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM control_meta WHERE key = 'version' FOR UPDATE",
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(storage_err)?
+    .ok_or_else(|| ManagementError::Storage("management version is missing".to_string()))?;
+    let current_version = value.parse::<u64>().map_err(|err| {
+        ManagementError::Storage(format!("invalid management version {value:?}: {err}"))
+    })?;
+    ensure_expected_management_version(current_version, expected_version)
+}
+
+fn ensure_expected_management_version(
+    current_version: u64,
+    expected_version: u64,
+) -> Result<(), ManagementError> {
+    if current_version == expected_version {
+        Ok(())
+    } else {
+        Err(ManagementError::StaleManagementVersion {
+            expected: expected_version,
+            current:  current_version,
+        })
+    }
+}
+
+async fn save_data_tx_pg(
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    data: &ManagementData,
+) -> Result<(), ManagementError> {
     sqlx::query(
         "INSERT INTO control_meta (key, value) VALUES ('version', $1)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -2368,6 +2439,18 @@ mod tests {
     use halolake_control_plane::UsagePricing;
     use halolake_domain::{STATUS_ENABLED, UsageEvent, UsageStatus};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn management_version_guard_rejects_stale_snapshot() {
+        assert!(ensure_expected_management_version(7, 7).is_ok());
+        assert!(matches!(
+            ensure_expected_management_version(8, 7),
+            Err(ManagementError::StaleManagementVersion {
+                expected: 7,
+                current:  8,
+            })
+        ));
+    }
 
     #[tokio::test]
     async fn sqlite_usage_settlement_only_updates_affected_rows() {

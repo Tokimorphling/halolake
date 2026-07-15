@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createElement, type ReactNode } from 'react'
 
+import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { cn } from '@/lib/utils'
 
 export const sideDrawerContentClassName = (className?: string) =>
@@ -88,6 +89,7 @@ export function SideDrawerSectionHeader(props: {
   title: ReactNode
   description?: ReactNode
   icon?: ReactNode
+  iconTone?: IconBadgeTone
   className?: string
 }) {
   return createElement(
@@ -100,11 +102,8 @@ export function SideDrawerSectionHeader(props: {
     },
     props.icon
       ? createElement(
-          'span',
-          {
-            className:
-              'bg-muted/80 text-muted-foreground ring-foreground/6 flex size-8 shrink-0 items-center justify-center rounded-lg ring-1',
-          },
+          IconBadge,
+          { tone: props.iconTone, size: 'md' },
           props.icon
         )
       : null,

@@ -53,6 +53,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
+import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
@@ -92,6 +96,16 @@ export function ChannelsPrimaryButtons() {
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
+  const {
+    open: verificationOpen,
+    methods: verificationMethods,
+    state: verificationState,
+    executeVerification,
+    withVerification,
+    cancel: cancelVerification,
+    setCode: setVerificationCode,
+    switchMethod: switchVerificationMethod,
+  } = useSecureVerification()
 
   const handleTagModeToggle = (checked: boolean) => {
     localStorage.setItem('enable-tag-mode', String(checked))
@@ -169,9 +183,7 @@ export function ChannelsPrimaryButtons() {
           </TooltipTrigger>
           <TooltipContent>
             {canEditSensitive
-              ? t(
-                  'Import Sub2API / CLIProxyAPI / Codex auth files as channels'
-                )
+              ? t('Import Sub2API / CLIProxyAPI / Codex auth files as channels')
               : t('No permission to perform this action')}
           </TooltipContent>
         </Tooltip>
@@ -336,13 +348,15 @@ export function ChannelsPrimaryButtons() {
           'This will permanently delete all manually and automatically disabled channels. This action cannot be undone.'
         )}
         destructive
-        handleConfirm={() => {
+        handleConfirm={async () => {
           if (!canEditSensitive) return
-          handleDeleteAllDisabled(queryClient, (_count) => {
-            // eslint-disable-next-line no-console
-            console.log(`Deleted ${_count} channels`)
-          })
-          setShowDeleteDialog(false)
+          await withVerification(() =>
+            handleDeleteAllDisabled(queryClient, (_count) => {
+              // eslint-disable-next-line no-console
+              console.log(`Deleted ${_count} channels`)
+              setShowDeleteDialog(false)
+            })
+          )
         }}
       />
 
@@ -372,6 +386,21 @@ export function ChannelsPrimaryButtons() {
       <ImportDataDialog
         open={showImportDialog}
         onOpenChange={setShowImportDialog}
+      />
+
+      <SecureVerificationDialog
+        open={verificationOpen}
+        onOpenChange={(open) => {
+          if (!open) cancelVerification()
+        }}
+        methods={verificationMethods}
+        state={verificationState}
+        onVerify={async (method, code) => {
+          await executeVerification(method, code)
+        }}
+        onCancel={cancelVerification}
+        onCodeChange={setVerificationCode}
+        onMethodChange={switchVerificationMethod}
       />
     </>
   )

@@ -976,6 +976,29 @@ mod tests {
     }
 
     #[test]
+    fn maps_openai_oauth_organization_id_to_codex_account_id() {
+        let credentials = JsonMap::from_iter([
+            ("access_token".into(), json!("at-organization-fallback")),
+            ("refresh_token".into(), json!("rt-organization-fallback")),
+            ("organization_id".into(), json!("org-account")),
+            ("chatgpt_account_id".into(), JsonValue::Null),
+        ]);
+        let item = DataAccount {
+            name: "oauth-with-organization".into(),
+            platform: "openai".into(),
+            account_type: "oauth".into(),
+            credentials,
+            ..DataAccount::default()
+        };
+
+        let channel = map_account_to_channel(&item, "default", Some("gpt-5"), None)
+            .expect("organization fallback should import");
+        let key = parse_flexible_codex_key(&channel.key).expect("stored key should parse");
+
+        assert_eq!(key.account_id.as_deref(), Some("org-account"));
+    }
+
+    #[test]
     fn maps_openai_apikey_to_type1() {
         let mut creds = JsonMap::new();
         creds.insert("api_key".into(), json!("sk-test"));

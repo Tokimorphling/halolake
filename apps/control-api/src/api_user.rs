@@ -82,6 +82,26 @@ pub(crate) struct LoginRequest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct UpdateSelfPayload {
+    #[serde(default)]
+    pub(crate) display_name:      Option<String>,
+    #[serde(default)]
+    pub(crate) password:          Option<String>,
+    #[serde(default)]
+    pub(crate) original_password: Option<String>,
+    #[serde(default)]
+    pub(crate) email:             Option<String>,
+    #[serde(default)]
+    pub(crate) setting:           Option<String>,
+    #[serde(default)]
+    pub(crate) remark:            Option<String>,
+    #[serde(default)]
+    pub(crate) language:          Option<String>,
+    #[serde(default)]
+    pub(crate) sidebar_modules:   Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct TwoFaCodePayload {
     #[serde(default)]
     pub(crate) code: String,
@@ -891,35 +911,90 @@ pub(crate) async fn do_checkin(State(state): State<AppState>, headers: HeaderMap
     }
 }
 
+fn patched_self_setting(current: &str, patch: &UpdateSelfPayload) -> String {
+    let base = patch
+        .setting
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(current);
+    if patch.language.is_none() && patch.sidebar_modules.is_none() {
+        return base.to_string();
+    }
+    let mut setting = serde_json::from_str::<JsonValue>(base)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    if let Some(language) = patch
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        setting.insert("language".to_string(), json!(language));
+    }
+    if let Some(sidebar_modules) = patch.sidebar_modules.as_ref() {
+        setting.insert("sidebar_modules".to_string(), sidebar_modules.clone());
+    }
+    JsonValue::Object(setting).to_string()
+}
+
 pub(crate) async fn update_self(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(patch): Json<UserRecord>,
+    Json(patch): Json<UpdateSelfPayload>,
 ) -> Response {
     let current = match current_user(&state, &headers).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    let password = patch.password.as_deref().filter(|value| !value.is_empty());
+    if let Some(password) = password {
+        let password_len = password.chars().count();
+        if !(8..=128).contains(&password_len) {
+            return api_error_status(
+                StatusCode::BAD_REQUEST,
+                "password length must be between 8 and 128",
+            );
+        }
+        let Some(original_password) = patch
+            .original_password
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        else {
+            return api_error_status(StatusCode::BAD_REQUEST, "original password is required");
+        };
+        if let Err(err) = state
+            .management
+            .call(LoginUserRequest {
+                username: current.username.clone(),
+                password: original_password.to_string(),
+            })
+            .await
+        {
+            return management_error(err);
+        }
+    }
     // Build the update from the current record and overlay only the fields a
     // user is allowed to change on themselves. Never trust quota/used_quota/
     // group/role/status/username from a self-service payload — accepting those
     // let any common user grant themselves unlimited quota or a privileged
     // group. `actor_role` stays ROLE_ROOT_USER only because the record is now
     // fully server-constructed and cannot carry an escalation.
+    let updated_setting = patched_self_setting(&current.setting, &patch);
     let mut user = current.clone();
-    user.password = patch.password;
-    if !patch.display_name.is_empty() {
-        user.display_name = patch.display_name;
+    if let Some(password) = password {
+        user.password = password.to_string();
     }
-    if !patch.email.is_empty() {
-        user.email = patch.email;
+    if let Some(display_name) = patch.display_name.filter(|value| !value.is_empty()) {
+        user.display_name = display_name;
     }
-    if !patch.setting.is_empty() {
-        user.setting = patch.setting;
+    if let Some(email) = patch.email.filter(|value| !value.is_empty()) {
+        user.email = email;
     }
-    if !patch.remark.is_empty() {
-        user.remark = patch.remark;
+    if let Some(remark) = patch.remark.filter(|value| !value.is_empty()) {
+        user.remark = remark;
     }
+    user.setting = updated_setting;
     match state
         .management
         .call(UpdateUserRequest {
@@ -1939,4 +2014,37 @@ pub(crate) fn generate_token_key() -> String {
     }
     key.truncate(48);
     key
+}
+
+#[cfg(test)]
+mod update_self_tests {
+    use super::*;
+
+    #[test]
+    fn sparse_password_payload_keeps_original_password_for_verification() {
+        let patch: UpdateSelfPayload = serde_json::from_value(json!({
+            "original_password": "old-password",
+            "password": "new-password"
+        }))
+        .expect("sparse self update");
+
+        assert_eq!(patch.original_password.as_deref(), Some("old-password"));
+        assert_eq!(patch.password.as_deref(), Some("new-password"));
+        assert!(patch.display_name.is_none());
+    }
+
+    #[test]
+    fn language_and_sidebar_updates_merge_existing_user_setting() {
+        let patch: UpdateSelfPayload = serde_json::from_value(json!({
+            "language": "zh-CN",
+            "sidebar_modules": {"admin": false}
+        }))
+        .expect("setting patch");
+        let setting = patched_self_setting(r#"{"theme":"dark"}"#, &patch);
+        let value: JsonValue = serde_json::from_str(&setting).expect("merged setting");
+
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["language"], "zh-CN");
+        assert_eq!(value["sidebar_modules"]["admin"], false);
+    }
 }

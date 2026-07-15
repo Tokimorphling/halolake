@@ -245,6 +245,10 @@ pub(crate) fn login_payload(user: &UserRecord) -> serde_json::Value {
 }
 
 pub(crate) fn self_payload(user: &UserRecord) -> serde_json::Value {
+    let sidebar_modules = serde_json::from_str::<serde_json::Value>(&user.setting)
+        .ok()
+        .and_then(|setting| setting.get("sidebar_modules").cloned())
+        .unwrap_or(serde_json::Value::Null);
     json!({
         "id": user.id,
         "username": user.username,
@@ -269,7 +273,7 @@ pub(crate) fn self_payload(user: &UserRecord) -> serde_json::Value {
         "linux_do_id": "",
         "setting": user.setting,
         "stripe_customer": "",
-        "sidebar_modules": serde_json::Value::Null,
+        "sidebar_modules": sidebar_modules,
         "permissions": user_permissions(user.role),
     })
 }

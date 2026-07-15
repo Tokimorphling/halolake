@@ -187,13 +187,28 @@ pub(crate) fn parse_flexible_codex_key(raw: &str) -> Result<CodexOAuthKey, Manag
             "codex channel: empty oauth key",
         ));
     }
-    if let Ok(key) = serde_json::from_str::<CodexOAuthKey>(trimmed) {
+    if let Ok(mut key) = serde_json::from_str::<CodexOAuthKey>(trimmed) {
         if key
             .access_token
             .as_deref()
             .map(str::trim)
             .is_some_and(|token| !token.is_empty())
         {
+            // Flat durable keys are common after import. Enrich any fields that
+            // were absent in the export (notably account_id) from the JWT and
+            // organization_id fallback without overriding explicit values.
+            if let Ok(mut parsed) = normalize_codex_auth_blob(trimmed)
+                && let Some(enriched) = parsed.pop().map(|item| item.key)
+            {
+                key.id_token = prefer_non_empty(key.id_token, enriched.id_token);
+                key.refresh_token = prefer_non_empty(key.refresh_token, enriched.refresh_token);
+                key.client_id = prefer_non_empty(key.client_id, enriched.client_id);
+                key.account_id = prefer_non_empty(key.account_id, enriched.account_id);
+                key.last_refresh = prefer_non_empty(key.last_refresh, enriched.last_refresh);
+                key.email = prefer_non_empty(key.email, enriched.email);
+                key.key_type = prefer_non_empty(key.key_type, enriched.key_type);
+                key.expired = prefer_non_empty(key.expired, enriched.expired);
+            }
             return Ok(key);
         }
     }
@@ -532,6 +547,13 @@ fn normalize_entry(index: usize, value: JsonValue) -> Result<ParsedCodexAuth, Ma
         &mut token_expires_at_unix,
         &mut warnings,
     )?;
+
+    // Sub2API uses organization_id (the access-token `poid` claim) when an
+    // OAuth export has no dedicated chatgpt_account_id. The Codex upstream
+    // expects that value in the chatgpt-account-id header.
+    if account_id.is_empty() && !organization.is_empty() {
+        account_id.clone_from(&organization);
+    }
 
     if token_expires_at_unix.is_none() {
         warnings
@@ -1007,5 +1029,17 @@ mod tests {
         let key = parse_flexible_codex_key(&nested).expect("nested");
         assert_eq!(key.refresh_token.as_deref(), Some("r2"));
         assert_eq!(key.account_id.as_deref(), Some("a2"));
+    }
+
+    #[test]
+    fn flexible_key_falls_back_to_organization_id_for_codex_account() {
+        let access = test_jwt(3600, json!({"poid": "org-account"}));
+        let flat = format!(
+            r#"{{"access_token":"{access}","refresh_token":"r","organization_id":"org-account","type":"codex"}}"#
+        );
+
+        let key = parse_flexible_codex_key(&flat).expect("flat key should enrich");
+
+        assert_eq!(key.account_id.as_deref(), Some("org-account"));
     }
 }

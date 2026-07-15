@@ -25,7 +25,7 @@ use crate::{
         api_error_status, api_ok, api_success, api_success_with_extra, api_success_with_message,
         management_error, system_task_conflict,
     },
-    option_f64, option_i64,
+    now_unix, option_f64, option_i64,
     proxy::{
         CreateProxyRequest, DeleteProxyRequest, GetProxyRequest, ListProxiesRequest, ProxyRecord,
         UpdateProxyRequest,
@@ -50,12 +50,142 @@ use halolake_control_plane::{
 };
 use halolake_domain::{
     ChannelRecord, PageRequest, ROLE_ADMIN_USER, ROLE_ROOT_USER, STATUS_ENABLED,
-    STATUS_MANUALLY_DISABLED, SearchRequest,
+    STATUS_MANUALLY_DISABLED, SearchRequest, UserRecord,
 };
+use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 use service_async::Service;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path as FsPath, PathBuf},
+};
 use tracing::warn;
+use uuid::Uuid;
+
+const CHANNEL_DELETION_BACKUP_DIR_ENV: &str = "HALOLAKE_CHANNEL_DELETION_BACKUP_DIR";
+
+#[derive(Serialize)]
+struct ChannelDeletionActor<'a> {
+    id:       u64,
+    username: &'a str,
+    role:     i32,
+}
+
+#[derive(Serialize)]
+struct ChannelDeletionBackup<'a> {
+    schema_version:     u32,
+    action:             &'a str,
+    created_at:         i64,
+    management_version: u64,
+    actor:              ChannelDeletionActor<'a>,
+    channels:           &'a [ChannelRecord],
+}
+
+fn channel_deletion_backup_dir() -> PathBuf {
+    if let Ok(path) = std::env::var(CHANNEL_DELETION_BACKUP_DIR_ENV)
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path.trim());
+    }
+    if let Ok(path) = std::env::var("HALOLAKE_CREDENTIALS_FILE")
+        && let Some(parent) = FsPath::new(path.trim()).parent()
+    {
+        return parent.join("channel-deletion-backups");
+    }
+    PathBuf::from("data/channel-deletion-backups")
+}
+
+fn write_channel_deletion_backup(
+    directory: &FsPath,
+    action: &str,
+    actor: &UserRecord,
+    management_version: u64,
+    channels: &[ChannelRecord],
+) -> Result<Option<PathBuf>, ManagementError> {
+    if channels.is_empty() {
+        return Ok(None);
+    }
+
+    fs::create_dir_all(directory).map_err(|err| {
+        ManagementError::Storage(format!(
+            "create channel deletion backup directory {}: {err}",
+            directory.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(|err| {
+            ManagementError::Storage(format!(
+                "protect channel deletion backup directory {}: {err}",
+                directory.display()
+            ))
+        })?;
+    }
+
+    let created_at = now_unix();
+    let unique = Uuid::new_v4().simple();
+    let filename = format!("{created_at}-{action}-{unique}.json");
+    let final_path = directory.join(filename);
+    let temp_path = directory.join(format!(".{created_at}-{unique}.tmp"));
+    let backup = ChannelDeletionBackup {
+        schema_version: 1,
+        action,
+        created_at,
+        management_version,
+        actor: ChannelDeletionActor {
+            id:       actor.id,
+            username: &actor.username,
+            role:     actor.role,
+        },
+        channels,
+    };
+    let bytes = serde_json::to_vec_pretty(&backup).map_err(|err| {
+        ManagementError::Storage(format!("serialize channel deletion backup: {err}"))
+    })?;
+
+    let result = (|| -> std::io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        fs::rename(&temp_path, &final_path)?;
+        Ok(())
+    })();
+    if let Err(err) = result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ManagementError::Storage(format!(
+            "write channel deletion backup {}: {err}",
+            final_path.display()
+        )));
+    }
+
+    Ok(Some(final_path))
+}
+
+async fn backup_channels_before_deletion(
+    action: &'static str,
+    actor: &UserRecord,
+    management_version: u64,
+    channels: &[ChannelRecord],
+) -> Result<Option<PathBuf>, ManagementError> {
+    let directory = channel_deletion_backup_dir();
+    let actor = actor.clone();
+    let channels = channels.to_vec();
+    tokio::task::spawn_blocking(move || {
+        write_channel_deletion_backup(&directory, action, &actor, management_version, &channels)
+    })
+    .await
+    .map_err(|err| ManagementError::Storage(format!("join channel deletion backup task: {err}")))?
+}
 
 fn normalize_group_filter(group: &str) -> Option<&str> {
     let group = group.trim();
@@ -661,6 +791,61 @@ mod create_channel_tests {
     }
 
     #[test]
+    fn channel_deletion_backup_is_private_and_restorable() {
+        let directory = std::env::temp_dir().join(format!(
+            "halolake-channel-deletion-backup-{}",
+            Uuid::new_v4().simple()
+        ));
+        let channel = channel_record_from_json(json!({
+            "id": 42,
+            "type": 1,
+            "key": "sk-backup-test",
+            "name": "restorable",
+            "models": "gpt-test",
+            "group": "default"
+        }))
+        .expect("channel");
+        let actor: UserRecord = serde_json::from_value(json!({
+            "id": 1,
+            "username": "admin",
+            "password": "",
+            "role": ROLE_ROOT_USER
+        }))
+        .expect("actor");
+
+        let path = write_channel_deletion_backup(
+            &directory,
+            "delete-one",
+            &actor,
+            77,
+            std::slice::from_ref(&channel),
+        )
+        .expect("write backup")
+        .expect("backup path");
+        let value: JsonValue =
+            serde_json::from_slice(&fs::read(&path).expect("read channel deletion backup"))
+                .expect("parse channel deletion backup");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["action"], "delete-one");
+        assert_eq!(value["management_version"], 77);
+        assert_eq!(value["actor"]["id"], 1);
+        assert_eq!(value["channels"][0]["id"], 42);
+        assert_eq!(value["channels"][0]["key"], "sk-backup-test");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path)
+                .expect("backup metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0);
+        }
+
+        fs::remove_dir_all(directory).expect("remove backup directory");
+    }
+
+    #[test]
     fn batch_status_accepts_new_api_and_legacy_shapes() {
         let unified: BatchChannelStatusPayload = serde_json::from_value(json!({
             "ids": [1, 2],
@@ -847,10 +1032,42 @@ pub(crate) async fn delete_channel(
     headers: HeaderMap,
     Path(id): Path<u64>,
 ) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+    let actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    let data = match state.management.current_data() {
+        Ok(data) => data,
+        Err(err) => return management_error(err),
+    };
+    let channels = data
+        .channels
+        .iter()
+        .filter(|channel| channel.id == id)
+        .cloned()
+        .collect::<Vec<_>>();
+    if channels.is_empty() {
+        return management_error(ManagementError::NotFound);
+    }
+    let backup_path = match backup_channels_before_deletion(
+        "delete-one",
+        &actor,
+        data.version,
+        &channels,
+    )
+    .await
+    {
+        Ok(Some(path)) => path,
+        Ok(None) => return management_error(ManagementError::NotFound),
+        Err(err) => return management_error(err),
+    };
+    warn!(
+        actor_id = actor.id,
+        actor_username = %actor.username,
+        channel_id = id,
+        backup_path = %backup_path.display(),
+        "channel deletion backup created"
+    );
     match state.management.call(DeleteChannelRequest { id }).await {
         Ok(()) => match publish_management_snapshot(&state).await {
             Ok(()) => api_ok(),
@@ -865,10 +1082,61 @@ pub(crate) async fn delete_channel_batch(
     headers: HeaderMap,
     Json(req): Json<BatchIds>,
 ) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+    let actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_secure_verification(&state, &headers) {
+        return resp;
+    }
+    let data = match state.management.current_data() {
+        Ok(data) => data,
+        Err(err) => return management_error(err),
+    };
+    let requested_ids = req
+        .ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    if requested_ids.is_empty() || requested_ids.contains(&0) {
+        return management_error(ManagementError::InvalidRequest(
+            "positive channel ids are required",
+        ));
+    }
+    if requested_ids
+        .iter()
+        .any(|id| !data.channels.iter().any(|channel| channel.id == *id))
+    {
+        return management_error(ManagementError::NotFound);
+    }
+    let channels = data
+        .channels
+        .iter()
+        .filter(|channel| requested_ids.contains(&channel.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let backup_path = match backup_channels_before_deletion(
+        "delete-batch",
+        &actor,
+        data.version,
+        &channels,
+    )
+    .await
+    {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            return management_error(ManagementError::InvalidRequest("channels are required"));
+        }
+        Err(err) => return management_error(err),
+    };
+    warn!(
+        actor_id = actor.id,
+        actor_username = %actor.username,
+        channel_ids = ?requested_ids,
+        channel_count = channels.len(),
+        backup_path = %backup_path.display(),
+        "batch channel deletion backup created"
+    );
     match state
         .management
         .call(DeleteChannelsBatchRequest { ids: req.ids })
@@ -1487,10 +1755,40 @@ pub(crate) async fn delete_disabled_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let _actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
+    let actor = match require_role(&state, &headers, ROLE_ADMIN_USER).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    if let Err(resp) = require_secure_verification(&state, &headers) {
+        return resp;
+    }
+    let data = match state.management.current_data() {
+        Ok(data) => data,
+        Err(err) => return management_error(err),
+    };
+    let channels = data
+        .channels
+        .iter()
+        .filter(|channel| channel.status != STATUS_ENABLED)
+        .cloned()
+        .collect::<Vec<_>>();
+    let backup_path =
+        match backup_channels_before_deletion("delete-disabled", &actor, data.version, &channels)
+            .await
+        {
+            Ok(path) => path,
+            Err(err) => return management_error(err),
+        };
+    if let Some(path) = backup_path.as_ref() {
+        warn!(
+            actor_id = actor.id,
+            actor_username = %actor.username,
+            channel_ids = ?channels.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+            channel_count = channels.len(),
+            backup_path = %path.display(),
+            "disabled channel deletion backup created"
+        );
+    }
     match state.management.call(DeleteDisabledChannelsRequest).await {
         Ok(rows) => match publish_management_snapshot(&state).await {
             Ok(()) => api_success(rows),

@@ -138,6 +138,7 @@ cat data/halolake-credentials.txt
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `HALOLAKE_CREDENTIALS_FILE` | `/data/halolake-credentials.txt` | 凭据文件路径 |
+| `HALOLAKE_CHANNEL_DELETION_BACKUP_DIR` | 凭据文件同目录下的 `channel-deletion-backups/` | 删除渠道前的恢复快照目录；备份失败时拒绝删除 |
 | `HALOLAKE_ADMIN_USERNAME` | `admin` | 自动创建 root 时的用户名（≤12 字符） |
 | `HALOLAKE_AUTO_BOOTSTRAP` | 开启 | 设为 `0`/`false` 时禁用自动 root，改用配置 `[[users]]` |
 | `SESSION_SECRET` | 自动生成 | 若已设置则不再写入新 session_secret |
@@ -172,7 +173,10 @@ volumes:
 6. 用 Token 调 `/v1/chat/completions` 等做一次冒烟  
 7. （可选）配置 OTEL endpoint  
 
-数据目录 `./data` 含 SQLite 与凭据文件，**备份与权限务必管好**。
+数据目录 `./data` 含 SQLite、凭据文件，以及
+`channel-deletion-backups/*.json` 渠道删除快照。删除快照使用原子写入，文件权限为
+`0600`、目录权限为 `0700`；其中包含恢复渠道所需的完整凭据，**备份与权限务必管好**。
+批量删除渠道和“删除所有禁用渠道”还要求已配置的 2FA 或 Passkey 二次验证。
 
 ---
 

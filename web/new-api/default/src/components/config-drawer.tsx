@@ -280,16 +280,12 @@ function PresetConfig() {
               <div
                 aria-hidden='true'
                 className='absolute inset-0 rounded-md'
-                style={
-                  preset.value === 'default'
-                    ? {
-                        background:
-                          'linear-gradient(135deg, var(--background) 0%, var(--muted) 50%, var(--foreground) 100%)',
-                      }
-                    : {
-                        background: `linear-gradient(135deg, ${preset.swatches[0]} 0%, ${preset.swatches[1] ?? preset.swatches[0]} 100%)`,
-                      }
-                }
+                style={{
+                  background:
+                    preset.value === 'default'
+                      ? 'linear-gradient(135deg, oklch(0.68 0.2 25) 0%, oklch(0.8 0.17 85) 25%, oklch(0.72 0.18 155) 50%, oklch(0.66 0.19 245) 75%, oklch(0.68 0.2 315) 100%)'
+                      : `linear-gradient(135deg, ${preset.swatches[0]} 0%, ${preset.swatches[1] ?? preset.swatches[0]} 100%)`,
+                }}
               />
               <CircleCheck
                 className={cn(
@@ -472,10 +468,10 @@ function ScalePreview(props: { rows: number; rowGap: string }) {
       className='absolute inset-2.5 flex flex-col justify-center'
       style={{ gap: props.rowGap }}
     >
-      {Array.from({ length: props.rows }, (_, i) => 85 - i * 10).map(
+      {Array.from({ length: props.rows }, (_, index) => 85 - index * 10).map(
         (width) => (
           <span
-            key={`preview-bar-${width}`}
+            key={width}
             className='bg-foreground/60 block h-[2px] rounded-full'
             style={{ width: `${width}%` }}
           />
