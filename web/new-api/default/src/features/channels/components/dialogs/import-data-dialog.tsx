@@ -41,9 +41,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { listProxies } from '@/features/proxies/api'
+import { PROXY_STATUS } from '@/features/proxies/constants'
+import type { Proxy } from '@/features/proxies/types'
 import { cn } from '@/lib/utils'
 
-import { getGroups, importAuthJson, importAuthUpload } from '../../api'
+import {
+  getGroups,
+  importAuthJson,
+  importAuthUpload,
+  type AuthImportMethod,
+} from '../../api'
 import { channelsQueryKeys } from '../../lib'
 
 type ImportDataDialogProps = {
@@ -58,7 +66,7 @@ type ImportMode = 'auto' | 'sub2api-data' | 'cliproxy' | 'codex-session'
  * OpenAI / Codex authorization method (sub2api-aligned).
  * - file: multi-file / drag-drop
  * - refresh_token: manual RT (one per line, batch)
- * - mobile_refresh_token: same RT exchange path (label only)
+ * - mobile_refresh_token: mobile OAuth client RT (one per line, batch)
  * - codex_session: Codex JSON / AT paste (batch lines or JSON)
  * - codex_pat: Codex Personal Access Token (at-*, batch)
  */
@@ -68,6 +76,10 @@ type AuthMethod =
   | 'mobile_refresh_token'
   | 'codex_session'
   | 'codex_pat'
+
+function apiAuthMethod(method: AuthMethod): AuthImportMethod {
+  return method === 'file' ? 'auto' : method
+}
 
 function fileHelpText(mode: ImportMode, t: (key: string) => string): string {
   if (mode === 'sub2api-data') {
@@ -110,7 +122,10 @@ function countPasteLines(text: string): number {
     .filter((line) => line && !line.startsWith('#')).length
 }
 
-function pastePlaceholder(method: AuthMethod, t: (key: string) => string): string {
+function pastePlaceholder(
+  method: AuthMethod,
+  t: (key: string) => string
+): string {
   if (method === 'refresh_token' || method === 'mobile_refresh_token') {
     return t('One refresh token per line (batch supported)')
   }
@@ -130,7 +145,7 @@ function pasteHelp(method: AuthMethod, t: (key: string) => string): string {
   }
   if (method === 'mobile_refresh_token') {
     return t(
-      'Mobile RT: same OAuth refresh exchange as manual RT; paste one token per line.'
+      'Mobile RT: uses the mobile OAuth client; paste one token per line.'
     )
   }
   if (method === 'codex_pat') {
@@ -152,12 +167,20 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
   const [files, setFiles] = useState<File[]>([])
   const [pasteText, setPasteText] = useState('')
   const [group, setGroup] = useState('default')
+  const [proxyId, setProxyId] = useState('__none__')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
 
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
     queryFn: getGroups,
+    staleTime: 5 * 60 * 1000,
+    enabled: props.open,
+  })
+
+  const { data: proxyPoolData } = useQuery({
+    queryKey: ['proxies'],
+    queryFn: listProxies,
     staleTime: 5 * 60 * 1000,
     enabled: props.open,
   })
@@ -171,6 +194,14 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
     return [...names]
   }, [groupsData, group])
 
+  const enabledProxies = useMemo(
+    () =>
+      (proxyPoolData?.data ?? []).filter(
+        (proxy: Proxy) => proxy.status === PROXY_STATUS.ENABLED
+      ),
+    [proxyPoolData]
+  )
+
   const pasteCount = countPasteLines(pasteText)
   const canSubmit =
     authMethod === 'file' ? files.length > 0 : pasteText.trim().length > 0
@@ -179,6 +210,7 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
     setFiles([])
     setPasteText('')
     setGroup('default')
+    setProxyId('__none__')
     setIsDragging(false)
     setAuthMethod('file')
     setMode('auto')
@@ -252,6 +284,8 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
     setIsSubmitting(true)
     try {
       const defaultGroup = group.trim() || 'default'
+      const selectedProxyId =
+        proxyId === '__none__' ? undefined : Number(proxyId)
 
       if (authMethod === 'file') {
         if (!files.length) {
@@ -264,14 +298,18 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
           ? await importAuthUpload({
               files,
               format,
+              auth_method: 'auto',
               group: defaultGroup,
+              proxy_id: selectedProxyId,
               update_existing: true,
             })
           : await importAuthJson({
               format,
+              auth_method: 'auto',
               content: await files[0].text(),
               filenames: [files[0].name],
               group: defaultGroup,
+              proxy_id: selectedProxyId,
               update_existing: true,
             })
 
@@ -286,7 +324,7 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
           toast.error(t('Please paste credentials'))
           return
         }
-        // Backend expand_codex_import_blob handles RT / PAT / JSON for codex-session.
+        // Send the explicit method so raw AT, RT, mobile RT, and PAT cannot be confused.
         let pasteFilename = 'paste-refresh-token.txt'
         if (authMethod === 'codex_pat') {
           pasteFilename = 'paste-pat.txt'
@@ -295,9 +333,11 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
         }
         const result = await importAuthJson({
           format: 'codex-session',
+          auth_method: apiAuthMethod(authMethod),
           content,
           filenames: [pasteFilename],
           group: defaultGroup,
+          proxy_id: selectedProxyId,
           update_existing: true,
         })
         if (!result.success || !result.data) {
@@ -550,6 +590,43 @@ export function ImportDataDialog(props: ImportDataDialogProps) {
               {t(
                 'Applied to new channels. Rebind groups in channel settings if needed.'
               )}
+            </p>
+          </div>
+
+          <div className='space-y-2'>
+            <Label htmlFor='import-proxy'>{t('Proxy Address')}</Label>
+            <Select
+              items={[
+                { value: '__none__', label: t('None') },
+                ...enabledProxies.map((proxy) => ({
+                  value: String(proxy.id),
+                  label: `${proxy.name} (${proxy.url})`,
+                })),
+              ]}
+              value={proxyId}
+              onValueChange={(value) => {
+                if (value) setProxyId(value)
+              }}
+            >
+              <SelectTrigger id='import-proxy' className='w-full'>
+                <SelectValue placeholder={t('None')} />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value='__none__'>{t('None')}</SelectItem>
+                  {enabledProxies.map((proxy) => (
+                    <SelectItem key={proxy.id} value={String(proxy.id)}>
+                      {proxy.name}
+                      <span className='text-muted-foreground ml-2 font-mono text-xs'>
+                        {proxy.url}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <p className='text-muted-foreground text-xs'>
+              {t('Network proxy for this channel (supports socks5 protocol)')}
             </p>
           </div>
         </div>

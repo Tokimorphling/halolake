@@ -730,8 +730,16 @@ export interface AuthImportResult {
   }>
 }
 
+export type AuthImportMethod =
+  | 'auto'
+  | 'refresh_token'
+  | 'mobile_refresh_token'
+  | 'codex_session'
+  | 'codex_pat'
+
 export async function importAuthJson(payload: {
   format?: string
+  auth_method?: AuthImportMethod
   content?: string
   contents?: string[]
   filenames?: string[]
@@ -758,9 +766,11 @@ export async function importAuthJson(payload: {
 export async function importAuthUpload(params: {
   files: File[]
   format?: string
+  auth_method?: AuthImportMethod
   group?: string
   models?: string
   name?: string
+  proxy_id?: number
   update_existing?: boolean
 }): Promise<{
   success: boolean
@@ -772,9 +782,11 @@ export async function importAuthUpload(params: {
     form.append('files', file, file.name)
   }
   if (params.format) form.append('format', params.format)
+  if (params.auth_method) form.append('auth_method', params.auth_method)
   if (params.group) form.append('group', params.group)
   if (params.models) form.append('models', params.models)
   if (params.name) form.append('name', params.name)
+  if (params.proxy_id) form.append('proxy_id', String(params.proxy_id))
   form.append(
     'update_existing',
     params.update_existing === false ? 'false' : 'true'

@@ -911,7 +911,7 @@
     "Please paste credentials": "Please paste credentials",
     "Codex JSON / AT: full session JSON, NDJSON, or access tokens (one per line).": "Codex JSON / AT: full session JSON, NDJSON, or access tokens (one per line).",
     "Codex Personal Access Token (at-*). Validated via whoami, then imported. One per line.": "Codex Personal Access Token (at-*). Validated via whoami, then imported. One per line.",
-    "Mobile RT: same OAuth refresh exchange as manual RT; paste one token per line.": "Mobile RT: same OAuth refresh exchange as manual RT; paste one token per line.",
+    "Mobile RT: uses the mobile OAuth client; paste one token per line.": "Mobile RT: uses the mobile OAuth client; paste one token per line.",
     "Manual RT: each line is exchanged via OpenAI OAuth and imported as a Codex channel.": "Manual RT: each line is exchanged via OpenAI OAuth and imported as a Codex channel.",
     "Paste Codex session JSON, access tokens, or one credential per line": "Paste Codex session JSON, access tokens, or one credential per line",
     "One Codex PAT (at-...) per line (batch supported)": "One Codex PAT (at-...) per line (batch supported)",

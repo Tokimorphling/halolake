@@ -911,7 +911,7 @@
     "Please paste credentials": "請貼上憑據",
     "Codex JSON / AT: full session JSON, NDJSON, or access tokens (one per line).": "Codex JSON / AT：完整 session JSON、NDJSON，或 access token（每行一個）。",
     "Codex Personal Access Token (at-*). Validated via whoami, then imported. One per line.": "Codex Personal Access Token（at-*）。經 whoami 校驗後匯入，每行一個。",
-    "Mobile RT: same OAuth refresh exchange as manual RT; paste one token per line.": "行動端 RT：與手動 RT 相同的 OAuth 兌換路徑；每行一個 token。",
+    "Mobile RT: uses the mobile OAuth client; paste one token per line.": "行動端 RT：使用行動端 OAuth 用戶端；每行貼上一個 token。",
     "Manual RT: each line is exchanged via OpenAI OAuth and imported as a Codex channel.": "手動 RT：每行透過 OpenAI OAuth 兌換後匯入為 Codex 渠道。",
     "Paste Codex session JSON, access tokens, or one credential per line": "貼上 Codex session JSON、access token，或每行一條憑據",
     "One Codex PAT (at-...) per line (batch supported)": "每行一個 Codex PAT（at-...，支援批量）",
