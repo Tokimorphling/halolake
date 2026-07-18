@@ -8,16 +8,16 @@ pub(crate) enum OpenAiImageRouteKind {
 }
 
 pub(crate) struct ParsedOpenAiImageRequest {
-    pub(crate) kind:    OpenAiImageRouteKind,
-    pub(crate) model:   String,
-    pub(crate) stream:  bool,
+    pub(crate) kind: OpenAiImageRouteKind,
+    pub(crate) model: String,
+    pub(crate) stream: bool,
     pub(crate) payload: OpenAiImagePayload,
 }
 
 pub(crate) enum OpenAiImagePayload {
     Json {
         request: openai::ImageRequest,
-        value:   JsonValue,
+        value: JsonValue,
     },
     Multipart,
 }
@@ -382,8 +382,8 @@ mod tests {
     fn parses_openai_image_json_request_with_new_api_defaults() {
         let req = GatewayRequest {
             headers: HeaderMap::new(),
-            path:    "/v1/images/generations".to_string(),
-            body:    Bytes::from_static(br#"{"model":"gpt-image-1","prompt":"draw"}"#),
+            path: "/v1/images/generations".to_string(),
+            body: Bytes::from_static(br#"{"model":"gpt-image-1","prompt":"draw"}"#),
         };
 
         let parsed = parse_openai_image_request(&req).expect("image request should parse");

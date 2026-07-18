@@ -49,7 +49,7 @@ const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct CachedDnsAddress {
-    address:    SocketAddr,
+    address: SocketAddr,
     expires_at: Instant,
 }
 
@@ -97,10 +97,13 @@ impl LocalDnsResolver {
             .borrow_mut()
             .entry(host_owned)
             .or_default()
-            .insert(port, CachedDnsAddress {
-                address,
-                expires_at: Instant::now() + DNS_CACHE_TTL,
-            });
+            .insert(
+                port,
+                CachedDnsAddress {
+                    address,
+                    expires_at: Instant::now() + DNS_CACHE_TTL,
+                },
+            );
         Ok(address)
     }
 }
@@ -163,15 +166,15 @@ fn debug_body_summary(enabled: bool, body: Option<&[u8]>) -> Option<RequestBodyS
 /// Redacted structural summary of a chat-like request body.
 #[derive(Debug, Default)]
 pub(crate) struct RequestBodySummary {
-    pub(crate) message_count:    usize,
-    pub(crate) max_tokens:       Option<u64>,
-    pub(crate) temperature:      Option<f64>,
-    pub(crate) top_p:            Option<f64>,
+    pub(crate) message_count: usize,
+    pub(crate) max_tokens: Option<u64>,
+    pub(crate) temperature: Option<f64>,
+    pub(crate) top_p: Option<f64>,
     pub(crate) reasoning_effort: Option<String>,
-    pub(crate) thinking_budget:  Option<u64>,
-    pub(crate) has_tools:        bool,
-    pub(crate) has_images:       bool,
-    pub(crate) preview:          String,
+    pub(crate) thinking_budget: Option<u64>,
+    pub(crate) has_tools: bool,
+    pub(crate) has_images: bool,
+    pub(crate) preview: String,
 }
 
 pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
@@ -898,9 +901,10 @@ mod sse_buffer_tests {
         assert!(buffer.push(b"data: [DONE]\n\n").is_empty());
 
         let mut buffer = SseBuffer::default();
-        assert_eq!(buffer.push_with_done(b"data: [DONE]\n\n", true), vec![
-            "[DONE]".to_string()
-        ]);
+        assert_eq!(
+            buffer.push_with_done(b"data: [DONE]\n\n", true),
+            vec!["[DONE]".to_string()]
+        );
     }
 }
 

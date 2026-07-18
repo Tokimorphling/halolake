@@ -20,21 +20,21 @@ fn snapshot(channel_count: usize, allowed_model_count: usize) -> GatewaySnapshot
 
     let channels = (0..channel_count)
         .map(|index| ChannelConfig {
-            id:                     format!("channel-{index}"),
-            management_id:          Some(index as u64 + 1),
-            provider:               Provider::OpenAi,
-            base_url:               "https://upstream.example".to_string(),
-            api_key:                "benchmark-key".to_string(),
-            api_keys:               Vec::new(),
-            api_key_indexes:        Vec::new(),
-            api_key_env:            None,
-            enabled:                true,
-            weight:                 (index % 100 + 1) as u32,
-            models:                 vec![MODEL.to_string()],
-            groups:                 vec![GROUP.to_string()],
-            proxy:                  None,
-            proxy_required:         false,
-            header_override:        Default::default(),
+            id: format!("channel-{index}"),
+            management_id: Some(index as u64 + 1),
+            provider: Provider::OpenAi,
+            base_url: "https://upstream.example".to_string(),
+            api_key: "benchmark-key".to_string(),
+            api_keys: Vec::new(),
+            api_key_indexes: Vec::new(),
+            api_key_env: None,
+            enabled: true,
+            weight: (index % 100 + 1) as u32,
+            models: vec![MODEL.to_string()],
+            groups: vec![GROUP.to_string()],
+            proxy: None,
+            proxy_required: false,
+            header_override: Default::default(),
             upstream_endpoint_type: String::new(),
         })
         .collect::<Vec<_>>();
@@ -42,8 +42,8 @@ fn snapshot(channel_count: usize, allowed_model_count: usize) -> GatewaySnapshot
         .iter()
         .map(|channel| ModelMapping {
             requested_model: MODEL.to_string(),
-            channel_id:      channel.id.clone(),
-            upstream_model:  MODEL.to_string(),
+            channel_id: channel.id.clone(),
+            upstream_model: MODEL.to_string(),
         })
         .collect();
 
@@ -203,10 +203,10 @@ fn specific_channel_lookup(c: &mut Criterion) {
         let indexed = snapshot(channel_count, 0).index().expect("valid snapshot");
         let auth = indexed.authenticate(TOKEN).expect("valid token");
         let affinity = ChannelAffinityCandidate {
-            cache_key:         "benchmark-affinity".to_string(),
-            ttl_seconds:       60,
+            cache_key: "benchmark-affinity".to_string(),
+            ttl_seconds: 60,
             cached_channel_id: Some(format!("channel-{}", channel_count - 1)),
-            rule_name:         "benchmark".to_string(),
+            rule_name: "benchmark".to_string(),
         };
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(
@@ -242,8 +242,8 @@ fn affinity_cache_hit(c: &mut Criterion) {
                 model_regex: vec![format!("^{MODEL}$")],
                 key_sources: vec![ChannelAffinityKeySource {
                     source_type: "request_header".to_string(),
-                    key:         "x-session-id".to_string(),
-                    path:        String::new(),
+                    key: "x-session-id".to_string(),
+                    path: String::new(),
                 }],
                 ..ChannelAffinityRule::default()
             }],
@@ -256,10 +256,10 @@ fn affinity_cache_hit(c: &mut Criterion) {
             .resolve_affinity(
                 ChannelAffinityRequest {
                     requested_model: MODEL,
-                    path:            "/v1/chat/completions",
-                    user_agent:      "",
-                    using_group:     GROUP,
-                    body:            b"",
+                    path: "/v1/chat/completions",
+                    user_agent: "",
+                    using_group: GROUP,
+                    body: b"",
                 },
                 &cache,
                 |_| Some("benchmark-session".to_string()),
@@ -277,10 +277,10 @@ fn affinity_cache_hit(c: &mut Criterion) {
                         .resolve_affinity(
                             ChannelAffinityRequest {
                                 requested_model: MODEL,
-                                path:            "/v1/chat/completions",
-                                user_agent:      "",
-                                using_group:     GROUP,
-                                body:            b"",
+                                path: "/v1/chat/completions",
+                                user_agent: "",
+                                using_group: GROUP,
+                                body: b"",
                             },
                             &cache,
                             |_| Some("benchmark-session".to_string()),

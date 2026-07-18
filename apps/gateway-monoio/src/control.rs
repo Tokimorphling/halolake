@@ -10,12 +10,12 @@ const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
 
 #[derive(Clone)]
 pub(crate) struct MonoioHttpSnapshotSource {
-    snapshot_url:    Arc<str>,
-    internal_key:    Option<Arc<str>>,
+    snapshot_url: Arc<str>,
+    internal_key: Option<Arc<str>>,
     connect_timeout: Option<Duration>,
-    dns:             LocalDnsResolver,
-    http:            HttpUpstream,
-    https:           HttpsUpstream,
+    dns: LocalDnsResolver,
+    http: HttpUpstream,
+    https: HttpsUpstream,
 }
 
 impl MonoioHttpSnapshotSource {
@@ -154,13 +154,13 @@ fn snapshot_transport(err: anyhow::Error) -> SnapshotError {
 
 #[derive(Clone)]
 pub(crate) struct MonoioHttpUsageSink {
-    usage_url:       Arc<str>,
-    internal_key:    Option<Arc<str>>,
+    usage_url: Arc<str>,
+    internal_key: Option<Arc<str>>,
     connect_timeout: Option<Duration>,
-    read_timeout:    Option<Duration>,
-    dns:             LocalDnsResolver,
-    http:            Rc<StreamingHttpUpstream>,
-    https:           HttpsUpstream,
+    read_timeout: Option<Duration>,
+    dns: LocalDnsResolver,
+    http: Rc<StreamingHttpUpstream>,
+    https: HttpsUpstream,
 }
 
 impl MonoioHttpUsageSink {
@@ -285,12 +285,12 @@ fn usage_transport(err: anyhow::Error) -> UsageError {
 #[derive(Clone)]
 pub(crate) struct MonoioHttpChannelFeedbackSink {
     channel_feedback_url: Arc<str>,
-    internal_key:         Option<Arc<str>>,
-    connect_timeout:      Option<Duration>,
-    read_timeout:         Option<Duration>,
-    dns:                  LocalDnsResolver,
-    http:                 Rc<StreamingHttpUpstream>,
-    https:                HttpsUpstream,
+    internal_key: Option<Arc<str>>,
+    connect_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+    dns: LocalDnsResolver,
+    http: Rc<StreamingHttpUpstream>,
+    https: HttpsUpstream,
 }
 
 impl MonoioHttpChannelFeedbackSink {
@@ -425,16 +425,16 @@ fn channel_feedback_transport(err: anyhow::Error) -> ChannelFeedbackError {
 /// task per request on the relay hot path.
 #[derive(Debug)]
 struct LocalReportQueue<T> {
-    pending:             VecDeque<T>,
-    active_workers:      usize,
+    pending: VecDeque<T>,
+    active_workers: usize,
     saturation_observed: u64,
 }
 
 impl<T> Default for LocalReportQueue<T> {
     fn default() -> Self {
         Self {
-            pending:             VecDeque::new(),
-            active_workers:      0,
+            pending: VecDeque::new(),
+            active_workers: 0,
             saturation_observed: 0,
         }
     }
@@ -491,12 +491,12 @@ impl<T> LocalReportQueue<T> {
 
 #[derive(Clone, Default)]
 pub(crate) struct UsageReporter {
-    sink:                  Option<Rc<MonoioHttpUsageSink>>,
-    queue:                 Option<Rc<RefCell<LocalReportQueue<UsageEvent>>>>,
-    batch_size:            usize,
-    queue_capacity:        usize,
+    sink: Option<Rc<MonoioHttpUsageSink>>,
+    queue: Option<Rc<RefCell<LocalReportQueue<UsageEvent>>>>,
+    batch_size: usize,
+    queue_capacity: usize,
     max_in_flight_batches: usize,
-    flush_interval:        Duration,
+    flush_interval: Duration,
 }
 
 impl UsageReporter {
@@ -616,12 +616,12 @@ fn report_retry_delay(consecutive_failures: u32) -> Duration {
 
 #[derive(Clone, Default)]
 pub(crate) struct ChannelFeedbackReporter {
-    sink:                  Option<Rc<MonoioHttpChannelFeedbackSink>>,
-    queue:                 Option<Rc<RefCell<LocalReportQueue<ChannelFeedbackEvent>>>>,
-    batch_size:            usize,
-    queue_capacity:        usize,
+    sink: Option<Rc<MonoioHttpChannelFeedbackSink>>,
+    queue: Option<Rc<RefCell<LocalReportQueue<ChannelFeedbackEvent>>>>,
+    batch_size: usize,
+    queue_capacity: usize,
     max_in_flight_batches: usize,
-    flush_interval:        Duration,
+    flush_interval: Duration,
 }
 
 impl ChannelFeedbackReporter {
@@ -783,13 +783,13 @@ mod report_queue_tests {
 /// Report gateway process heartbeats to control-api System Info.
 #[derive(Clone)]
 pub(crate) struct SystemInstanceReporter {
-    url:             Arc<str>,
-    internal_key:    Option<Arc<str>>,
+    url: Arc<str>,
+    internal_key: Option<Arc<str>>,
     connect_timeout: Option<Duration>,
-    dns:             LocalDnsResolver,
-    http:            HttpUpstream,
-    https:           HttpsUpstream,
-    started_at:      i64,
+    dns: LocalDnsResolver,
+    http: HttpUpstream,
+    https: HttpsUpstream,
+    started_at: i64,
 }
 
 impl SystemInstanceReporter {

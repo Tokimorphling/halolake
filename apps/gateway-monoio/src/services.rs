@@ -10,49 +10,49 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub(crate) struct ChatGatewayService {
-    router:           AuthRouteService,
-    relay:            RelayService,
-    usage:            UsageReporter,
+    router: AuthRouteService,
+    relay: RelayService,
+    usage: UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct ImageGatewayService {
-    router:           AuthRouteService,
-    relay:            RelayService,
-    usage:            UsageReporter,
+    router: AuthRouteService,
+    relay: RelayService,
+    usage: UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct ClaudeMessagesGatewayService {
-    router:           AuthRouteService,
-    relay:            RelayService,
-    usage:            UsageReporter,
+    router: AuthRouteService,
+    relay: RelayService,
+    usage: UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct GeminiGatewayService {
-    router:           AuthRouteService,
-    relay:            RelayService,
-    usage:            UsageReporter,
+    router: AuthRouteService,
+    relay: RelayService,
+    usage: UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct RawOpenAiGatewayService {
-    router:           AuthRouteService,
-    relay:            RelayService,
-    usage:            UsageReporter,
+    router: AuthRouteService,
+    relay: RelayService,
+    usage: UsageReporter,
     channel_feedback: ChannelFeedbackReporter,
 }
 
 #[derive(Clone)]
 pub(crate) struct AuthRouteService {
     snapshots: SnapshotStore,
-    auth:      AuthConfig,
-    next_key:  Rc<Cell<u64>>,
+    auth: AuthConfig,
+    next_key: Rc<Cell<u64>>,
 }
 
 impl ChatGatewayService {
@@ -70,13 +70,13 @@ impl ChatGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router:           AuthRouteService {
+            router: AuthRouteService {
                 snapshots: params.param(),
-                auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Rc::new(Cell::new(0)),
+                auth: Param::<GatewayAuthPolicy>::param(params).0,
+                next_key: Rc::new(Cell::new(0)),
             },
-            relay:            RelayService::from_params(params),
-            usage:            Param::<UsageReporter>::param(params),
+            relay: RelayService::from_params(params),
+            usage: Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -170,13 +170,13 @@ impl ImageGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router:           AuthRouteService {
+            router: AuthRouteService {
                 snapshots: params.param(),
-                auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Rc::new(Cell::new(0)),
+                auth: Param::<GatewayAuthPolicy>::param(params).0,
+                next_key: Rc::new(Cell::new(0)),
             },
-            relay:            RelayService::from_params(params),
-            usage:            Param::<UsageReporter>::param(params),
+            relay: RelayService::from_params(params),
+            usage: Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -267,13 +267,13 @@ impl ClaudeMessagesGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router:           AuthRouteService {
+            router: AuthRouteService {
                 snapshots: params.param(),
-                auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Rc::new(Cell::new(0)),
+                auth: Param::<GatewayAuthPolicy>::param(params).0,
+                next_key: Rc::new(Cell::new(0)),
             },
-            relay:            RelayService::from_params(params),
-            usage:            Param::<UsageReporter>::param(params),
+            relay: RelayService::from_params(params),
+            usage: Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -382,13 +382,13 @@ impl GeminiGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router:           AuthRouteService {
+            router: AuthRouteService {
                 snapshots: params.param(),
-                auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Rc::new(Cell::new(0)),
+                auth: Param::<GatewayAuthPolicy>::param(params).0,
+                next_key: Rc::new(Cell::new(0)),
             },
-            relay:            RelayService::from_params(params),
-            usage:            Param::<UsageReporter>::param(params),
+            relay: RelayService::from_params(params),
+            usage: Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -480,13 +480,13 @@ impl RawOpenAiGatewayService {
             + Param<ChannelFeedbackReporter>,
     {
         Self {
-            router:           AuthRouteService {
+            router: AuthRouteService {
                 snapshots: params.param(),
-                auth:      Param::<GatewayAuthPolicy>::param(params).0,
-                next_key:  Rc::new(Cell::new(0)),
+                auth: Param::<GatewayAuthPolicy>::param(params).0,
+                next_key: Rc::new(Cell::new(0)),
             },
-            relay:            RelayService::from_params(params),
-            usage:            Param::<UsageReporter>::param(params),
+            relay: RelayService::from_params(params),
+            usage: Param::<UsageReporter>::param(params),
             channel_feedback: Param::<ChannelFeedbackReporter>::param(params),
         }
     }
@@ -656,11 +656,11 @@ impl Service<RouteLookup> for AuthRouteService {
         let (api_key, api_key_index) = route.channel.select_api_key_with_index(key_seed);
         let api_key_fingerprint = selected_api_key_fingerprint(api_key);
         Ok(RouteParts {
-            auth:     RequestAuth {
-                user_id:  route.user_id.to_string(),
+            auth: RequestAuth {
+                user_id: route.user_id.to_string(),
                 token_id: auth.token.id().to_string(),
             },
-            route:    RouteContext {
+            route: RouteContext {
                 channel_id: route.channel.id.clone(),
                 management_channel_id: route.channel.management_id,
                 provider: route.channel.provider,
@@ -700,10 +700,10 @@ impl AuthRouteService {
         state.snapshot.record_affinity(
             self.snapshots.affinity_cache(),
             &ChannelAffinityCandidate {
-                cache_key:         affinity.cache_key.clone(),
-                ttl_seconds:       affinity.ttl_seconds,
+                cache_key: affinity.cache_key.clone(),
+                ttl_seconds: affinity.ttl_seconds,
                 cached_channel_id: None,
-                rule_name:         affinity.rule_name.clone(),
+                rule_name: affinity.rule_name.clone(),
             },
             channel_id,
         );
@@ -712,9 +712,9 @@ impl AuthRouteService {
 
 fn route_affinity_context(candidate: ChannelAffinityCandidate) -> RouteAffinityContext {
     RouteAffinityContext {
-        cache_key:   candidate.cache_key,
+        cache_key: candidate.cache_key,
         ttl_seconds: candidate.ttl_seconds,
-        rule_name:   candidate.rule_name,
+        rule_name: candidate.rule_name,
     }
 }
 
@@ -727,17 +727,17 @@ fn selected_api_key_fingerprint(api_key: &str) -> String {
 
 #[derive(Debug, Clone)]
 struct UsageEventParts {
-    request_id:          String,
-    user_id:             String,
-    token_id:            String,
-    channel_id:          String,
-    api_key_index:       Option<usize>,
+    request_id: String,
+    user_id: String,
+    token_id: String,
+    channel_id: String,
+    api_key_index: Option<usize>,
     api_key_fingerprint: String,
-    using_group:         String,
-    requested_model:     String,
-    upstream_model:      String,
-    is_stream:           bool,
-    ip:                  String,
+    using_group: String,
+    requested_model: String,
+    upstream_model: String,
+    is_stream: bool,
+    ip: String,
     upstream_request_id: String,
 }
 
@@ -807,14 +807,14 @@ fn channel_feedback_event(
     meta: &ChannelFeedbackMeta,
 ) -> ChannelFeedbackEvent {
     ChannelFeedbackEvent {
-        request_id:          parts.request_id.clone(),
-        channel_id:          parts.channel_id.clone(),
-        api_key_index:       parts.api_key_index,
+        request_id: parts.request_id.clone(),
+        channel_id: parts.channel_id.clone(),
+        api_key_index: parts.api_key_index,
         api_key_fingerprint: Some(parts.api_key_fingerprint.clone()),
-        status_code:         meta.status_code,
-        reason:              meta.reason,
-        message:             truncate_feedback_message(&meta.message),
-        created_at_unix_ms:  now_unix_ms_i64(),
+        status_code: meta.status_code,
+        reason: meta.reason,
+        message: truncate_feedback_message(&meta.message),
+        created_at_unix_ms: now_unix_ms_i64(),
     }
 }
 
@@ -983,7 +983,7 @@ fn wrap_streaming_usage_body(
 #[derive(Default)]
 struct SseUsageCollector {
     decoder: SseBuffer,
-    usage:   Option<ResponseUsage>,
+    usage: Option<ResponseUsage>,
 }
 
 impl SseUsageCollector {
@@ -1097,13 +1097,13 @@ mod tests {
         assert_eq!(
             collector.usage(),
             Some(ResponseUsage {
-                prompt_tokens:         Some(12),
-                completion_tokens:     Some(4),
-                total_tokens:          Some(16),
-                cache_read_tokens:     None,
+                prompt_tokens: Some(12),
+                completion_tokens: Some(4),
+                total_tokens: Some(16),
+                cache_read_tokens: None,
                 cache_creation_tokens: None,
-                image_tokens:          None,
-                audio_tokens:          None,
+                image_tokens: None,
+                audio_tokens: None,
             })
         );
     }
@@ -1119,13 +1119,13 @@ mod tests {
         assert_eq!(
             collector.usage(),
             Some(ResponseUsage {
-                prompt_tokens:         Some(10),
-                completion_tokens:     Some(5),
-                total_tokens:          Some(15),
-                cache_read_tokens:     Some(3),
+                prompt_tokens: Some(10),
+                completion_tokens: Some(5),
+                total_tokens: Some(15),
+                cache_read_tokens: Some(3),
                 cache_creation_tokens: None,
-                image_tokens:          None,
-                audio_tokens:          None,
+                image_tokens: None,
+                audio_tokens: None,
             })
         );
     }
@@ -1139,13 +1139,13 @@ mod tests {
         assert_eq!(
             collector.usage(),
             Some(ResponseUsage {
-                prompt_tokens:         Some(10),
-                completion_tokens:     Some(6),
-                total_tokens:          Some(16),
-                cache_read_tokens:     None,
+                prompt_tokens: Some(10),
+                completion_tokens: Some(6),
+                total_tokens: Some(16),
+                cache_read_tokens: None,
                 cache_creation_tokens: None,
-                image_tokens:          None,
-                audio_tokens:          None,
+                image_tokens: None,
+                audio_tokens: None,
             })
         );
     }
@@ -1171,17 +1171,17 @@ mod tests {
     #[test]
     fn feedback_event_uses_management_id_and_selected_key_fingerprint() {
         let parts = UsageEventParts {
-            request_id:          "req-1".to_string(),
-            user_id:             "user-1".to_string(),
-            token_id:            "token-1".to_string(),
-            channel_id:          reporting_channel_id(Some(42), "route-alias"),
-            api_key_index:       Some(3),
+            request_id: "req-1".to_string(),
+            user_id: "user-1".to_string(),
+            token_id: "token-1".to_string(),
+            channel_id: reporting_channel_id(Some(42), "route-alias"),
+            api_key_index: Some(3),
             api_key_fingerprint: selected_api_key_fingerprint("secret"),
-            using_group:         "default".to_string(),
-            requested_model:     "model-a".to_string(),
-            upstream_model:      "model-a".to_string(),
-            is_stream:           false,
-            ip:                  "127.0.0.1".to_string(),
+            using_group: "default".to_string(),
+            requested_model: "model-a".to_string(),
+            upstream_model: "model-a".to_string(),
+            is_stream: false,
+            ip: "127.0.0.1".to_string(),
             upstream_request_id: String::new(),
         };
         let event =

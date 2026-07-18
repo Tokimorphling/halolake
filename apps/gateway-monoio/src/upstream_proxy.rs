@@ -59,7 +59,7 @@ pub(crate) enum ProxyKind {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProxyCircuitPolicy {
     failure_threshold: u32,
-    cooldown:          Duration,
+    cooldown: Duration,
 }
 
 impl ProxyCircuitPolicy {
@@ -74,11 +74,11 @@ impl ProxyCircuitPolicy {
 /// Typed request accepted by [`ProxyTransportService`].
 pub(crate) struct ProxyTransportRequest {
     pub(crate) channel_identity: String,
-    pub(crate) proxy:            ProxyEndpoint,
-    pub(crate) target_host:      String,
-    pub(crate) target_port:      u16,
-    pub(crate) target_tls:       bool,
-    pub(crate) request:          Request<HttpBody>,
+    pub(crate) proxy: ProxyEndpoint,
+    pub(crate) target_host: String,
+    pub(crate) target_port: u16,
+    pub(crate) target_tls: bool,
+    pub(crate) request: Request<HttpBody>,
 }
 
 /// Errors produced before an upstream response head is available.
@@ -97,9 +97,9 @@ pub(crate) enum ProxyTransportError {
 /// suppress another channel even when both use the same proxy and upstream.
 #[derive(Clone)]
 pub(crate) struct ProxyTransportService {
-    circuit:         ProxyCircuitBreaker,
+    circuit: ProxyCircuitBreaker,
     connect_timeout: Option<Duration>,
-    read_timeout:    Option<Duration>,
+    read_timeout: Option<Duration>,
 }
 
 impl ProxyTransportService {
@@ -202,13 +202,13 @@ impl Service<ProxyTransportRequest> for ProxyTransportService {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ProxyCircuitKey {
     channel_identity: String,
-    kind:             ProxyKind,
-    proxy_host:       String,
-    proxy_port:       u16,
-    proxy_auth:       Option<(String, String)>,
-    target_host:      String,
-    target_port:      u16,
-    target_tls:       bool,
+    kind: ProxyKind,
+    proxy_host: String,
+    proxy_port: u16,
+    proxy_auth: Option<(String, String)>,
+    target_host: String,
+    target_port: u16,
+    target_tls: bool,
 }
 
 impl ProxyCircuitKey {
@@ -328,24 +328,24 @@ impl ProxyCircuitBreaker {
 
 struct ProxyCircuitPermit {
     breaker: Option<ProxyCircuitBreaker>,
-    key:     Option<ProxyCircuitKey>,
-    armed:   bool,
+    key: Option<ProxyCircuitKey>,
+    armed: bool,
 }
 
 impl ProxyCircuitPermit {
     fn disabled() -> Self {
         Self {
             breaker: None,
-            key:     None,
-            armed:   false,
+            key: None,
+            armed: false,
         }
     }
 
     fn armed(breaker: ProxyCircuitBreaker, key: ProxyCircuitKey) -> Self {
         Self {
             breaker: Some(breaker),
-            key:     Some(key),
-            armed:   true,
+            key: Some(key),
+            armed: true,
         }
     }
 
@@ -380,7 +380,7 @@ impl Drop for ProxyCircuitPermit {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ProxyCircuitFailureUpdate {
     consecutive_failures: u32,
-    opened:               bool,
+    opened: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -31,7 +31,7 @@ pub enum DownstreamProtocol {
 
 #[derive(Debug, Clone)]
 pub struct RequestAuth {
-    pub user_id:  String,
+    pub user_id: String,
     pub token_id: String,
 }
 
@@ -78,21 +78,21 @@ impl ProxyRoute {
 #[derive(Clone)]
 pub struct RouteContext {
     /// Route alias used only by model mappings and affinity.
-    pub channel_id:             String,
+    pub channel_id: String,
     /// Stable management-store ID used by feedback, usage and runtime isolation.
-    pub management_channel_id:  Option<u64>,
-    pub provider:               Provider,
-    pub base_url:               String,
-    pub api_key:                String,
+    pub management_channel_id: Option<u64>,
+    pub provider: Provider,
+    pub base_url: String,
+    pub api_key: String,
     /// SHA-256 of the selected credential; safe for stale-feedback comparison.
-    pub api_key_fingerprint:    String,
-    pub api_key_index:          Option<usize>,
-    pub using_group:            String,
-    pub requested_model:        String,
-    pub upstream_model:         String,
-    pub proxy:                  ProxyRoute,
+    pub api_key_fingerprint: String,
+    pub api_key_index: Option<usize>,
+    pub using_group: String,
+    pub requested_model: String,
+    pub upstream_model: String,
+    pub proxy: ProxyRoute,
     /// Explicit channel header overrides (after default/auth headers).
-    pub header_override:        std::collections::BTreeMap<String, String>,
+    pub header_override: std::collections::BTreeMap<String, String>,
     /// auto | openai | openai-response (channel setting upstream_endpoint_type).
     pub upstream_endpoint_type: String,
 }

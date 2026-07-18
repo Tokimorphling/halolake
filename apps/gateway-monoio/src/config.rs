@@ -3,55 +3,55 @@ use super::*;
 #[derive(Debug, Clone, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default)]
-    pub server:           ServerConfig,
+    pub server: ServerConfig,
     #[serde(default)]
-    pub protocol:         ProtocolConfig,
+    pub protocol: ProtocolConfig,
     #[serde(default)]
-    pub upstream:         UpstreamConfig,
+    pub upstream: UpstreamConfig,
     #[serde(default)]
-    pub auth:             AuthConfig,
+    pub auth: AuthConfig,
     #[serde(default)]
-    pub control:          ControlPlaneConfig,
+    pub control: ControlPlaneConfig,
     #[serde(default = "default_version")]
-    pub version:          u64,
+    pub version: u64,
     #[serde(default)]
-    pub tokens:           Vec<halolake_router_core::TokenConfig>,
+    pub tokens: Vec<halolake_router_core::TokenConfig>,
     #[serde(default)]
-    pub channels:         Vec<ChannelConfig>,
+    pub channels: Vec<ChannelConfig>,
     #[serde(default)]
-    pub model_mappings:   Vec<halolake_router_core::ModelMapping>,
+    pub model_mappings: Vec<halolake_router_core::ModelMapping>,
     #[serde(default)]
     pub channel_affinity: halolake_router_core::ChannelAffinityConfig,
     #[serde(default)]
-    pub group_routing:    halolake_router_core::GroupRoutingConfig,
+    pub group_routing: halolake_router_core::GroupRoutingConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_listen")]
-    pub listen:                   SocketAddr,
+    pub listen: SocketAddr,
     #[serde(default = "default_body_limit")]
     pub request_body_limit_bytes: usize,
     /// Total time allowed to receive a downstream request body. This deadline
     /// stops once the body decoder reaches EOF, so upstream model latency is
     /// not included.
     #[serde(default = "default_request_body_timeout_ms")]
-    pub request_body_timeout_ms:  u64,
+    pub request_body_timeout_ms: u64,
     /// Number of thread-per-core workers. Each worker runs its own monoio
     /// runtime and binds the listen address with SO_REUSEPORT, so the kernel
     /// load-balances connections across cores with no shared accept lock.
     /// `0` (the default) means "one per available core".
     #[serde(default)]
-    pub workers:                  usize,
+    pub workers: usize,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            listen:                   default_listen(),
+            listen: default_listen(),
             request_body_limit_bytes: default_body_limit(),
-            request_body_timeout_ms:  default_request_body_timeout_ms(),
-            workers:                  0,
+            request_body_timeout_ms: default_request_body_timeout_ms(),
+            workers: 0,
         }
     }
 }
@@ -59,19 +59,19 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProtocolConfig {
     #[serde(default = "default_claude_version")]
-    pub claude_version:      String,
+    pub claude_version: String,
     #[serde(default = "default_true")]
     pub pass_anthropic_beta: bool,
     #[serde(default = "default_gemini_api_version")]
-    pub gemini_api_version:  String,
+    pub gemini_api_version: String,
 }
 
 impl Default for ProtocolConfig {
     fn default() -> Self {
         Self {
-            claude_version:      default_claude_version(),
+            claude_version: default_claude_version(),
             pass_anthropic_beta: true,
-            gemini_api_version:  default_gemini_api_version(),
+            gemini_api_version: default_gemini_api_version(),
         }
     }
 }
@@ -79,25 +79,25 @@ impl Default for ProtocolConfig {
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct UpstreamConfig {
     #[serde(default)]
-    pub connect_timeout_ms:      Option<u64>,
+    pub connect_timeout_ms: Option<u64>,
     #[serde(default)]
-    pub read_timeout_ms:         Option<u64>,
+    pub read_timeout_ms: Option<u64>,
     /// Consecutive transport failures before a worker temporarily rejects new
     /// requests for the same proxy and target. `0` disables the breaker.
     #[serde(default = "default_proxy_failure_threshold")]
     pub proxy_failure_threshold: u32,
     /// Worker-local proxy circuit cooldown before one half-open probe is allowed.
     #[serde(default = "default_proxy_cooldown_ms")]
-    pub proxy_cooldown_ms:       u64,
+    pub proxy_cooldown_ms: u64,
 }
 
 impl Default for UpstreamConfig {
     fn default() -> Self {
         Self {
-            connect_timeout_ms:      None,
-            read_timeout_ms:         None,
+            connect_timeout_ms: None,
+            read_timeout_ms: None,
             proxy_failure_threshold: default_proxy_failure_threshold(),
-            proxy_cooldown_ms:       default_proxy_cooldown_ms(),
+            proxy_cooldown_ms: default_proxy_cooldown_ms(),
         }
     }
 }
@@ -105,7 +105,7 @@ impl Default for UpstreamConfig {
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct AuthConfig {
     #[serde(default = "default_true")]
-    pub accept_bearer:    bool,
+    pub accept_bearer: bool,
     #[serde(default = "default_true")]
     pub accept_x_api_key: bool,
 }
@@ -113,52 +113,52 @@ pub struct AuthConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ControlPlaneConfig {
     #[serde(default)]
-    pub snapshot_url:              Option<String>,
+    pub snapshot_url: Option<String>,
     #[serde(default)]
-    pub usage_url:                 Option<String>,
+    pub usage_url: Option<String>,
     #[serde(default)]
-    pub channel_feedback_url:      Option<String>,
+    pub channel_feedback_url: Option<String>,
     #[serde(default)]
-    pub system_instance_url:       Option<String>,
+    pub system_instance_url: Option<String>,
     #[serde(default)]
-    pub internal_key:              Option<String>,
+    pub internal_key: Option<String>,
     #[serde(default = "default_control_connect_timeout_ms")]
-    pub connect_timeout_ms:        Option<u64>,
+    pub connect_timeout_ms: Option<u64>,
     #[serde(default = "default_control_read_timeout_ms")]
-    pub read_timeout_ms:           Option<u64>,
+    pub read_timeout_ms: Option<u64>,
     #[serde(default)]
     pub snapshot_poll_interval_ms: Option<u64>,
     /// Maximum events per worker-local control-plane request. Batching keeps
     /// accounting and feedback traffic out of the gateway request hot path.
     #[serde(default = "default_report_batch_size")]
-    pub report_batch_size:         usize,
+    pub report_batch_size: usize,
     /// How long the worker-local reporter may wait for a partial batch.
     #[serde(default = "default_report_flush_interval_ms")]
-    pub report_flush_interval_ms:  u64,
+    pub report_flush_interval_ms: u64,
     /// Soft per-worker pending-event threshold used for saturation warnings.
     /// Events remain queued until a durable outbox is available.
     #[serde(default = "default_report_queue_capacity")]
-    pub report_queue_capacity:     usize,
+    pub report_queue_capacity: usize,
     /// Maximum concurrent control-plane batch requests per worker and reporter.
     #[serde(default = "default_report_max_in_flight")]
-    pub report_max_in_flight:      usize,
+    pub report_max_in_flight: usize,
 }
 
 impl Default for ControlPlaneConfig {
     fn default() -> Self {
         Self {
-            snapshot_url:              None,
-            usage_url:                 None,
-            channel_feedback_url:      None,
-            system_instance_url:       None,
-            internal_key:              None,
-            connect_timeout_ms:        default_control_connect_timeout_ms(),
-            read_timeout_ms:           default_control_read_timeout_ms(),
+            snapshot_url: None,
+            usage_url: None,
+            channel_feedback_url: None,
+            system_instance_url: None,
+            internal_key: None,
+            connect_timeout_ms: default_control_connect_timeout_ms(),
+            read_timeout_ms: default_control_read_timeout_ms(),
             snapshot_poll_interval_ms: None,
-            report_batch_size:         default_report_batch_size(),
-            report_flush_interval_ms:  default_report_flush_interval_ms(),
-            report_queue_capacity:     default_report_queue_capacity(),
-            report_max_in_flight:      default_report_max_in_flight(),
+            report_batch_size: default_report_batch_size(),
+            report_flush_interval_ms: default_report_flush_interval_ms(),
+            report_queue_capacity: default_report_queue_capacity(),
+            report_max_in_flight: default_report_max_in_flight(),
         }
     }
 }
@@ -166,7 +166,7 @@ impl Default for ControlPlaneConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            accept_bearer:    true,
+            accept_bearer: true,
             accept_x_api_key: true,
         }
     }

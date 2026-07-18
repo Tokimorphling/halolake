@@ -82,7 +82,7 @@ impl Gateway {
                         "snapshot_version": self.snapshots.version(),
                     }),
                 ),
-                (&Method::GET, "/v1/models") => self.models_response(),
+                (&Method::GET, "/v1/models") => self.models_response(req.headers(), peer),
                 (&Method::POST, "/v1/chat/completions") => {
                     let cx = base_cx.param_set(DownstreamProtocol::OpenAiChat);
                     match self.collect_request(req).await {
@@ -193,16 +193,51 @@ impl Gateway {
         })
     }
 
-    fn models_response(&self) -> Response<HttpBody> {
+    fn models_response(&self, headers: &HeaderMap, peer: SocketAddr) -> Response<HttpBody> {
+        let token = match self.extract_models_token(headers) {
+            Some(token) => token,
+            None => {
+                return json_error(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_request_error",
+                    "missing api key",
+                );
+            }
+        };
         let state = self.snapshots.load();
+        let auth = match state.snapshot.authenticate(&token) {
+            Ok(auth) => auth,
+            Err(err) => return route_error_response(err),
+        };
+        if let Err(err) = state.snapshot.authorize_ip(&auth, peer.ip()) {
+            return route_error_response(err);
+        }
         let models = state
-            .models
-            .iter()
+            .snapshot
+            .list_models(&auth)
+            .into_iter()
             .map(|id| serde_json::json!({"id": id, "object": "model", "owned_by": "halolake"}))
             .collect::<Vec<_>>();
         json_response(
             StatusCode::OK,
             serde_json::json!({"object": "list", "data": models}),
         )
+    }
+
+    fn extract_models_token(&self, headers: &HeaderMap) -> Option<String> {
+        if self.auth.accept_bearer
+            && let Some(token) = bearer_token(headers)
+        {
+            return Some(token);
+        }
+        if self.auth.accept_x_api_key {
+            return headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_string);
+        }
+        None
     }
 }

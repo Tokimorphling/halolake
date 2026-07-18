@@ -21,15 +21,15 @@ const CODEX_DEFAULT_USER_AGENT: &str =
 
 #[derive(Clone)]
 pub(crate) struct RelayService {
-    claude_version:      Arc<str>,
+    claude_version: Arc<str>,
     pass_anthropic_beta: bool,
-    gemini_api_version:  Arc<str>,
-    connect_timeout:     Option<Duration>,
-    read_timeout:        Option<Duration>,
-    dns:                 LocalDnsResolver,
-    http:                Rc<StreamingHttpUpstream>,
-    https:               HttpsUpstream,
-    proxy_transport:     ProxyTransportService,
+    gemini_api_version: Arc<str>,
+    connect_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+    dns: LocalDnsResolver,
+    http: Rc<StreamingHttpUpstream>,
+    https: HttpsUpstream,
+    proxy_transport: ProxyTransportService,
 }
 
 impl RelayService {
@@ -318,12 +318,12 @@ where
 }
 
 pub(crate) struct OpenAiChatRelayRequest<CX> {
-    pub(crate) request:            openai::ChatCompletionRequest,
+    pub(crate) request: openai::ChatCompletionRequest,
     /// Original downstream body; used for redacted structured logs and
     /// OpenAI passthrough so unknown fields (e.g. reasoning_effort) survive.
-    pub(crate) raw_body:           Bytes,
+    pub(crate) raw_body: Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx:                 CX,
+    pub(crate) cx: CX,
 }
 
 impl<CX> Service<OpenAiChatRelayRequest<CX>> for RelayService
@@ -396,7 +396,7 @@ where
                     }
                 };
                 let target = OpenAiResponseTarget::ChatCompletions {
-                    stream:          req.request.is_stream(),
+                    stream: req.request.is_stream(),
                     requested_model: route.requested_model.clone(),
                 };
                 self.openai_passthrough(route, prepared, &req.downstream_headers, target)
@@ -445,9 +445,9 @@ where
 }
 
 pub(crate) struct ClaudeMessagesRelayRequest<CX> {
-    pub(crate) value:              JsonValue,
+    pub(crate) value: JsonValue,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx:                 CX,
+    pub(crate) cx: CX,
 }
 
 impl<CX> Service<ClaudeMessagesRelayRequest<CX>> for RelayService
@@ -668,28 +668,28 @@ where
 }
 
 pub(crate) struct OpenAiImageRelayRequest<CX> {
-    pub(crate) kind:               OpenAiImageRouteKind,
-    pub(crate) stream:             bool,
-    pub(crate) payload:            OpenAiImagePayload,
-    pub(crate) body:               Bytes,
+    pub(crate) kind: OpenAiImageRouteKind,
+    pub(crate) stream: bool,
+    pub(crate) payload: OpenAiImagePayload,
+    pub(crate) body: Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) path:               String,
-    pub(crate) cx:                 CX,
+    pub(crate) path: String,
+    pub(crate) cx: CX,
 }
 
 pub(crate) struct OpenAiPassthroughRelayRequest<CX> {
-    pub(crate) path:               String,
-    pub(crate) body:               Bytes,
+    pub(crate) path: String,
+    pub(crate) body: Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx:                 CX,
+    pub(crate) cx: CX,
 }
 
 pub(crate) struct GeminiNativeRelayRequest<CX> {
-    pub(crate) path:               String,
-    pub(crate) stream:             bool,
-    pub(crate) body:               Bytes,
+    pub(crate) path: String,
+    pub(crate) stream: bool,
+    pub(crate) body: Bytes,
     pub(crate) downstream_headers: HeaderMap,
-    pub(crate) cx:                 CX,
+    pub(crate) cx: CX,
 }
 
 impl<CX> Service<OpenAiImageRelayRequest<CX>> for RelayService
@@ -1317,9 +1317,9 @@ enum OpenAiTextProtocol {
 }
 
 struct PreparedOpenAiText {
-    path:              String,
-    body:              Bytes,
-    protocol:          OpenAiTextProtocol,
+    path: String,
+    body: Bytes,
+    protocol: OpenAiTextProtocol,
     tool_name_reverse: std::collections::BTreeMap<String, String>,
 }
 
@@ -1332,7 +1332,7 @@ enum OpenAiResponsesProfile {
 enum OpenAiResponseTarget {
     Passthrough,
     ChatCompletions {
-        stream:          bool,
+        stream: bool,
         requested_model: String,
     },
 }
@@ -2223,15 +2223,15 @@ mod tests {
         });
 
         let relay = RelayService {
-            claude_version:      Arc::from("2023-06-01"),
+            claude_version: Arc::from("2023-06-01"),
             pass_anthropic_beta: true,
-            gemini_api_version:  Arc::from("v1beta"),
-            connect_timeout:     Some(Duration::from_millis(500)),
-            read_timeout:        Some(Duration::from_millis(500)),
-            dns:                 LocalDnsResolver::default(),
-            http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
-            https:               HttpsUpstream::default(),
-            proxy_transport:     ProxyTransportService::new(
+            gemini_api_version: Arc::from("v1beta"),
+            connect_timeout: Some(Duration::from_millis(500)),
+            read_timeout: Some(Duration::from_millis(500)),
+            dns: LocalDnsResolver::default(),
+            http: Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
+            https: HttpsUpstream::default(),
+            proxy_transport: ProxyTransportService::new(
                 Some(Duration::from_millis(500)),
                 Some(Duration::from_millis(500)),
                 crate::upstream_proxy::ProxyCircuitPolicy::new(3, Duration::from_millis(100)),
@@ -2352,15 +2352,15 @@ mod tests {
         });
 
         let relay = RelayService {
-            claude_version:      Arc::from("2023-06-01"),
+            claude_version: Arc::from("2023-06-01"),
             pass_anthropic_beta: true,
-            gemini_api_version:  Arc::from("v1beta"),
-            connect_timeout:     Some(Duration::from_millis(500)),
-            read_timeout:        Some(Duration::from_millis(500)),
-            dns:                 LocalDnsResolver::default(),
-            http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
-            https:               HttpsUpstream::default(),
-            proxy_transport:     ProxyTransportService::new(
+            gemini_api_version: Arc::from("v1beta"),
+            connect_timeout: Some(Duration::from_millis(500)),
+            read_timeout: Some(Duration::from_millis(500)),
+            dns: LocalDnsResolver::default(),
+            http: Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
+            https: HttpsUpstream::default(),
+            proxy_transport: ProxyTransportService::new(
                 Some(Duration::from_millis(500)),
                 Some(Duration::from_millis(500)),
                 crate::upstream_proxy::ProxyCircuitPolicy::new(3, Duration::from_millis(100)),

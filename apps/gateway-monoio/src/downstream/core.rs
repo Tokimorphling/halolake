@@ -27,10 +27,10 @@ const RESPONSE_WRITE_BUFFER_SIZE: usize = 8 * 1024;
 /// `(response, keep_connection_open)`.
 #[derive(Clone)]
 pub(crate) struct HttpH1CoreService<H> {
-    inner:                    H,
-    keepalive_timeout:        Option<Duration>,
+    inner: H,
+    keepalive_timeout: Option<Duration>,
     request_body_limit_bytes: usize,
-    request_body_timeout:     Duration,
+    request_body_timeout: Duration,
 }
 
 impl<H> HttpH1CoreService<H> {
@@ -420,10 +420,10 @@ where
 
     fn make_via_ref(&self, old: Option<&Self::Service>) -> Result<Self::Service, Self::Error> {
         Ok(HttpH1CoreService {
-            inner:                    self.inner.make_via_ref(old.map(|o| &o.inner))?,
-            keepalive_timeout:        self.keepalive_timeout,
+            inner: self.inner.make_via_ref(old.map(|o| &o.inner))?,
+            keepalive_timeout: self.keepalive_timeout,
             request_body_limit_bytes: self.request_body_limit_bytes,
-            request_body_timeout:     self.request_body_timeout,
+            request_body_timeout: self.request_body_timeout,
         })
     }
 }
@@ -442,9 +442,9 @@ mod tests {
 
     #[derive(Default)]
     struct WriteState {
-        bytes:       Vec<u8>,
+        bytes: Vec<u8>,
         write_sizes: Vec<usize>,
-        flushes:     usize,
+        flushes: usize,
     }
 
     struct RecordingWriter {
@@ -575,7 +575,7 @@ mod tests {
 
     #[derive(Clone)]
     struct BodyLimitHandler {
-        limit:         usize,
+        limit: usize,
         panic_on_call: bool,
     }
 
@@ -624,10 +624,10 @@ mod tests {
         let server = monoio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept downstream test");
             let core = HttpH1CoreService {
-                inner:                    handler,
-                keepalive_timeout:        Some(Duration::from_millis(500)),
+                inner: handler,
+                keepalive_timeout: Some(Duration::from_millis(500)),
                 request_body_limit_bytes: limit,
-                request_body_timeout:     body_timeout,
+                request_body_timeout: body_timeout,
             };
             core.call((stream, ()))
                 .await
@@ -656,7 +656,7 @@ mod tests {
     async fn rejects_oversized_content_length_before_reading_body() {
         let (address, server) = start_test_core(
             BodyLimitHandler {
-                limit:         4,
+                limit: 4,
                 panic_on_call: true,
             },
             4,
@@ -683,7 +683,7 @@ mod tests {
     async fn chunked_body_limit_returns_without_draining_attacker_remainder() {
         let (address, server) = start_test_core(
             BodyLimitHandler {
-                limit:         4,
+                limit: 4,
                 panic_on_call: false,
             },
             4,
@@ -713,7 +713,7 @@ mod tests {
     async fn stalled_chunked_request_body_times_out() {
         let (address, server) = start_test_core(
             BodyLimitHandler {
-                limit:         1024,
+                limit: 1024,
                 panic_on_call: false,
             },
             1024,

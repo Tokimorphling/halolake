@@ -3,24 +3,24 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelFeedbackMeta {
     pub(crate) status_code: Option<u16>,
-    pub(crate) reason:      ChannelFeedbackReason,
-    pub(crate) message:     String,
+    pub(crate) reason: ChannelFeedbackReason,
+    pub(crate) message: String,
 }
 
 impl ChannelFeedbackMeta {
     fn upstream_status(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
             status_code: Some(status.as_u16()),
-            reason:      ChannelFeedbackReason::UpstreamStatus,
-            message:     message.into(),
+            reason: ChannelFeedbackReason::UpstreamStatus,
+            message: message.into(),
         }
     }
 
     pub(crate) fn transport(message: impl Into<String>) -> Self {
         Self {
             status_code: None,
-            reason:      ChannelFeedbackReason::Transport,
-            message:     message.into(),
+            reason: ChannelFeedbackReason::Transport,
+            message: message.into(),
         }
     }
 }
@@ -481,19 +481,19 @@ fn responses_usage_to_openai_chat(usage: &JsonValue) -> Option<JsonValue> {
 }
 
 struct ResponsesSseToOpenAiChat {
-    requested_model:       String,
-    response_id:           String,
-    created_at:            u64,
-    next_tool_index:       u64,
-    last_tool_index:       u64,
-    tool_indices:          std::collections::BTreeMap<u64, u64>,
-    announced_tool_items:  std::collections::BTreeSet<u64>,
+    requested_model: String,
+    response_id: String,
+    created_at: u64,
+    next_tool_index: u64,
+    last_tool_index: u64,
+    tool_indices: std::collections::BTreeMap<u64, u64>,
+    announced_tool_items: std::collections::BTreeSet<u64>,
     arguments_delta_items: std::collections::BTreeSet<u64>,
-    content_seen:          bool,
-    reasoning_seen:        bool,
-    tool_calls_seen:       bool,
-    done:                  bool,
-    tool_name_reverse:     std::collections::BTreeMap<String, String>,
+    content_seen: bool,
+    reasoning_seen: bool,
+    tool_calls_seen: bool,
+    done: bool,
+    tool_name_reverse: std::collections::BTreeMap<String, String>,
 }
 
 impl ResponsesSseToOpenAiChat {
@@ -1303,9 +1303,9 @@ pub(crate) fn json_error(
 ) -> Response<GatewayBody> {
     let value = openai::ErrorResponse {
         error: openai::ErrorBody {
-            message:    message.to_string(),
+            message: message.to_string(),
             error_type: error_type.to_string(),
-            code:       None,
+            code: None,
         },
     };
     let body = serde_json::to_vec(&value).unwrap_or_else(|_| {
@@ -1470,13 +1470,13 @@ fn response_usage_from_gemini_usage_object(value: &JsonValue) -> Option<Response
     let total =
         json_u64(value, "totalTokenCount").unwrap_or_else(|| prompt.saturating_add(completion));
     let usage = ResponseUsage {
-        prompt_tokens:         (prompt > 0).then_some(prompt),
-        completion_tokens:     (completion > 0).then_some(completion),
-        total_tokens:          (total > 0).then_some(total),
-        cache_read_tokens:     (cached_content > 0).then_some(cached_content),
+        prompt_tokens: (prompt > 0).then_some(prompt),
+        completion_tokens: (completion > 0).then_some(completion),
+        total_tokens: (total > 0).then_some(total),
+        cache_read_tokens: (cached_content > 0).then_some(cached_content),
         cache_creation_tokens: None,
-        image_tokens:          (image_tokens > 0).then_some(image_tokens),
-        audio_tokens:          (audio_tokens > 0).then_some(audio_tokens),
+        image_tokens: (image_tokens > 0).then_some(image_tokens),
+        audio_tokens: (audio_tokens > 0).then_some(audio_tokens),
     };
     (!usage.is_empty()).then_some(usage)
 }
@@ -1535,15 +1535,18 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(usage, ResponseUsage {
-            prompt_tokens:         Some(11),
-            completion_tokens:     Some(7),
-            total_tokens:          Some(18),
-            cache_read_tokens:     None,
-            cache_creation_tokens: None,
-            image_tokens:          None,
-            audio_tokens:          None,
-        });
+        assert_eq!(
+            usage,
+            ResponseUsage {
+                prompt_tokens: Some(11),
+                completion_tokens: Some(7),
+                total_tokens: Some(18),
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                image_tokens: None,
+                audio_tokens: None,
+            }
+        );
     }
 
     #[test]
@@ -1553,15 +1556,18 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(usage, ResponseUsage {
-            prompt_tokens:         Some(11),
-            completion_tokens:     Some(7),
-            total_tokens:          Some(18),
-            cache_read_tokens:     Some(4),
-            cache_creation_tokens: Some(2),
-            image_tokens:          Some(3),
-            audio_tokens:          Some(1),
-        });
+        assert_eq!(
+            usage,
+            ResponseUsage {
+                prompt_tokens: Some(11),
+                completion_tokens: Some(7),
+                total_tokens: Some(18),
+                cache_read_tokens: Some(4),
+                cache_creation_tokens: Some(2),
+                image_tokens: Some(3),
+                audio_tokens: Some(1),
+            }
+        );
     }
 
     #[test]
@@ -1570,15 +1576,18 @@ mod tests {
             response_usage_from_json_bytes(br#"{"usage":{"input_tokens":13,"output_tokens":5}}"#)
                 .unwrap();
 
-        assert_eq!(usage, ResponseUsage {
-            prompt_tokens:         Some(13),
-            completion_tokens:     Some(5),
-            total_tokens:          Some(18),
-            cache_read_tokens:     None,
-            cache_creation_tokens: None,
-            image_tokens:          None,
-            audio_tokens:          None,
-        });
+        assert_eq!(
+            usage,
+            ResponseUsage {
+                prompt_tokens: Some(13),
+                completion_tokens: Some(5),
+                total_tokens: Some(18),
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                image_tokens: None,
+                audio_tokens: None,
+            }
+        );
     }
 
     #[test]
@@ -1588,15 +1597,18 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(usage, ResponseUsage {
-            prompt_tokens:         Some(15),
-            completion_tokens:     Some(8),
-            total_tokens:          Some(23),
-            cache_read_tokens:     Some(2),
-            cache_creation_tokens: Some(3),
-            image_tokens:          None,
-            audio_tokens:          None,
-        });
+        assert_eq!(
+            usage,
+            ResponseUsage {
+                prompt_tokens: Some(15),
+                completion_tokens: Some(8),
+                total_tokens: Some(23),
+                cache_read_tokens: Some(2),
+                cache_creation_tokens: Some(3),
+                image_tokens: None,
+                audio_tokens: None,
+            }
+        );
     }
 
     #[test]
@@ -1606,15 +1618,18 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(usage, ResponseUsage {
-            prompt_tokens:         Some(13),
-            completion_tokens:     Some(8),
-            total_tokens:          Some(30),
-            cache_read_tokens:     Some(4),
-            cache_creation_tokens: None,
-            image_tokens:          Some(3),
-            audio_tokens:          Some(2),
-        });
+        assert_eq!(
+            usage,
+            ResponseUsage {
+                prompt_tokens: Some(13),
+                completion_tokens: Some(8),
+                total_tokens: Some(30),
+                cache_read_tokens: Some(4),
+                cache_creation_tokens: None,
+                image_tokens: Some(3),
+                audio_tokens: Some(2),
+            }
+        );
     }
 
     #[test]
@@ -1635,15 +1650,18 @@ mod tests {
             br#"{"type":"response.completed","response":{"usage":{"input_tokens":21,"output_tokens":9,"total_tokens":30}}}"#,
         )
         .unwrap();
-        assert_eq!(usage, ResponseUsage {
-            prompt_tokens:         Some(21),
-            completion_tokens:     Some(9),
-            total_tokens:          Some(30),
-            cache_read_tokens:     None,
-            cache_creation_tokens: None,
-            image_tokens:          None,
-            audio_tokens:          None,
-        });
+        assert_eq!(
+            usage,
+            ResponseUsage {
+                prompt_tokens: Some(21),
+                completion_tokens: Some(9),
+                total_tokens: Some(30),
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                image_tokens: None,
+                audio_tokens: None,
+            }
+        );
     }
 
     #[test]

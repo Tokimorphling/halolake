@@ -59,13 +59,13 @@ type HttpsUpstream = HttpConnector<TlsConnector<TcpConnector>, TcpTlsAddr, TlsSt
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ResponseUsage {
-    pub(crate) prompt_tokens:         Option<u64>,
-    pub(crate) completion_tokens:     Option<u64>,
-    pub(crate) total_tokens:          Option<u64>,
-    pub(crate) cache_read_tokens:     Option<u64>,
+    pub(crate) prompt_tokens: Option<u64>,
+    pub(crate) completion_tokens: Option<u64>,
+    pub(crate) total_tokens: Option<u64>,
+    pub(crate) cache_read_tokens: Option<u64>,
     pub(crate) cache_creation_tokens: Option<u64>,
-    pub(crate) image_tokens:          Option<u64>,
-    pub(crate) audio_tokens:          Option<u64>,
+    pub(crate) image_tokens: Option<u64>,
+    pub(crate) audio_tokens: Option<u64>,
 }
 
 impl ResponseUsage {
@@ -99,13 +99,13 @@ impl ResponseUsage {
                 .unwrap_or(0),
         );
         Self {
-            prompt_tokens:         nonzero_u32(usage.prompt_tokens),
-            completion_tokens:     nonzero_u32(usage.completion_tokens),
-            total_tokens:          nonzero_u32(usage.total_tokens),
-            cache_read_tokens:     nonzero_u32(cache_read_tokens),
+            prompt_tokens: nonzero_u32(usage.prompt_tokens),
+            completion_tokens: nonzero_u32(usage.completion_tokens),
+            total_tokens: nonzero_u32(usage.total_tokens),
+            cache_read_tokens: nonzero_u32(cache_read_tokens),
             cache_creation_tokens: nonzero_u32(cache_creation_tokens),
-            image_tokens:          nonzero_u32(image_tokens),
-            audio_tokens:          nonzero_u32(audio_tokens),
+            image_tokens: nonzero_u32(image_tokens),
+            audio_tokens: nonzero_u32(audio_tokens),
         }
     }
 
@@ -116,13 +116,13 @@ impl ResponseUsage {
             .saturating_add(usage.cache_read_input_tokens);
         let total_tokens = prompt_tokens.saturating_add(usage.output_tokens);
         Self {
-            prompt_tokens:         nonzero_u32(prompt_tokens),
-            completion_tokens:     nonzero_u32(usage.output_tokens),
-            total_tokens:          nonzero_u32(total_tokens),
-            cache_read_tokens:     nonzero_u32(usage.cache_read_input_tokens),
+            prompt_tokens: nonzero_u32(prompt_tokens),
+            completion_tokens: nonzero_u32(usage.output_tokens),
+            total_tokens: nonzero_u32(total_tokens),
+            cache_read_tokens: nonzero_u32(usage.cache_read_input_tokens),
             cache_creation_tokens: nonzero_u32(usage.cache_creation_input_tokens),
-            image_tokens:          None,
-            audio_tokens:          None,
+            image_tokens: None,
+            audio_tokens: None,
         }
     }
 
@@ -139,13 +139,13 @@ impl ResponseUsage {
             prompt_tokens.saturating_add(completion_tokens)
         };
         Self {
-            prompt_tokens:         nonzero_u32(prompt_tokens),
-            completion_tokens:     nonzero_u32(completion_tokens),
-            total_tokens:          nonzero_u32(total_tokens),
-            cache_read_tokens:     nonzero_u32(usage.cached_content_token_count),
+            prompt_tokens: nonzero_u32(prompt_tokens),
+            completion_tokens: nonzero_u32(completion_tokens),
+            total_tokens: nonzero_u32(total_tokens),
+            cache_read_tokens: nonzero_u32(usage.cached_content_token_count),
             cache_creation_tokens: None,
-            image_tokens:          None,
-            audio_tokens:          None,
+            image_tokens: None,
+            audio_tokens: None,
         }
     }
 
