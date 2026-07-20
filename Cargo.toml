@@ -79,6 +79,7 @@ opentelemetry-appender-tracing = "0.30"
 opentelemetry-semantic-conventions = "0.30"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 webauthn-rs = { version = "0.6.1-dev", default-features = false, features = ["conditional-ui", "danger-allow-state-serialisation"] }
+mimalloc = { version = "0.1", default-features = false }
 
 [profile.release-lto]
 inherits = "release"

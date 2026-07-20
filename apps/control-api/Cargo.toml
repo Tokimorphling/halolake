@@ -36,6 +36,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 webauthn-rs = { workspace = true }
+mimalloc = { workspace = true }
 
 # Module surface partitioning (see docs/CONTROL_API_MODULES_CN.md).
 # Default keeps full new-api frontend compatibility (including stubs).
