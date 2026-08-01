@@ -103,6 +103,8 @@ auth/route 层负责把 `RequestAuth` 和 `RouteContext` 写入 context，后续
 
 - OpenAI `/v1/chat/completions` -> Claude `/v1/messages`
 - Claude `/v1/messages` -> OpenAI chat response / SSE
+- OpenAI `/v1/responses` -> Claude `/v1/messages`（请求转换 + buffered/SSE 回程还原，含 namespace/工具全生命周期）
+- Claude `/v1/messages` -> OpenAI `/v1/responses`（服务端工具调用、tool_choice、SSE 还原）
 - Claude `/v1/messages` -> Claude upstream passthrough
 - OpenAI `/v1/chat/completions` -> Gemini `generateContent` / `streamGenerateContent`
 - Claude `/v1/messages` -> OpenAI Chat -> Gemini `generateContent`，返回时 Gemini -> OpenAI -> Claude
@@ -116,8 +118,6 @@ auth/route 层负责把 `RequestAuth` 和 `RouteContext` 写入 context，后续
 
 当前不做：
 
-- OpenAI Responses API -> Claude
-- Claude Messages -> OpenAI Responses
 - Gemini native -> Claude upstream 直转，new-api 的 Claude adaptor 也未实现该路径
 - OpenAI image edits -> Gemini，new-api 没有实现该路径
 - OpenAI image -> Claude，new-api 的 Claude adaptor 也未实现

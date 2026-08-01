@@ -36,6 +36,10 @@ pub struct ChatCompletionRequest {
     pub response_format:       Option<JsonValue>,
     #[serde(default)]
     pub stream_options:        Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort:      Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning:             Option<JsonValue>,
 }
 
 impl ChatCompletionRequest {
@@ -108,17 +112,24 @@ impl ImageRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
-    pub role:              String,
+    pub role:                String,
     #[serde(default)]
-    pub content:           Option<MessageContent>,
+    pub content:             Option<MessageContent>,
     #[serde(default)]
-    pub name:              Option<String>,
+    pub name:                Option<String>,
     #[serde(default)]
-    pub tool_calls:        Option<Vec<ToolCall>>,
+    pub tool_calls:          Option<Vec<ToolCall>>,
     #[serde(default)]
-    pub tool_call_id:      Option<String>,
+    pub tool_call_id:        Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_content: Option<String>,
+    pub reasoning_content:   Option<String>,
+    #[serde(
+        default,
+        alias = "reasoning_content_signature",
+        alias = "encrypted_content",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -186,12 +197,19 @@ pub struct FunctionTool {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCall {
-    pub id:        String,
+    pub id:                String,
     #[serde(rename = "type")]
-    pub tool_type: String,
-    pub function:  ToolCallFunction,
+    pub tool_type:         String,
+    pub function:          ToolCallFunction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index:     Option<u32>,
+    pub index:             Option<u32>,
+    #[serde(
+        default,
+        rename = "thoughtSignature",
+        alias = "thought_signature",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -241,15 +259,22 @@ pub struct ChatChunkChoice {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ChatChunkDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role:              Option<String>,
+    pub role:                Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content:           Option<String>,
+    pub content:             Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_content: Option<String>,
+    pub reasoning_content:   Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning:         Option<String>,
+    pub reasoning:           Option<String>,
+    #[serde(
+        default,
+        alias = "reasoning_content_signature",
+        alias = "encrypted_content",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_signature: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calls:        Option<Vec<ToolCall>>,
+    pub tool_calls:          Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]

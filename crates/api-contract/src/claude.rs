@@ -22,6 +22,26 @@ pub struct MessagesRequest {
     pub tool_choice:    Option<JsonValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop_sequences: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking:       Option<ThinkingConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_config:  Option<OutputConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ThinkingConfig {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display:       Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OutputConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -76,6 +96,21 @@ pub enum ContentBlock {
         #[serde(default)]
         input: JsonValue,
     },
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        id:    String,
+        name:  String,
+        #[serde(default)]
+        input: JsonValue,
+    },
+    #[serde(rename = "web_search_tool_result")]
+    WebSearchToolResult {
+        tool_use_id: String,
+        #[serde(default)]
+        content:     JsonValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_error:    Option<bool>,
+    },
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
@@ -90,6 +125,8 @@ pub enum ContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -140,9 +177,12 @@ impl ToolResultContent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Tool {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub tool_type:    Option<String>,
     pub name:         String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description:  Option<String>,
+    #[serde(default, skip_serializing_if = "JsonValue::is_null")]
     pub input_schema: JsonValue,
 }
 

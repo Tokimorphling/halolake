@@ -130,6 +130,7 @@ impl Gateway {
                     }
                 }
                 (&Method::POST, "/v1/responses")
+                | (&Method::POST, "/v1/responses/compact")
                 | (&Method::POST, "/v1/completions")
                 | (&Method::POST, "/v1/embeddings") => {
                     let cx = base_cx.param_set(DownstreamProtocol::OpenAiRaw);

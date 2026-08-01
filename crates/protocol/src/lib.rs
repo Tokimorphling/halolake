@@ -1,5 +1,6 @@
 pub mod claude_openai;
 pub mod gemini_openai;
+pub mod responses_anthropic;
 
 pub use claude_openai::{
     ClaudeSseTranslator, OpenAiSseToClaudeTranslator, ProtocolError,
@@ -11,4 +12,11 @@ pub use gemini_openai::{
     gemini_imagen_to_openai_image_response, gemini_request_to_openai_chat,
     gemini_response_to_openai_chat, openai_chat_to_gemini_request, openai_chat_to_gemini_response,
     openai_image_to_gemini_imagen_request,
+};
+pub use responses_anthropic::{
+    ClaudeSseToResponsesTranslator, ResponsesToolMapping, claude_messages_to_openai_responses,
+    claude_messages_to_openai_responses_with_options,
+    claude_messages_to_openai_responses_with_options_and_tools,
+    openai_responses_to_claude_messages, openai_responses_to_claude_messages_with_tools,
+    responses_tool_mapping,
 };

@@ -9,12 +9,15 @@ use halolake_control_plane::{
 };
 use halolake_domain::{UsageEvent, UsageStatus};
 use halolake_protocol::{
-    ClaudeSseTranslator, GeminiSseToOpenAiTranslator, OpenAiSseToClaudeTranslator,
-    OpenAiSseToGeminiTranslator, claude_messages_to_openai_chat,
-    claude_messages_to_openai_chat_request, gemini_imagen_to_openai_image_response,
-    gemini_request_to_openai_chat, gemini_response_to_openai_chat, openai_chat_to_claude_messages,
+    ClaudeSseToResponsesTranslator, ClaudeSseTranslator, GeminiSseToOpenAiTranslator,
+    OpenAiSseToClaudeTranslator, OpenAiSseToGeminiTranslator, ResponsesToolMapping,
+    claude_messages_to_openai_chat, claude_messages_to_openai_chat_request,
+    claude_messages_to_openai_responses_with_options_and_tools,
+    gemini_imagen_to_openai_image_response, gemini_request_to_openai_chat,
+    gemini_response_to_openai_chat, openai_chat_to_claude_messages,
     openai_chat_to_claude_messages_response, openai_chat_to_gemini_request,
     openai_chat_to_gemini_response, openai_image_to_gemini_imagen_request,
+    openai_responses_to_claude_messages_with_tools, responses_tool_mapping,
 };
 use halolake_router_core::{
     ChannelAffinityCache, ChannelAffinityCandidate, ChannelAffinityRequest, ChannelConfig,
@@ -59,13 +62,13 @@ type HttpsUpstream = HttpConnector<TlsConnector<TcpConnector>, TcpTlsAddr, TlsSt
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ResponseUsage {
-    pub(crate) prompt_tokens: Option<u64>,
-    pub(crate) completion_tokens: Option<u64>,
-    pub(crate) total_tokens: Option<u64>,
-    pub(crate) cache_read_tokens: Option<u64>,
+    pub(crate) prompt_tokens:         Option<u64>,
+    pub(crate) completion_tokens:     Option<u64>,
+    pub(crate) total_tokens:          Option<u64>,
+    pub(crate) cache_read_tokens:     Option<u64>,
     pub(crate) cache_creation_tokens: Option<u64>,
-    pub(crate) image_tokens: Option<u64>,
-    pub(crate) audio_tokens: Option<u64>,
+    pub(crate) image_tokens:          Option<u64>,
+    pub(crate) audio_tokens:          Option<u64>,
 }
 
 impl ResponseUsage {
@@ -99,13 +102,13 @@ impl ResponseUsage {
                 .unwrap_or(0),
         );
         Self {
-            prompt_tokens: nonzero_u32(usage.prompt_tokens),
-            completion_tokens: nonzero_u32(usage.completion_tokens),
-            total_tokens: nonzero_u32(usage.total_tokens),
-            cache_read_tokens: nonzero_u32(cache_read_tokens),
+            prompt_tokens:         nonzero_u32(usage.prompt_tokens),
+            completion_tokens:     nonzero_u32(usage.completion_tokens),
+            total_tokens:          nonzero_u32(usage.total_tokens),
+            cache_read_tokens:     nonzero_u32(cache_read_tokens),
             cache_creation_tokens: nonzero_u32(cache_creation_tokens),
-            image_tokens: nonzero_u32(image_tokens),
-            audio_tokens: nonzero_u32(audio_tokens),
+            image_tokens:          nonzero_u32(image_tokens),
+            audio_tokens:          nonzero_u32(audio_tokens),
         }
     }
 
@@ -116,20 +119,19 @@ impl ResponseUsage {
             .saturating_add(usage.cache_read_input_tokens);
         let total_tokens = prompt_tokens.saturating_add(usage.output_tokens);
         Self {
-            prompt_tokens: nonzero_u32(prompt_tokens),
-            completion_tokens: nonzero_u32(usage.output_tokens),
-            total_tokens: nonzero_u32(total_tokens),
-            cache_read_tokens: nonzero_u32(usage.cache_read_input_tokens),
+            prompt_tokens:         nonzero_u32(prompt_tokens),
+            completion_tokens:     nonzero_u32(usage.output_tokens),
+            total_tokens:          nonzero_u32(total_tokens),
+            cache_read_tokens:     nonzero_u32(usage.cache_read_input_tokens),
             cache_creation_tokens: nonzero_u32(usage.cache_creation_input_tokens),
-            image_tokens: None,
-            audio_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
         }
     }
 
     pub(crate) fn from_gemini(usage: gemini::GeminiUsageMetadata) -> Self {
-        let prompt_tokens = usage
-            .prompt_token_count
-            .saturating_add(usage.cached_content_token_count);
+        // Gemini promptTokenCount already includes cachedContentTokenCount.
+        let prompt_tokens = usage.prompt_token_count;
         let completion_tokens = usage
             .candidates_token_count
             .saturating_add(usage.thoughts_token_count);
@@ -139,13 +141,13 @@ impl ResponseUsage {
             prompt_tokens.saturating_add(completion_tokens)
         };
         Self {
-            prompt_tokens: nonzero_u32(prompt_tokens),
-            completion_tokens: nonzero_u32(completion_tokens),
-            total_tokens: nonzero_u32(total_tokens),
-            cache_read_tokens: nonzero_u32(usage.cached_content_token_count),
+            prompt_tokens:         nonzero_u32(prompt_tokens),
+            completion_tokens:     nonzero_u32(completion_tokens),
+            total_tokens:          nonzero_u32(total_tokens),
+            cache_read_tokens:     nonzero_u32(usage.cached_content_token_count),
             cache_creation_tokens: None,
-            image_tokens: None,
-            audio_tokens: None,
+            image_tokens:          None,
+            audio_tokens:          None,
         }
     }
 
@@ -173,6 +175,7 @@ mod image;
 mod relay;
 mod request;
 mod response;
+mod responses_anthropic;
 mod services;
 mod upstream_proxy;
 mod util;
@@ -187,5 +190,6 @@ pub(crate) use image::*;
 pub(crate) use relay::*;
 pub(crate) use request::*;
 pub(crate) use response::*;
+pub(crate) use responses_anthropic::*;
 pub(crate) use services::*;
 pub(crate) use util::*;

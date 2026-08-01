@@ -55,6 +55,13 @@ pub struct GeminiPart {
     pub thought:               Option<bool>,
     #[serde(
         default,
+        rename = "thoughtSignature",
+        alias = "thought_signature",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thought_signature:     Option<String>,
+    #[serde(
+        default,
         rename = "inlineData",
         skip_serializing_if = "Option::is_none"
     )]

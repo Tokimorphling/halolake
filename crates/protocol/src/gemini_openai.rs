@@ -1,7 +1,10 @@
 use crate::ProtocolError;
 use halolake_api_contract::{JsonValue, gemini, openai};
 use serde_json::json;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
 const GEMINI_SAFETY_CATEGORIES: &[&str] = &[
@@ -10,6 +13,7 @@ const GEMINI_SAFETY_CATEGORIES: &[&str] = &[
     "HARM_CATEGORY_SEXUALLY_EXPLICIT",
     "HARM_CATEGORY_DANGEROUS_CONTENT",
 ];
+const GEMINI_DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
 pub fn openai_chat_to_gemini_request(
     req: &openai::ChatCompletionRequest,
@@ -71,6 +75,20 @@ pub fn openai_chat_to_gemini_request(
                 };
                 let mut parts = Vec::new();
 
+                if role == "model"
+                    && (message.reasoning_content.is_some()
+                        || message.reasoning_signature.is_some())
+                {
+                    parts.push(gemini::GeminiPart {
+                        text: message.reasoning_content.clone(),
+                        thought: Some(true),
+                        thought_signature: gemini_thought_signature(
+                            message.reasoning_signature.clone(),
+                        ),
+                        ..gemini::GeminiPart::default()
+                    });
+                }
+
                 if let Some(tool_calls) = &message.tool_calls {
                     for call in tool_calls {
                         let args = parse_json_object_or_empty(&call.function.arguments);
@@ -79,6 +97,9 @@ pub fn openai_chat_to_gemini_request(
                                 name: call.function.name.clone(),
                                 args,
                             }),
+                            thought_signature: gemini_thought_signature(
+                                call.thought_signature.clone(),
+                            ),
                             ..gemini::GeminiPart::default()
                         });
                         tool_names_by_id.insert(call.id.clone(), call.function.name.clone());
@@ -123,17 +144,19 @@ pub fn gemini_request_to_openai_chat(
         let text = gemini_parts_text(&system.parts);
         if !text.is_empty() {
             messages.push(openai::ChatMessage {
-                role:              "system".to_string(),
-                content:           Some(openai::MessageContent::Text(text)),
-                name:              None,
-                tool_calls:        None,
-                tool_call_id:      None,
-                reasoning_content: None,
+                role:                "system".to_string(),
+                content:             Some(openai::MessageContent::Text(text)),
+                name:                None,
+                tool_calls:          None,
+                tool_call_id:        None,
+                reasoning_content:   None,
+                reasoning_signature: None,
             });
         }
     }
 
     let mut next_tool_id = 1usize;
+    let mut pending_tool_ids_by_name = HashMap::<String, VecDeque<String>>::new();
     for content in &req.contents {
         let role = match content.role.as_deref() {
             Some("model") => "assistant",
@@ -144,8 +167,19 @@ pub fn gemini_request_to_openai_chat(
 
         let mut parts = Vec::new();
         let mut tool_calls = Vec::new();
+        let mut reasoning = Vec::new();
+        let mut reasoning_signature = None;
         for part in &content.parts {
-            if let Some(text) = &part.text {
+            if part.thought.unwrap_or(false) {
+                if let Some(text) = &part.text {
+                    if !text.is_empty() {
+                        reasoning.push(text.clone());
+                    }
+                }
+                if part.thought_signature.is_some() {
+                    reasoning_signature = part.thought_signature.clone();
+                }
+            } else if let Some(text) = &part.text {
                 if !text.is_empty() {
                     parts.push(openai::ContentPart::Text {
                         part_type: "text".to_string(),
@@ -169,32 +203,53 @@ pub fn gemini_request_to_openai_chat(
                     },
                 });
             } else if let Some(call) = &part.function_call {
+                let tool_id = format!("call_{next_tool_id}");
                 tool_calls.push(openai::ToolCall {
-                    id:        format!("call_{next_tool_id}"),
-                    tool_type: "function".to_string(),
-                    function:  openai::ToolCallFunction {
+                    id:                tool_id.clone(),
+                    tool_type:         "function".to_string(),
+                    function:          openai::ToolCallFunction {
                         name:      call.name.clone(),
                         arguments: call.args.to_string(),
                     },
-                    index:     None,
+                    index:             None,
+                    thought_signature: part.thought_signature.clone(),
                 });
+                pending_tool_ids_by_name
+                    .entry(call.name.clone())
+                    .or_default()
+                    .push_back(tool_id);
                 next_tool_id += 1;
             } else if let Some(function_response) = &part.function_response {
+                let tool_call_id = pending_tool_ids_by_name
+                    .get_mut(&function_response.name)
+                    .and_then(VecDeque::pop_front)
+                    .unwrap_or_else(|| format!("call_{}", next_tool_id.saturating_sub(1)));
                 messages.push(openai::ChatMessage {
-                    role:              "tool".to_string(),
-                    content:           Some(openai::MessageContent::Text(
+                    role:                "tool".to_string(),
+                    content:             Some(openai::MessageContent::Text(
                         function_response.response.to_string(),
                     )),
-                    name:              Some(function_response.name.clone()),
-                    tool_calls:        None,
-                    tool_call_id:      Some(format!("call_{}", next_tool_id.saturating_sub(1))),
-                    reasoning_content: None,
+                    name:                Some(function_response.name.clone()),
+                    tool_calls:          None,
+                    tool_call_id:        Some(tool_call_id),
+                    reasoning_content:   None,
+                    reasoning_signature: None,
                 });
             }
         }
 
-        if !parts.is_empty() || !tool_calls.is_empty() {
-            messages.push(openai_message_from_parts(role, parts, tool_calls));
+        if !parts.is_empty()
+            || !tool_calls.is_empty()
+            || !reasoning.is_empty()
+            || reasoning_signature.is_some()
+        {
+            messages.push(openai_message_from_parts(
+                role,
+                parts,
+                tool_calls,
+                (!reasoning.is_empty()).then(|| reasoning.join("\n")),
+                reasoning_signature,
+            ));
         }
     }
 
@@ -227,6 +282,8 @@ pub fn gemini_request_to_openai_chat(
         seed: req.generation_config.seed,
         response_format: None,
         stream_options: stream.then(|| json!({"include_usage": true})),
+        reasoning_effort: None,
+        reasoning: None,
     })
 }
 
@@ -319,19 +376,23 @@ pub fn openai_chat_to_gemini_response(
 
 #[derive(Debug, Clone)]
 pub struct GeminiSseToOpenAiTranslator {
-    completion_id:   String,
-    created:         u64,
-    requested_model: String,
-    done:            bool,
+    completion_id:        String,
+    created:              u64,
+    requested_model:      String,
+    tool_call_candidates: HashSet<u32>,
+    next_tool_index:      HashMap<u32, u32>,
+    done:                 bool,
 }
 
 impl GeminiSseToOpenAiTranslator {
     pub fn new(requested_model: impl Into<String>) -> Self {
         Self {
-            completion_id:   format!("chatcmpl-{}", Uuid::new_v4().simple()),
-            created:         now_unix(),
-            requested_model: requested_model.into(),
-            done:            false,
+            completion_id:        format!("chatcmpl-{}", Uuid::new_v4().simple()),
+            created:              now_unix(),
+            requested_model:      requested_model.into(),
+            tool_call_candidates: HashSet::new(),
+            next_tool_index:      HashMap::new(),
+            done:                 false,
         }
     }
 
@@ -359,7 +420,17 @@ impl GeminiSseToOpenAiTranslator {
                 if candidate.finish_reason.is_some() {
                     finished = true;
                 }
-                gemini_candidate_to_openai_chunk_choice(candidate)
+                if candidate
+                    .content
+                    .parts
+                    .iter()
+                    .any(|part| part.function_call.is_some())
+                {
+                    self.tool_call_candidates.insert(candidate.index);
+                }
+                let has_tool_calls = self.tool_call_candidates.contains(&candidate.index);
+                let next_tool_index = self.next_tool_index.entry(candidate.index).or_default();
+                gemini_candidate_to_openai_chunk_choice(candidate, has_tool_calls, next_tool_index)
             })
             .collect::<Vec<_>>();
 
@@ -384,12 +455,24 @@ impl GeminiSseToOpenAiTranslator {
 
 #[derive(Debug, Clone)]
 pub struct OpenAiSseToGeminiTranslator {
-    done: bool,
+    done:        bool,
+    tool_states: HashMap<(u32, u32), GeminiStreamToolState>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GeminiStreamToolState {
+    name:              String,
+    arguments:         String,
+    thought_signature: Option<String>,
+    emitted:           bool,
 }
 
 impl OpenAiSseToGeminiTranslator {
     pub fn new() -> Self {
-        Self { done: false }
+        Self {
+            done:        false,
+            tool_states: HashMap::new(),
+        }
     }
 
     pub fn translate_sse_payload(&mut self, payload: &str) -> Result<Vec<String>, ProtocolError> {
@@ -404,15 +487,51 @@ impl OpenAiSseToGeminiTranslator {
         let chunk: openai::ChatCompletionChunk = serde_json::from_str(payload)?;
         let mut response = gemini::GeminiChatResponse::default();
         response.usage_metadata = chunk.usage.map(openai_usage_to_gemini).unwrap_or_default();
-        for choice in chunk.choices {
-            response
-                .candidates
-                .push(openai_chunk_choice_to_gemini_candidate(choice));
+        for mut choice in chunk.choices {
+            self.accumulate_tool_calls(&mut choice);
+            let candidate = openai_chunk_choice_to_gemini_candidate(choice);
+            if !candidate.content.parts.is_empty() || candidate.finish_reason.is_some() {
+                response.candidates.push(candidate);
+            }
         }
         if response.candidates.is_empty() && response.usage_metadata.total_token_count == 0 {
             return Ok(Vec::new());
         }
         Ok(vec![serde_json::to_string(&response)?])
+    }
+
+    fn accumulate_tool_calls(&mut self, choice: &mut openai::ChatChunkChoice) {
+        let Some(calls) = choice.delta.tool_calls.take() else {
+            return;
+        };
+        let mut complete = Vec::new();
+        for (fallback_index, mut call) in calls.into_iter().enumerate() {
+            let index = call.index.unwrap_or(fallback_index as u32);
+            let state = self.tool_states.entry((choice.index, index)).or_default();
+            if !call.function.name.is_empty() {
+                state.name = call.function.name;
+            }
+            state.arguments.push_str(&call.function.arguments);
+            if call.thought_signature.is_some() {
+                state.thought_signature = call.thought_signature;
+            }
+            if state.emitted {
+                continue;
+            }
+            let parsed = serde_json::from_str::<JsonValue>(&state.arguments)
+                .ok()
+                .filter(JsonValue::is_object);
+            if parsed.is_none() {
+                continue;
+            }
+            state.emitted = true;
+            call.index = Some(index);
+            call.function.name = state.name.clone();
+            call.function.arguments = state.arguments.clone();
+            call.thought_signature = gemini_thought_signature(state.thought_signature.clone());
+            complete.push(call);
+        }
+        choice.delta.tool_calls = (!complete.is_empty()).then_some(complete);
     }
 }
 
@@ -512,6 +631,12 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
     let rest = url.strip_prefix("data:")?;
     let (mime_type, data) = rest.split_once(";base64,")?;
     Some((mime_type.to_string(), data.to_string()))
+}
+
+fn gemini_thought_signature(signature: Option<String>) -> Option<String> {
+    signature
+        .filter(|signature| !signature.is_empty())
+        .or_else(|| Some(GEMINI_DUMMY_THOUGHT_SIGNATURE.to_string()))
 }
 
 fn openai_image_size_to_gemini_aspect_ratio(size: &str) -> String {
@@ -639,6 +764,8 @@ fn openai_message_from_parts(
     role: String,
     parts: Vec<openai::ContentPart>,
     tool_calls: Vec<openai::ToolCall>,
+    reasoning_content: Option<String>,
+    reasoning_signature: Option<String>,
 ) -> openai::ChatMessage {
     let content = if parts.is_empty() {
         None
@@ -657,7 +784,8 @@ fn openai_message_from_parts(
         name: None,
         tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
         tool_call_id: None,
-        reasoning_content: None,
+        reasoning_content,
+        reasoning_signature,
     }
 }
 
@@ -670,7 +798,9 @@ fn gemini_parts_text(parts: &[gemini::GeminiPart]) -> String {
 }
 
 fn gemini_candidate_to_openai_choice(candidate: gemini::GeminiCandidate) -> openai::ChatChoice {
-    let (content, reasoning_content, tool_calls) = gemini_parts_to_openai(candidate.content.parts);
+    let (content, reasoning_content, reasoning_signature, tool_calls) =
+        gemini_parts_to_openai(candidate.content.parts);
+    let has_tool_calls = tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
     openai::ChatChoice {
         index:         candidate.index,
         message:       openai::ChatMessage {
@@ -680,13 +810,24 @@ fn gemini_candidate_to_openai_choice(candidate: gemini::GeminiCandidate) -> open
             tool_calls,
             tool_call_id: None,
             reasoning_content,
+            reasoning_signature,
         },
-        finish_reason: candidate.finish_reason.map(gemini_finish_to_openai),
+        finish_reason: candidate
+            .finish_reason
+            .map(|reason| gemini_finish_to_openai(reason, has_tool_calls)),
     }
 }
 
 fn openai_choice_to_gemini_candidate(choice: openai::ChatChoice) -> gemini::GeminiCandidate {
     let mut parts = Vec::new();
+    if choice.message.reasoning_content.is_some() || choice.message.reasoning_signature.is_some() {
+        parts.push(gemini::GeminiPart {
+            text: choice.message.reasoning_content,
+            thought: Some(true),
+            thought_signature: gemini_thought_signature(choice.message.reasoning_signature),
+            ..gemini::GeminiPart::default()
+        });
+    }
     if let Some(content) = choice.message.content {
         let text = content.as_text_lossy();
         if !text.is_empty() {
@@ -699,6 +840,7 @@ fn openai_choice_to_gemini_candidate(choice: openai::ChatChoice) -> gemini::Gemi
                 name: call.function.name,
                 args: parse_json_object_or_empty(&call.function.arguments),
             }),
+            thought_signature: gemini_thought_signature(call.thought_signature),
             ..gemini::GeminiPart::default()
         }));
     }
@@ -715,8 +857,21 @@ fn openai_choice_to_gemini_candidate(choice: openai::ChatChoice) -> gemini::Gemi
 
 fn gemini_candidate_to_openai_chunk_choice(
     candidate: gemini::GeminiCandidate,
+    previously_emitted_tool_calls: bool,
+    next_tool_index: &mut u32,
 ) -> openai::ChatChunkChoice {
-    let (content, reasoning_content, tool_calls) = gemini_parts_to_openai(candidate.content.parts);
+    let (content, reasoning_content, reasoning_signature, mut tool_calls) =
+        gemini_parts_to_openai(candidate.content.parts);
+    if let Some(tool_calls) = tool_calls.as_mut() {
+        for call in tool_calls {
+            let index = *next_tool_index;
+            *next_tool_index = next_tool_index.saturating_add(1);
+            call.id = format!("call_{}_{}", candidate.index, index);
+            call.index = Some(index);
+        }
+    }
+    let has_tool_calls =
+        previously_emitted_tool_calls || tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
     openai::ChatChunkChoice {
         index:         candidate.index,
         delta:         openai::ChatChunkDelta {
@@ -724,9 +879,12 @@ fn gemini_candidate_to_openai_chunk_choice(
             content: (!content.is_empty()).then_some(content),
             reasoning_content,
             reasoning: None,
+            reasoning_signature,
             tool_calls,
         },
-        finish_reason: candidate.finish_reason.map(gemini_finish_to_openai),
+        finish_reason: candidate
+            .finish_reason
+            .map(|reason| gemini_finish_to_openai(reason, has_tool_calls)),
     }
 }
 
@@ -744,9 +902,18 @@ fn openai_chunk_choice_to_gemini_candidate(
             parts.push(gemini::GeminiPart {
                 text: Some(reasoning),
                 thought: Some(true),
+                thought_signature: gemini_thought_signature(
+                    choice.delta.reasoning_signature.clone(),
+                ),
                 ..gemini::GeminiPart::default()
             });
         }
+    } else if choice.delta.reasoning_signature.is_some() {
+        parts.push(gemini::GeminiPart {
+            thought: Some(true),
+            thought_signature: gemini_thought_signature(choice.delta.reasoning_signature.clone()),
+            ..gemini::GeminiPart::default()
+        });
     }
     if let Some(tool_calls) = choice.delta.tool_calls {
         parts.extend(tool_calls.into_iter().map(|call| gemini::GeminiPart {
@@ -754,6 +921,7 @@ fn openai_chunk_choice_to_gemini_candidate(
                 name: call.function.name,
                 args: parse_json_object_or_empty(&call.function.arguments),
             }),
+            thought_signature: gemini_thought_signature(call.thought_signature),
             ..gemini::GeminiPart::default()
         }));
     }
@@ -770,14 +938,23 @@ fn openai_chunk_choice_to_gemini_candidate(
 
 fn gemini_parts_to_openai(
     parts: Vec<gemini::GeminiPart>,
-) -> (String, Option<String>, Option<Vec<openai::ToolCall>>) {
+) -> (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<Vec<openai::ToolCall>>,
+) {
     let mut text = Vec::new();
     let mut reasoning = Vec::new();
+    let mut reasoning_signature = None;
     let mut tool_calls = Vec::new();
     for part in parts {
         if part.thought.unwrap_or(false) {
             if let Some(part_text) = part.text {
                 reasoning.push(part_text);
+            }
+            if part.thought_signature.is_some() {
+                reasoning_signature = part.thought_signature;
             }
         } else if let Some(part_text) = part.text {
             if !part_text.is_empty() && part_text != "\n" {
@@ -790,13 +967,14 @@ fn gemini_parts_to_openai(
             ));
         } else if let Some(call) = part.function_call {
             tool_calls.push(openai::ToolCall {
-                id:        format!("call_{}", tool_calls.len() + 1),
-                tool_type: "function".to_string(),
-                function:  openai::ToolCallFunction {
+                id:                format!("call_{}", tool_calls.len() + 1),
+                tool_type:         "function".to_string(),
+                function:          openai::ToolCallFunction {
                     name:      call.name,
                     arguments: call.args.to_string(),
                 },
-                index:     Some(tool_calls.len() as u32),
+                index:             Some(tool_calls.len() as u32),
+                thought_signature: part.thought_signature,
             });
         } else if let Some(code) = part.executable_code {
             text.push(format!("```{}\n{}\n```", code.language, code.code));
@@ -808,6 +986,7 @@ fn gemini_parts_to_openai(
     (
         text.join("\n"),
         (!reasoning.is_empty()).then(|| reasoning.join("\n")),
+        reasoning_signature,
         (!tool_calls.is_empty()).then_some(tool_calls),
     )
 }
@@ -827,7 +1006,7 @@ fn gemini_usage_to_openai(usage: gemini::GeminiUsageMetadata) -> openai::Usage {
         usage.prompt_token_count + completion
     };
     openai::Usage {
-        prompt_tokens:         usage.prompt_token_count + usage.cached_content_token_count,
+        prompt_tokens:         usage.prompt_token_count,
         completion_tokens:     completion,
         total_tokens:          total,
         prompt_tokens_details: openai::TokenUsageDetails {
@@ -849,7 +1028,15 @@ fn openai_usage_to_gemini(usage: openai::Usage) -> gemini::GeminiUsageMetadata {
     }
 }
 
-fn gemini_finish_to_openai(reason: String) -> String {
+fn gemini_finish_to_openai(reason: String, has_tool_calls: bool) -> String {
+    if has_tool_calls
+        && matches!(
+            reason.as_str(),
+            "STOP" | "FUNCTION_CALL" | "MALFORMED_FUNCTION_CALL" | "OTHER"
+        )
+    {
+        return "tool_calls".to_string();
+    }
     match reason.as_str() {
         "STOP" => "stop",
         "MAX_TOKENS" => "length",
@@ -915,20 +1102,22 @@ mod tests {
         let req = openai::ChatCompletionRequest {
             model:                 "gpt-4o-mini".to_string(),
             messages:              vec![openai::ChatMessage {
-                role:              "assistant".to_string(),
-                content:           Some(openai::MessageContent::Text("".to_string())),
-                name:              None,
-                tool_calls:        Some(vec![openai::ToolCall {
-                    id:        "call_1".to_string(),
-                    tool_type: "function".to_string(),
-                    function:  openai::ToolCallFunction {
+                role:                "assistant".to_string(),
+                content:             Some(openai::MessageContent::Text("".to_string())),
+                name:                None,
+                tool_calls:          Some(vec![openai::ToolCall {
+                    id:                "call_1".to_string(),
+                    tool_type:         "function".to_string(),
+                    function:          openai::ToolCallFunction {
                         name:      "lookup".to_string(),
                         arguments: "{\"q\":\"rust\"}".to_string(),
                     },
-                    index:     None,
+                    index:             None,
+                    thought_signature: Some("sig-openai".to_string()),
                 }]),
-                tool_call_id:      None,
-                reasoning_content: None,
+                tool_call_id:        None,
+                reasoning_content:   Some("private reasoning".to_string()),
+                reasoning_signature: Some("sig-reasoning".to_string()),
             }],
             max_tokens:            Some(128),
             max_completion_tokens: None,
@@ -944,13 +1133,24 @@ mod tests {
             seed:                  None,
             response_format:       None,
             stream_options:        None,
+            reasoning_effort:      None,
+            reasoning:             None,
         };
 
         let gemini = openai_chat_to_gemini_request(&req).unwrap();
-        let call = gemini.contents[0].parts[0].function_call.as_ref().unwrap();
+        let reasoning = &gemini.contents[0].parts[0];
+        let call_part = &gemini.contents[0].parts[1];
+        let call = call_part.function_call.as_ref().unwrap();
         assert_eq!(gemini.contents[0].role.as_deref(), Some("model"));
+        assert_eq!(reasoning.text.as_deref(), Some("private reasoning"));
+        assert_eq!(reasoning.thought, Some(true));
+        assert_eq!(
+            reasoning.thought_signature.as_deref(),
+            Some("sig-reasoning")
+        );
         assert_eq!(call.name, "lookup");
         assert_eq!(call.args, json!({"q": "rust"}));
+        assert_eq!(call_part.thought_signature.as_deref(), Some("sig-openai"));
     }
 
     #[test]
@@ -964,6 +1164,7 @@ mod tests {
                             name: "lookup".to_string(),
                             args: json!({"q": "rust"}),
                         }),
+                        thought_signature: Some("sig-gemini".to_string()),
                         ..gemini::GeminiPart::default()
                     }],
                 },
@@ -985,7 +1186,227 @@ mod tests {
         let tool_calls = openai.choices[0].message.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls[0].function.name, "lookup");
         assert_eq!(tool_calls[0].function.arguments, "{\"q\":\"rust\"}");
+        assert_eq!(
+            tool_calls[0].thought_signature.as_deref(),
+            Some("sig-gemini")
+        );
+        assert_eq!(
+            openai.choices[0].finish_reason.as_deref(),
+            Some("tool_calls")
+        );
         assert_eq!(openai.usage.unwrap().total_tokens, 7);
+    }
+
+    #[test]
+    fn preserves_gemini_thought_text_and_signature_in_openai_message() {
+        let resp = gemini::GeminiChatResponse {
+            candidates: vec![gemini::GeminiCandidate {
+                content:        gemini::GeminiChatContent {
+                    role:  Some("model".to_string()),
+                    parts: vec![
+                        gemini::GeminiPart {
+                            text: Some("inspect the inputs".to_string()),
+                            thought: Some(true),
+                            thought_signature: Some("thought-sig".to_string()),
+                            ..gemini::GeminiPart::default()
+                        },
+                        gemini::GeminiPart::text("answer"),
+                    ],
+                },
+                finish_reason:  Some("STOP".to_string()),
+                index:          0,
+                safety_ratings: Vec::new(),
+            }],
+            ..gemini::GeminiChatResponse::default()
+        };
+
+        let openai = gemini_response_to_openai_chat(resp, "gemini-2.5-flash");
+        let message = &openai.choices[0].message;
+        assert_eq!(
+            message.reasoning_content.as_deref(),
+            Some("inspect the inputs")
+        );
+        assert_eq!(message.reasoning_signature.as_deref(), Some("thought-sig"));
+        assert_eq!(message.content.as_ref().unwrap().as_text_lossy(), "answer");
+        assert_eq!(openai.choices[0].finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn cached_tokens_are_details_not_added_to_prompt_tokens() {
+        let usage = gemini_usage_to_openai(gemini::GeminiUsageMetadata {
+            prompt_token_count:         100,
+            candidates_token_count:     20,
+            total_token_count:          125,
+            thoughts_token_count:       5,
+            cached_content_token_count: 40,
+        });
+
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 25);
+        assert_eq!(usage.total_tokens, 125);
+        assert_eq!(usage.prompt_tokens_details.cached_tokens, 40);
+        assert_eq!(usage.cached_tokens, 40);
+    }
+
+    #[test]
+    fn stream_stop_after_tool_call_maps_to_tool_calls() {
+        let mut translator = GeminiSseToOpenAiTranslator::new("gemini-2.5-flash");
+        let tool_event = json!({
+            "candidates": [{
+                "index": 0,
+                "content": {
+                    "role": "model",
+                    "parts": [{
+                        "functionCall": {"name": "lookup", "args": {"q": "rust"}},
+                        "thoughtSignature": "tool-sig"
+                    }]
+                }
+            }]
+        })
+        .to_string();
+        let finish_event = json!({
+            "candidates": [{
+                "index": 0,
+                "content": {"role": "model", "parts": []},
+                "finishReason": "STOP"
+            }]
+        })
+        .to_string();
+
+        let tool_chunks = translator.translate_sse_payload(&tool_event).unwrap();
+        let tool_chunk: JsonValue = serde_json::from_str(&tool_chunks[0]).unwrap();
+        assert_eq!(
+            tool_chunk["choices"][0]["delta"]["tool_calls"][0]["thoughtSignature"],
+            "tool-sig"
+        );
+
+        let finish_chunks = translator.translate_sse_payload(&finish_event).unwrap();
+        let finish_chunk: JsonValue = serde_json::from_str(&finish_chunks[0]).unwrap();
+        assert_eq!(finish_chunk["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(finish_chunks.last().map(String::as_str), Some("[DONE]"));
+    }
+
+    #[test]
+    fn stream_parallel_tool_calls_keep_distinct_ids_and_indices() {
+        let mut translator = GeminiSseToOpenAiTranslator::new("gemini-2.5-flash");
+        let event = json!({
+            "candidates": [{
+                "index": 0,
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"functionCall": {"name": "first", "args": {"a": 1}}},
+                        {"functionCall": {"name": "second", "args": {"b": 2}}}
+                    ]
+                }
+            }]
+        })
+        .to_string();
+
+        let chunks = translator.translate_sse_payload(&event).unwrap();
+        let chunk: JsonValue = serde_json::from_str(&chunks[0]).unwrap();
+        let calls = chunk["choices"][0]["delta"]["tool_calls"]
+            .as_array()
+            .unwrap();
+        assert_eq!(calls[0]["index"], 0);
+        assert_eq!(calls[1]["index"], 1);
+        assert_ne!(calls[0]["id"], calls[1]["id"]);
+
+        let next = json!({
+            "candidates": [{
+                "index": 0,
+                "content": {
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": "third", "args": {}}}]
+                }
+            }]
+        })
+        .to_string();
+        let chunks = translator.translate_sse_payload(&next).unwrap();
+        let chunk: JsonValue = serde_json::from_str(&chunks[0]).unwrap();
+        assert_eq!(chunk["choices"][0]["delta"]["tool_calls"][0]["index"], 2);
+    }
+
+    #[test]
+    fn gemini_parallel_function_responses_match_calls_by_name() {
+        let req = gemini::GeminiChatRequest {
+            contents: vec![
+                gemini::GeminiChatContent {
+                    role:  Some("model".to_string()),
+                    parts: vec![
+                        gemini::GeminiPart {
+                            function_call: Some(gemini::GeminiFunctionCall {
+                                name: "first".to_string(),
+                                args: json!({}),
+                            }),
+                            ..gemini::GeminiPart::default()
+                        },
+                        gemini::GeminiPart {
+                            function_call: Some(gemini::GeminiFunctionCall {
+                                name: "second".to_string(),
+                                args: json!({}),
+                            }),
+                            ..gemini::GeminiPart::default()
+                        },
+                    ],
+                },
+                gemini::GeminiChatContent {
+                    role:  Some("user".to_string()),
+                    parts: vec![
+                        gemini::GeminiPart {
+                            function_response: Some(gemini::GeminiFunctionResponse {
+                                name:     "first".to_string(),
+                                response: json!({"ok": 1}),
+                            }),
+                            ..gemini::GeminiPart::default()
+                        },
+                        gemini::GeminiPart {
+                            function_response: Some(gemini::GeminiFunctionResponse {
+                                name:     "second".to_string(),
+                                response: json!({"ok": 2}),
+                            }),
+                            ..gemini::GeminiPart::default()
+                        },
+                    ],
+                },
+            ],
+            ..gemini::GeminiChatRequest::default()
+        };
+
+        let converted = gemini_request_to_openai_chat(&req, "gpt", false).unwrap();
+        let tool_messages: Vec<_> = converted
+            .messages
+            .iter()
+            .filter(|message| message.role == "tool")
+            .collect();
+        assert_eq!(tool_messages[0].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(tool_messages[1].tool_call_id.as_deref(), Some("call_2"));
+    }
+
+    #[test]
+    fn openai_stream_accumulates_partial_tool_arguments_and_injects_signature() {
+        let mut translator = OpenAiSseToGeminiTranslator::new();
+        let first = json!({
+            "id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt",
+            "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":"}}]},"finish_reason":null}]
+        })
+        .to_string();
+        let second = json!({
+            "id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt",
+            "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"1}"}}]},"finish_reason":"tool_calls"}]
+        })
+        .to_string();
+        assert!(translator.translate_sse_payload(&first).unwrap().is_empty());
+        let output = translator.translate_sse_payload(&second).unwrap();
+        let response: JsonValue = serde_json::from_str(&output[0]).unwrap();
+        assert_eq!(
+            response["candidates"][0]["content"]["parts"][0]["functionCall"]["args"],
+            json!({"q":1})
+        );
+        assert_eq!(
+            response["candidates"][0]["content"]["parts"][0]["thoughtSignature"],
+            GEMINI_DUMMY_THOUGHT_SIGNATURE
+        );
     }
 
     #[test]

@@ -52,8 +52,7 @@ const ENDPOINT_JINA_RERANK: &str = "jina-rerank";
 const ENDPOINT_IMAGE_GENERATION: &str = "image-generation";
 const ENDPOINT_EMBEDDINGS: &str = "embeddings";
 const CODEX_TEST_VERSION: &str = "0.144.1";
-const CODEX_TEST_USER_AGENT: &str =
-    "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color";
+const CODEX_TEST_USER_AGENT: &str = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color";
 
 #[allow(async_fn_in_trait)]
 pub(crate) trait ChannelOpsProgress {

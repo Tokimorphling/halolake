@@ -49,7 +49,7 @@ const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct CachedDnsAddress {
-    address: SocketAddr,
+    address:    SocketAddr,
     expires_at: Instant,
 }
 
@@ -97,13 +97,10 @@ impl LocalDnsResolver {
             .borrow_mut()
             .entry(host_owned)
             .or_default()
-            .insert(
-                port,
-                CachedDnsAddress {
-                    address,
-                    expires_at: Instant::now() + DNS_CACHE_TTL,
-                },
-            );
+            .insert(port, CachedDnsAddress {
+                address,
+                expires_at: Instant::now() + DNS_CACHE_TTL,
+            });
         Ok(address)
     }
 }
@@ -166,15 +163,15 @@ fn debug_body_summary(enabled: bool, body: Option<&[u8]>) -> Option<RequestBodyS
 /// Redacted structural summary of a chat-like request body.
 #[derive(Debug, Default)]
 pub(crate) struct RequestBodySummary {
-    pub(crate) message_count: usize,
-    pub(crate) max_tokens: Option<u64>,
-    pub(crate) temperature: Option<f64>,
-    pub(crate) top_p: Option<f64>,
+    pub(crate) message_count:    usize,
+    pub(crate) max_tokens:       Option<u64>,
+    pub(crate) temperature:      Option<f64>,
+    pub(crate) top_p:            Option<f64>,
     pub(crate) reasoning_effort: Option<String>,
-    pub(crate) thinking_budget: Option<u64>,
-    pub(crate) has_tools: bool,
-    pub(crate) has_images: bool,
-    pub(crate) preview: String,
+    pub(crate) thinking_budget:  Option<u64>,
+    pub(crate) has_tools:        bool,
+    pub(crate) has_images:       bool,
+    pub(crate) preview:          String,
 }
 
 pub(crate) fn request_body_summary(body: &[u8]) -> RequestBodySummary {
@@ -670,7 +667,7 @@ pub(crate) fn now_unix_ms_i64() -> i64 {
 ///
 /// Most token-stream frames only carry deltas. Usage is emitted in a small
 /// terminal subset: OpenAI/Claude use `usage`, Gemini uses `usageMetadata`, and
-/// the Responses API terminates with `response.completed`. A false positive is
+/// the Responses API terminates with a `response.*` terminal. A false positive is
 /// harmless (the regular parser still validates the payload), while a false
 /// negative would lose accounting data, so the check deliberately stays broad.
 #[inline]
@@ -678,6 +675,9 @@ pub(crate) fn may_contain_response_usage(payload: &[u8]) -> bool {
     contains_json_key(payload, b"\"usage\"")
         || contains_json_key(payload, b"\"usageMetadata\"")
         || contains_bytes(payload, b"response.completed")
+        || contains_bytes(payload, b"response.incomplete")
+        || contains_bytes(payload, b"response.failed")
+        || contains_bytes(payload, b"response.done")
 }
 
 #[inline]
@@ -856,6 +856,12 @@ mod sse_buffer_tests {
         assert!(may_contain_response_usage(
             br#"{"type":"response.completed","response":{"id":"resp_1"}}"#,
         ));
+        assert!(may_contain_response_usage(
+            br#"{"type":"response.incomplete","response":{"id":"resp_1"}}"#,
+        ));
+        assert!(may_contain_response_usage(
+            br#"{"type":"response.failed","response":{"id":"resp_1"}}"#,
+        ));
     }
 
     #[test]
@@ -901,10 +907,9 @@ mod sse_buffer_tests {
         assert!(buffer.push(b"data: [DONE]\n\n").is_empty());
 
         let mut buffer = SseBuffer::default();
-        assert_eq!(
-            buffer.push_with_done(b"data: [DONE]\n\n", true),
-            vec!["[DONE]".to_string()]
-        );
+        assert_eq!(buffer.push_with_done(b"data: [DONE]\n\n", true), vec![
+            "[DONE]".to_string()
+        ]);
     }
 }
 
