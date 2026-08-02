@@ -56,6 +56,7 @@ pub fn openai_chat_to_claude_messages(
                     tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
                     content:     openai_content_to_claude_tool_result(msg.content.as_ref()),
                     is_error:    None,
+                    cache_control: None,
                 };
                 if let Some(last) = messages.last_mut() {
                     if last.role == "user" {
@@ -84,6 +85,7 @@ pub fn openai_chat_to_claude_messages(
             role:    "user".to_string(),
             content: vec![claude::ContentBlock::Text {
                 text: "...".to_string(),
+                cache_control: None,
             }],
         });
     }
@@ -102,6 +104,7 @@ pub fn openai_chat_to_claude_messages(
         model: upstream_model.into(),
         max_tokens,
         system: (!system.is_empty()).then(|| claude::SystemContent::Text(system.join("\n\n"))),
+        cache_control: None,
         messages,
         temperature: req.temperature,
         top_p: req.top_p,
@@ -228,16 +231,23 @@ pub fn openai_chat_to_claude_messages_response(
             (Some(reasoning), signature) => content.push(claude::ContentBlock::Thinking {
                 thinking: reasoning,
                 signature,
+                cache_control: None,
             }),
             (None, Some(data)) if !data.is_empty() => {
-                content.push(claude::ContentBlock::RedactedThinking { data });
+                content.push(claude::ContentBlock::RedactedThinking {
+                    data,
+                    cache_control: None,
+                });
             }
             _ => {}
         }
         if let Some(message_content) = choice.message.content {
             let text = message_content.as_text_lossy();
             if !text.is_empty() || choice.message.tool_calls.as_ref().is_none_or(Vec::is_empty) {
-                content.push(claude::ContentBlock::Text { text });
+                content.push(claude::ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                });
             }
         }
         if let Some(tool_calls) = choice.message.tool_calls {
@@ -248,6 +258,7 @@ pub fn openai_chat_to_claude_messages_response(
                         id:    call.id,
                         name:  call.function.name,
                         input: parse_tool_input_object(&call.function.arguments),
+                        cache_control: None,
                     }),
             );
         }
@@ -615,18 +626,19 @@ impl ClaudeSseTranslator {
                 }
             }
             "content_block_start" => match event.content_block {
-                Some(claude::ContentBlock::Text { text }) if !text.is_empty() => {
+                Some(claude::ContentBlock::Text { text, .. }) if !text.is_empty() => {
                     out.push(self.openai_sse(None, Some(&text), None, None)?);
                 }
                 Some(claude::ContentBlock::Thinking {
                     thinking,
                     signature,
+                    ..
                 }) => {
                     if !thinking.is_empty() || signature.is_some() {
                         out.push(self.openai_reasoning_sse(Some(&thinking), signature.as_deref())?);
                     }
                 }
-                Some(claude::ContentBlock::RedactedThinking { data }) => {
+                Some(claude::ContentBlock::RedactedThinking { data, .. }) => {
                     out.push(self.openai_reasoning_sse(None, Some(&data))?);
                 }
                 Some(claude::ContentBlock::ToolUse { id, name, .. }) => {
@@ -834,7 +846,7 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
 
     for block in &message.content {
         match block {
-            claude::ContentBlock::Text { text } => {
+            claude::ContentBlock::Text { text, .. } => {
                 if !text.is_empty() {
                     parts.push(openai::ContentPart::Text {
                         part_type: "text".to_string(),
@@ -842,7 +854,7 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
                     });
                 }
             }
-            claude::ContentBlock::Image { source } => {
+            claude::ContentBlock::Image { source, .. } => {
                 if let Some(url) = claude_image_source_to_openai_url(source) {
                     parts.push(openai::ContentPart::ImageUrl {
                         part_type: "image_url".to_string(),
@@ -853,7 +865,7 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
                     });
                 }
             }
-            claude::ContentBlock::ToolUse { id, name, input } => {
+            claude::ContentBlock::ToolUse { id, name, input, .. } => {
                 tool_calls.push(openai::ToolCall {
                     id:                id.clone(),
                     tool_type:         "function".to_string(),
@@ -894,13 +906,14 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
             claude::ContentBlock::Thinking {
                 thinking,
                 signature,
+                ..
             } => {
                 reasoning_content = append_optional_string(reasoning_content, thinking);
                 if signature.is_some() {
                     reasoning_signature = signature.clone();
                 }
             }
-            claude::ContentBlock::RedactedThinking { data } => {
+            claude::ContentBlock::RedactedThinking { data, .. } => {
                 if !data.is_empty() {
                     reasoning_signature = Some(data.clone());
                 }
@@ -1072,6 +1085,7 @@ fn assistant_content_blocks(msg: &openai::ChatMessage) -> Vec<claude::ContentBlo
         blocks.push(claude::ContentBlock::Thinking {
             thinking:  msg.reasoning_content.clone().unwrap_or_default(),
             signature: msg.reasoning_signature.clone(),
+            cache_control: None,
         });
     }
     if let Some(content) = &msg.content {
@@ -1082,11 +1096,13 @@ fn assistant_content_blocks(msg: &openai::ChatMessage) -> Vec<claude::ContentBlo
             id:    call.id.clone(),
             name:  call.function.name.clone(),
             input: parse_tool_input_object(&call.function.arguments),
+            cache_control: None,
         }));
     }
     if blocks.is_empty() {
         blocks.push(claude::ContentBlock::Text {
             text: String::new(),
+            cache_control: None,
         });
     }
     blocks
@@ -1112,6 +1128,7 @@ fn convert_tools(tools: &[openai::Tool]) -> Vec<claude::Tool> {
                 .parameters
                 .clone()
                 .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+            cache_control: None,
         })
         .collect()
 }
@@ -1183,8 +1200,8 @@ fn claude_content_to_openai(
 
     for block in content {
         match block {
-            claude::ContentBlock::Text { text: t } => text.push(t),
-            claude::ContentBlock::ToolUse { id, name, input } => {
+            claude::ContentBlock::Text { text: t, .. } => text.push(t),
+            claude::ContentBlock::ToolUse { id, name, input, .. } => {
                 tool_calls.push(openai::ToolCall {
                     id,
                     tool_type: "function".to_string(),
@@ -1199,6 +1216,7 @@ fn claude_content_to_openai(
             claude::ContentBlock::Thinking {
                 thinking,
                 signature,
+                ..
             } => {
                 if !thinking.is_empty() {
                     reasoning.push(thinking);
@@ -1207,7 +1225,7 @@ fn claude_content_to_openai(
                     reasoning_signature = signature;
                 }
             }
-            claude::ContentBlock::RedactedThinking { data } => {
+            claude::ContentBlock::RedactedThinking { data, .. } => {
                 if !data.is_empty() {
                     reasoning_signature = Some(data);
                 }
@@ -1233,23 +1251,33 @@ fn openai_content_to_claude_blocks(
     let mut blocks = Vec::new();
     match content {
         Some(openai::MessageContent::Text(text)) => {
-            blocks.push(claude::ContentBlock::Text { text: text.clone() });
+            blocks.push(claude::ContentBlock::Text {
+                text: text.clone(),
+                cache_control: None,
+            });
         }
         Some(openai::MessageContent::Parts(parts)) => {
             for part in parts {
                 match part {
                     openai::ContentPart::Text { text, .. } => {
-                        blocks.push(claude::ContentBlock::Text { text: text.clone() });
+                        blocks.push(claude::ContentBlock::Text {
+                            text: text.clone(),
+                            cache_control: None,
+                        });
                     }
                     openai::ContentPart::ImageUrl { image_url, .. } => {
                         if let Some(source) = openai_image_url_to_claude_source(&image_url.url) {
-                            blocks.push(claude::ContentBlock::Image { source });
+                            blocks.push(claude::ContentBlock::Image {
+                                source,
+                                cache_control: None,
+                            });
                         }
                     }
                     openai::ContentPart::Other(value) => {
                         if let Some(text) = value.get("text").and_then(JsonValue::as_str) {
                             blocks.push(claude::ContentBlock::Text {
                                 text: text.to_string(),
+                                cache_control: None,
                             });
                         }
                     }
@@ -1261,6 +1289,7 @@ fn openai_content_to_claude_blocks(
     if blocks.is_empty() {
         blocks.push(claude::ContentBlock::Text {
             text: String::new(),
+            cache_control: None,
         });
     }
     blocks
@@ -1271,7 +1300,7 @@ fn openai_content_to_claude_tool_result(
 ) -> claude::ToolResultContent {
     let blocks = openai_content_to_claude_blocks(content);
     if blocks.len() == 1
-        && let claude::ContentBlock::Text { text } = &blocks[0]
+        && let claude::ContentBlock::Text { text, .. } = &blocks[0]
     {
         return claude::ToolResultContent::Text(text.clone());
     }
@@ -1569,12 +1598,12 @@ mod tests {
         assert_eq!(claude.messages[0].role, "user");
         assert!(matches!(
             claude.messages[0].content[0],
-            claude::ContentBlock::Text { ref text } if text == "..."
+            claude::ContentBlock::Text { ref text, .. } if text == "..."
         ));
         assert_eq!(claude.messages[2].role, "user");
         assert!(matches!(
             claude.messages[2].content[0],
-            claude::ContentBlock::Text { ref text } if text == "hello again"
+            claude::ContentBlock::Text { ref text, .. } if text == "hello again"
         ));
     }
 
@@ -1700,11 +1729,11 @@ mod tests {
         let converted = openai_chat_to_claude_messages(&req, "claude").unwrap();
         assert!(matches!(
             converted.messages[0].content[1],
-            claude::ContentBlock::Image { ref source } if source.data.as_deref() == Some("AAAA")
+            claude::ContentBlock::Image { ref source, .. } if source.data.as_deref() == Some("AAAA")
         ));
         assert!(matches!(
             converted.messages[1].content[0],
-            claude::ContentBlock::Thinking { ref thinking, signature: Some(ref sig) }
+            claude::ContentBlock::Thinking { ref thinking, signature: Some(ref sig), .. }
                 if thinking == "thought" && sig == "sig"
         ));
         assert_eq!(converted.max_tokens, 11264);

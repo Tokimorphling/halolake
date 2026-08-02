@@ -3505,9 +3505,11 @@ mod tests {
                 claude::ContentBlock::Thinking {
                     thinking:  "why".to_string(),
                     signature: Some("cipher".to_string()),
+                    cache_control: None,
                 },
                 claude::ContentBlock::RedactedThinking {
                     data: "redacted".to_string(),
+                    cache_control: None,
                 },
             ],
             stop_reason:   Some("end_turn".to_string()),

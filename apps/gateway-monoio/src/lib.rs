@@ -10,14 +10,15 @@ use halolake_control_plane::{
 use halolake_domain::{UsageEvent, UsageStatus};
 use halolake_protocol::{
     ClaudeSseToResponsesTranslator, ClaudeSseTranslator, GeminiSseToOpenAiTranslator,
-    OpenAiSseToClaudeTranslator, OpenAiSseToGeminiTranslator, ResponsesToolMapping,
+    OpenAiSseToClaudeTranslator, OpenAiSseToGeminiTranslator, PromptCacheMode,
+    ResponsesToolMapping,
     claude_messages_to_openai_chat, claude_messages_to_openai_chat_request,
     claude_messages_to_openai_responses_with_options_and_tools,
     gemini_imagen_to_openai_image_response, gemini_request_to_openai_chat,
     gemini_response_to_openai_chat, openai_chat_to_claude_messages,
     openai_chat_to_claude_messages_response, openai_chat_to_gemini_request,
     openai_chat_to_gemini_response, openai_image_to_gemini_imagen_request,
-    openai_responses_to_claude_messages_with_tools, responses_tool_mapping,
+    openai_responses_to_claude_messages_with_tools_and_cache_mode, responses_tool_mapping,
 };
 use halolake_router_core::{
     ChannelAffinityCache, ChannelAffinityCandidate, ChannelAffinityRequest, ChannelConfig,

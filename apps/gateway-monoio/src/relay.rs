@@ -874,10 +874,12 @@ where
                     ));
                 }
             };
-            let claude_request = match openai_responses_to_claude_messages_with_tools(
+            let cache_mode = prompt_cache_mode_for_base_url(&route.base_url);
+            let claude_request = match openai_responses_to_claude_messages_with_tools_and_cache_mode(
                 &req.body,
                 route.upstream_model.clone(),
                 &tool_mapping,
+                cache_mode,
             ) {
                 Ok(request) => request,
                 Err(err) => {
@@ -1104,6 +1106,18 @@ where
                 "Gemini generateContent to Claude upstream is not implemented in new-api",
             )),
         }
+    }
+}
+
+fn prompt_cache_mode_for_base_url(base_url: &str) -> PromptCacheMode {
+    let host = base_url
+        .parse::<Uri>()
+        .ok()
+        .and_then(|uri| uri.host().map(str::to_ascii_lowercase));
+    if host.as_deref() == Some("api.anthropic.com") {
+        PromptCacheMode::Automatic
+    } else {
+        PromptCacheMode::Explicit
     }
 }
 
@@ -2900,6 +2914,22 @@ mod tests {
     };
 
     #[test]
+    fn selects_automatic_cache_only_for_native_anthropic_api() {
+        assert_eq!(
+            prompt_cache_mode_for_base_url("https://api.anthropic.com"),
+            PromptCacheMode::Automatic
+        );
+        assert_eq!(
+            prompt_cache_mode_for_base_url("https://bedrock-runtime.us-east-1.amazonaws.com"),
+            PromptCacheMode::Explicit
+        );
+        assert_eq!(
+            prompt_cache_mode_for_base_url("https://anthropic.example.com"),
+            PromptCacheMode::Explicit
+        );
+    }
+
+    #[test]
     fn hyper_request_framing_is_rebuilt_from_the_actual_body() {
         let mut fixed = Request::builder()
             .header(header::CONTENT_LENGTH, "999")
@@ -4054,8 +4084,7 @@ data: {"type":"message_stop"}
             let frame = "event: message_start\ndata: \
                          {\"type\":\"message_start\",\"message\":{\"id\":\"msg_eof\",\"type\":\"\
                          message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"\
-                         stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\\
-                         n\n";
+                         stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
             let chunk = format!("{:x}\r\n{}\r\n", frame.len(), frame);
             stream
                 .write_all(chunk.into_bytes())

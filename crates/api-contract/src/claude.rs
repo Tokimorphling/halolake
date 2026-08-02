@@ -7,6 +7,11 @@ pub struct MessagesRequest {
     pub max_tokens:     u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system:         Option<SystemContent>,
+    /// Anthropic's top-level prompt-cache control enables automatic caching
+    /// for the growing messages prefix. Keep this as raw JSON so TTL variants
+    /// can pass through without coupling the API contract to one TTL shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control:   Option<JsonValue>,
     pub messages:       Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature:    Option<f32>,
@@ -86,15 +91,25 @@ pub struct Message {
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
+    },
     #[serde(rename = "image")]
-    Image { source: ImageSource },
+    Image {
+        source: ImageSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id:    String,
         name:  String,
         #[serde(default)]
         input: JsonValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
     },
     #[serde(rename = "server_tool_use")]
     ServerToolUse {
@@ -102,6 +117,8 @@ pub enum ContentBlock {
         name:  String,
         #[serde(default)]
         input: JsonValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
     },
     #[serde(rename = "web_search_tool_result")]
     WebSearchToolResult {
@@ -110,6 +127,8 @@ pub enum ContentBlock {
         content:     JsonValue,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_error:    Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
     },
     #[serde(rename = "tool_result")]
     ToolResult {
@@ -118,15 +137,42 @@ pub enum ContentBlock {
         content:     ToolResultContent,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_error:    Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
     },
     #[serde(rename = "thinking")]
     Thinking {
         thinking:  String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
     },
     #[serde(rename = "redacted_thinking")]
-    RedactedThinking { data: String },
+    RedactedThinking {
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<JsonValue>,
+    },
+}
+
+impl ContentBlock {
+    /// Returns the optional prompt-cache marker carried by any Anthropic
+    /// content block variant. Keeping this on the contract type lets protocol
+    /// adapters normalize client-provided markers without matching every
+    /// variant themselves.
+    pub fn cache_control_mut(&mut self) -> &mut Option<JsonValue> {
+        match self {
+            Self::Text { cache_control, .. }
+            | Self::Image { cache_control, .. }
+            | Self::ToolUse { cache_control, .. }
+            | Self::ServerToolUse { cache_control, .. }
+            | Self::WebSearchToolResult { cache_control, .. }
+            | Self::ToolResult { cache_control, .. }
+            | Self::Thinking { cache_control, .. }
+            | Self::RedactedThinking { cache_control, .. } => cache_control,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -162,7 +208,7 @@ impl ToolResultContent {
             Self::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::Text { text, .. } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -184,6 +230,8 @@ pub struct Tool {
     pub description:  Option<String>,
     #[serde(default, skip_serializing_if = "JsonValue::is_null")]
     pub input_schema: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

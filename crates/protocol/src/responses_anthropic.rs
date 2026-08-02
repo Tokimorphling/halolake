@@ -6,6 +6,32 @@ use uuid::Uuid;
 
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 
+fn ephemeral_cache_control() -> JsonValue {
+    json!({"type": "ephemeral"})
+}
+
+/// Controls whether a converted Messages request uses Anthropic's newer
+/// top-level automatic breakpoint or only explicit block-level breakpoints.
+/// Explicit mode is the safe default for Bedrock and older compatible APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptCacheMode {
+    Explicit,
+    Automatic,
+}
+
+fn request_cache_control(request: &JsonValue) -> JsonValue {
+    request
+        .get("cache_control")
+        .filter(|value| {
+            value
+                .get("type")
+                .and_then(JsonValue::as_str)
+                == Some("ephemeral")
+        })
+        .cloned()
+        .unwrap_or_else(ephemeral_cache_control)
+}
+
 /// The `tool_search` proxy keeps its wire name: Codex's model side calls the
 /// tool by this exact name, so it cannot be renamed to avoid collisions.
 const TOOL_SEARCH_NAME: &str = "tool_search";
@@ -272,6 +298,22 @@ pub fn openai_responses_to_claude_messages_with_tools(
     upstream_model: impl Into<String>,
     tool_mapping: &ResponsesToolMapping,
 ) -> Result<claude::MessagesRequest, ProtocolError> {
+    openai_responses_to_claude_messages_with_tools_and_cache_mode(
+        raw,
+        upstream_model,
+        tool_mapping,
+        PromptCacheMode::Explicit,
+    )
+}
+
+/// Same as [`openai_responses_to_claude_messages_with_tools`], with an
+/// explicit cache compatibility choice for the target Anthropic endpoint.
+pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
+    raw: &[u8],
+    upstream_model: impl Into<String>,
+    tool_mapping: &ResponsesToolMapping,
+    cache_mode: PromptCacheMode,
+) -> Result<claude::MessagesRequest, ProtocolError> {
     let request: JsonValue = serde_json::from_slice(raw)?;
     if request
         .get("previous_response_id")
@@ -283,6 +325,7 @@ pub fn openai_responses_to_claude_messages_with_tools(
                 .to_string(),
         ));
     }
+    let cache_control = request_cache_control(&request);
     let mut system = Vec::new();
     if let Some(instructions) = request.get("instructions").and_then(JsonValue::as_str)
         && !instructions.trim().is_empty()
@@ -295,19 +338,35 @@ pub fn openai_responses_to_claude_messages_with_tools(
         Some(JsonValue::String(text)) => {
             push_message(&mut messages, "user", vec![claude::ContentBlock::Text {
                 text: text.clone(),
+                cache_control: None,
             }])
         }
         Some(JsonValue::Array(items)) => {
+            let mut leading_system = true;
             for item in items {
                 if item.get("type").and_then(JsonValue::as_str) == Some("additional_tools") {
                     continue;
                 }
-                convert_input_item(item, tool_mapping, &mut system, &mut messages)?;
+                let is_system = matches!(
+                    item.get("role").and_then(JsonValue::as_str),
+                    Some("system" | "developer")
+                );
+                if !is_system {
+                    leading_system = false;
+                }
+                convert_input_item(
+                    item,
+                    tool_mapping,
+                    &mut system,
+                    &mut messages,
+                    leading_system,
+                )?;
             }
         }
         Some(value) if !value.is_null() => {
             push_message(&mut messages, "user", vec![claude::ContentBlock::Text {
                 text: value.to_string(),
+                cache_control: None,
             }])
         }
         _ => {}
@@ -362,7 +421,14 @@ pub fn openai_responses_to_claude_messages_with_tools(
         .unwrap_or(requested_max_tokens);
 
     let effective_tools = effective_tools(&request);
-    let tools = convert_tools(effective_tools.as_ref())?;
+    let mut tools = convert_tools(effective_tools.as_ref())?;
+    // Cache the complete tool-definition prefix explicitly. In automatic mode
+    // the top-level marker handles the growing conversation; in explicit mode
+    // the message breakpoints below cover that history for compatible APIs
+    // that do not implement automatic caching.
+    if let Some(last_tool) = tools.as_mut().and_then(|tools| tools.last_mut()) {
+        last_tool.cache_control = Some(cache_control.clone());
+    }
     let mut tool_choice = request
         .get("tool_choice")
         .and_then(|choice| convert_tool_choice(choice, tool_mapping));
@@ -384,10 +450,28 @@ pub fn openai_responses_to_claude_messages_with_tools(
         }
     }
 
+    if cache_mode == PromptCacheMode::Explicit {
+        apply_explicit_message_cache_breakpoints(&mut messages, &cache_control);
+    }
+
+    let system = (!system.is_empty()).then(|| {
+        let mut extra = Map::new();
+        extra.insert("cache_control".to_string(), cache_control.clone());
+        claude::SystemContent::Blocks(vec![claude::SystemBlock {
+            block_type: "text".to_string(),
+            text:       Some(system.join("\n\n")),
+            extra,
+        }])
+    });
+
     Ok(claude::MessagesRequest {
         model: upstream_model.into(),
         max_tokens,
-        system: (!system.is_empty()).then(|| claude::SystemContent::Text(system.join("\n\n"))),
+        // Automatic mode is opt-in because Bedrock and older compatible APIs
+        // may reject the top-level cache_control field.
+        cache_control: (cache_mode == PromptCacheMode::Automatic)
+            .then_some(cache_control),
+        system,
         messages,
         temperature: request
             .get("temperature")
@@ -417,6 +501,21 @@ pub fn openai_responses_to_claude_messages(
 ) -> Result<claude::MessagesRequest, ProtocolError> {
     let mapping = responses_tool_mapping(raw)?;
     openai_responses_to_claude_messages_with_tools(raw, upstream_model, &mapping)
+}
+
+/// Standalone Responses converter with an explicit prompt-cache mode.
+pub fn openai_responses_to_claude_messages_with_cache_mode(
+    raw: &[u8],
+    upstream_model: impl Into<String>,
+    cache_mode: PromptCacheMode,
+) -> Result<claude::MessagesRequest, ProtocolError> {
+    let mapping = responses_tool_mapping(raw)?;
+    openai_responses_to_claude_messages_with_tools_and_cache_mode(
+        raw,
+        upstream_model,
+        &mapping,
+        cache_mode,
+    )
 }
 
 pub fn claude_messages_to_openai_responses(
@@ -453,6 +552,7 @@ pub fn claude_messages_to_openai_responses_with_options_and_tools(
             claude::ContentBlock::Thinking {
                 thinking,
                 signature,
+                ..
             } => {
                 flush_message_parts(&mut output, &mut message_parts);
                 let mut item = json!({
@@ -467,7 +567,7 @@ pub fn claude_messages_to_openai_responses_with_options_and_tools(
                 }
                 output.push(item);
             }
-            claude::ContentBlock::RedactedThinking { data } => {
+            claude::ContentBlock::RedactedThinking { data, .. } => {
                 flush_message_parts(&mut output, &mut message_parts);
                 let mut item = json!({
                     "type": "reasoning",
@@ -479,14 +579,14 @@ pub fn claude_messages_to_openai_responses_with_options_and_tools(
                 }
                 output.push(item);
             }
-            claude::ContentBlock::Text { text } => {
+            claude::ContentBlock::Text { text, .. } => {
                 message_parts.push(json!({"type": "output_text", "text": text, "annotations": []}));
             }
-            claude::ContentBlock::ToolUse { id, name, input } => {
+            claude::ContentBlock::ToolUse { id, name, input, .. } => {
                 flush_message_parts(&mut output, &mut message_parts);
                 output.push(tool_use_to_responses_item(id, name, input, tool_mapping));
             }
-            claude::ContentBlock::ServerToolUse { id, name, input } => {
+            claude::ContentBlock::ServerToolUse { id, name, input, .. } => {
                 flush_message_parts(&mut output, &mut message_parts);
                 output.push(server_tool_use_to_responses_item(id, name, input));
             }
@@ -732,7 +832,7 @@ impl ClaudeSseToResponsesTranslator {
             "content_block_start" => {
                 out.extend(self.close_current());
                 match event.content_block {
-                    Some(claude::ContentBlock::Text { text }) => {
+                    Some(claude::ContentBlock::Text { text, .. }) => {
                         let id = item_id("msg");
                         out.push(self.event(
                             "response.output_item.added",
@@ -763,6 +863,7 @@ impl ClaudeSseToResponsesTranslator {
                     Some(claude::ContentBlock::Thinking {
                         thinking,
                         signature,
+                        ..
                     }) => {
                         let id = item_id("rs");
                         let output_index = self.output_index;
@@ -788,7 +889,7 @@ impl ClaudeSseToResponsesTranslator {
                             out.extend(self.reasoning_delta(&thinking));
                         }
                     }
-                    Some(claude::ContentBlock::RedactedThinking { data }) => {
+                    Some(claude::ContentBlock::RedactedThinking { data, .. }) => {
                         let id = item_id("rs");
                         let output_index = self.output_index;
                         let mut item = json!({"type":"reasoning","id":id,"summary":[]});
@@ -818,6 +919,7 @@ impl ClaudeSseToResponsesTranslator {
                         id: call_id,
                         name,
                         input,
+                        ..
                     }) => {
                         let item_type = self.tool_item_type(&name);
                         let id = item_id(if item_type == "custom_tool_call" {
@@ -858,7 +960,7 @@ impl ClaudeSseToResponsesTranslator {
                             },
                         });
                     }
-                    Some(claude::ContentBlock::ServerToolUse { id, name, input }) => {
+                    Some(claude::ContentBlock::ServerToolUse { id, name, input, .. }) => {
                         let output_index = self.output_index;
                         out.push(self.event(
                             "response.output_item.added",
@@ -1246,6 +1348,7 @@ fn convert_input_item(
     tool_mapping: &ResponsesToolMapping,
     system: &mut Vec<String>,
     messages: &mut Vec<claude::Message>,
+    hoist_system: bool,
 ) -> Result<(), ProtocolError> {
     let item_type = item
         .get("type")
@@ -1255,7 +1358,7 @@ fn convert_input_item(
         .get("role")
         .and_then(JsonValue::as_str)
         .unwrap_or_default();
-    if matches!(role, "system" | "developer") {
+    if hoist_system && matches!(role, "system" | "developer") {
         let text = content_text(item.get("content"))?;
         if !text.is_empty() {
             system.push(text);
@@ -1281,6 +1384,7 @@ fn convert_input_item(
                     claude::ContentBlock::Thinking {
                         thinking,
                         signature: (!signature.is_empty()).then(|| signature.to_string()),
+                        cache_control: None,
                     },
                 ]);
             }
@@ -1311,6 +1415,7 @@ fn convert_input_item(
                 ),
                 name:  resolve_function_call_name(item, item_type, tool_mapping),
                 input: arguments,
+                cache_control: None,
             }]);
         }
         "custom_tool_call" => {
@@ -1337,6 +1442,7 @@ fn convert_input_item(
                     .unwrap_or_default()
                     .to_string(),
                 input: json!({"input": input}),
+                cache_control: None,
             }]);
         }
         "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
@@ -1351,6 +1457,7 @@ fn convert_input_item(
                 content,
                 is_error: (item.get("status").and_then(JsonValue::as_str) == Some("failed"))
                     .then_some(true),
+                cache_control: None,
             }]);
         }
         _ if role == "assistant" => {
@@ -1399,7 +1506,10 @@ fn content_to_claude(
 ) -> Result<Vec<claude::ContentBlock>, ProtocolError> {
     match content {
         Some(JsonValue::String(text)) => {
-            Ok(vec![claude::ContentBlock::Text { text: text.clone() }])
+            Ok(vec![claude::ContentBlock::Text {
+                text: text.clone(),
+                cache_control: None,
+            }])
         }
         Some(JsonValue::Array(parts)) => {
             let mut blocks = Vec::with_capacity(parts.len());
@@ -1409,6 +1519,7 @@ fn content_to_claude(
                         if let Some(text) = part.get("text").and_then(JsonValue::as_str) {
                             blocks.push(claude::ContentBlock::Text {
                                 text: text.to_string(),
+                                cache_control: None,
                             });
                         }
                     }
@@ -1451,6 +1562,7 @@ fn content_to_claude(
         }
         Some(value) if !value.is_null() => Ok(vec![claude::ContentBlock::Text {
             text: value.to_string(),
+            cache_control: None,
         }]),
         _ => Ok(Vec::new()),
     }
@@ -1466,6 +1578,7 @@ fn image_block(url: &str) -> Option<claude::ContentBlock> {
                 data:        Some(data.to_string()),
                 url:         None,
             },
+            cache_control: None,
         });
     }
     Some(claude::ContentBlock::Image {
@@ -1475,6 +1588,7 @@ fn image_block(url: &str) -> Option<claude::ContentBlock> {
             data:        None,
             url:         Some(url.to_string()),
         },
+        cache_control: None,
     })
 }
 
@@ -1521,6 +1635,7 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
                 name:         "web_search".to_string(),
                 description:  None,
                 input_schema: JsonValue::Null,
+                cache_control: None,
             });
             continue;
         }
@@ -1550,6 +1665,7 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
                     },
                     "required":["query"]
                 }),
+                cache_control: None,
             });
             continue;
         }
@@ -1591,6 +1707,7 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
                         .and_then(JsonValue::as_str)
                         .map(str::to_string),
                     input_schema: schema,
+                    cache_control: None,
                 });
             }
             continue;
@@ -1623,6 +1740,7 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
                 .and_then(JsonValue::as_str)
                 .map(str::to_string),
             input_schema: schema,
+            cache_control: None,
         });
     }
     Ok((!converted.is_empty()).then_some(converted))
@@ -1717,6 +1835,53 @@ fn normalize_schema(schema: &mut JsonValue) {
     object
         .entry("properties".to_string())
         .or_insert_with(|| JsonValue::Object(Map::new()));
+}
+
+fn mark_last_content_block(message: &mut claude::Message, cache_control: &JsonValue) {
+    if let Some(block) = message.content.last_mut() {
+        *block.cache_control_mut() = Some(cache_control.clone());
+    }
+}
+
+/// Applies sub2api-style explicit message breakpoints:
+///
+/// - clear all old message markers first, making repeated conversion
+///   deterministic;
+/// - mark the last message;
+/// - when there is enough history, also mark the second-last user message.
+///
+/// Together with the system and last-tool markers this stays within
+/// Anthropic's four explicit breakpoint limit and preserves a reusable
+/// message prefix as the conversation grows.
+fn apply_explicit_message_cache_breakpoints(
+    messages: &mut [claude::Message],
+    cache_control: &JsonValue,
+) {
+    for message in messages.iter_mut() {
+        for block in &mut message.content {
+            *block.cache_control_mut() = None;
+        }
+    }
+
+    if let Some(last) = messages.last_mut() {
+        mark_last_content_block(last, cache_control);
+    }
+
+    if messages.len() < 4 {
+        return;
+    }
+
+    let mut user_count = 0;
+    let second_last_user = messages.iter().enumerate().rev().find_map(|(index, message)| {
+        if message.role != "user" {
+            return None;
+        }
+        user_count += 1;
+        (user_count == 2).then_some(index)
+    });
+    if let Some(index) = second_last_user {
+        mark_last_content_block(&mut messages[index], cache_control);
+    }
 }
 
 fn normalize_tool_history(messages: &mut Vec<claude::Message>) {
@@ -1928,6 +2093,23 @@ fn now_unix() -> u64 {
 mod tests {
     use super::*;
 
+    fn strip_cache_controls(value: &mut JsonValue) {
+        match value {
+            JsonValue::Object(object) => {
+                object.remove("cache_control");
+                for child in object.values_mut() {
+                    strip_cache_controls(child);
+                }
+            }
+            JsonValue::Array(values) => {
+                for child in values {
+                    strip_cache_controls(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[test]
     fn converts_typed_history_images_reasoning_and_tools() {
         let request = json!({
@@ -1944,13 +2126,44 @@ mod tests {
             "reasoning":{"effort":"xhigh"},
             "stream":true
         });
-        let converted = openai_responses_to_claude_messages(
+        let converted = openai_responses_to_claude_messages_with_cache_mode(
             &serde_json::to_vec(&request).unwrap(),
             "claude-sonnet",
+            PromptCacheMode::Automatic,
         )
         .unwrap();
         assert_eq!(converted.model, "claude-sonnet");
-        assert_eq!(converted.system.unwrap().as_text_lossy(), "system prompt");
+        let system = converted.system.as_ref().unwrap();
+        assert_eq!(system.as_text_lossy(), "system prompt");
+        assert!(matches!(
+            system,
+            claude::SystemContent::Blocks(blocks)
+                if blocks.len() == 1
+                    && blocks[0].extra.get("cache_control")
+                        == Some(&json!({"type":"ephemeral"}))
+        ));
+        assert_eq!(
+            converted.cache_control,
+            Some(json!({"type":"ephemeral"}))
+        );
+        assert_eq!(
+            converted
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.last())
+                .and_then(|tool| tool.cache_control.as_ref()),
+            Some(&json!({"type":"ephemeral"}))
+        );
+        let wire = serde_json::to_value(&converted).unwrap();
+        assert_eq!(wire["cache_control"], json!({"type":"ephemeral"}));
+        assert_eq!(
+            wire["system"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert_eq!(
+            wire["tools"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
         assert_eq!(
             converted.output_config.unwrap().effort.as_deref(),
             Some("max")
@@ -1961,8 +2174,150 @@ mod tests {
             |block| matches!(block, claude::ContentBlock::Thinking { signature: Some(sig), .. } if sig == "sig")
         )));
         assert!(converted.messages.iter().any(|message| message.content.iter().any(
-            |block| matches!(block, claude::ContentBlock::Image { source } if source.data.as_deref() == Some("AAAA"))
+            |block| matches!(block, claude::ContentBlock::Image { source, .. } if source.data.as_deref() == Some("AAAA"))
         )));
+    }
+
+    #[test]
+    fn enables_automatic_prompt_cache_without_system_or_tools() {
+        let request = json!({"input":"hello"});
+        let converted = openai_responses_to_claude_messages_with_cache_mode(
+            &serde_json::to_vec(&request).unwrap(),
+            "claude",
+            PromptCacheMode::Automatic,
+        )
+        .unwrap();
+
+        assert_eq!(
+            converted.cache_control,
+            Some(json!({"type":"ephemeral"}))
+        );
+        assert!(converted.system.is_none());
+        assert!(converted.tools.is_none());
+    }
+
+    #[test]
+    fn content_blocks_round_trip_cache_control_and_ttl() {
+        let raw = json!({
+            "type":"text",
+            "text":"stable context",
+            "cache_control":{"type":"ephemeral","ttl":"1h"}
+        });
+        let block: claude::ContentBlock = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(serde_json::to_value(block).unwrap(), raw);
+    }
+
+    #[test]
+    fn explicit_cache_mode_preserves_requested_ttl() {
+        let request = json!({
+            "cache_control":{"type":"ephemeral","ttl":"1h"},
+            "input":"hello"
+        });
+        let converted = openai_responses_to_claude_messages(
+            &serde_json::to_vec(&request).unwrap(),
+            "claude",
+        )
+        .unwrap();
+        assert!(converted.cache_control.is_none());
+        let wire = serde_json::to_value(converted).unwrap();
+        assert_eq!(
+            wire["messages"][0]["content"][0]["cache_control"],
+            json!({"type":"ephemeral","ttl":"1h"})
+        );
+    }
+
+    #[test]
+    fn keeps_mid_conversation_developer_item_out_of_system_prefix() {
+        let request = json!({
+            "instructions":"initial instructions",
+            "input":[
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]},
+                {"type":"message","role":"developer","content":[{"type":"input_text","text":"mid developer"}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}
+            ]
+        });
+        let converted = openai_responses_to_claude_messages(
+            &serde_json::to_vec(&request).unwrap(),
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(
+            converted.system.as_ref().unwrap().as_text_lossy(),
+            "initial instructions"
+        );
+        let wire = serde_json::to_value(converted).unwrap();
+        assert_eq!(wire["messages"][2]["content"][0]["text"], "mid developer");
+    }
+
+    #[test]
+    fn keeps_stable_prefix_when_responses_history_is_appended() {
+        let base = json!({
+            "instructions":"stable instructions",
+            "tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+            "input":[
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer 1"}]},
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer 2"}]}
+            ]
+        });
+        let mut next = base.clone();
+        next["input"].as_array_mut().unwrap().push(json!({
+            "type":"message",
+            "role":"user",
+            "content":[{"type":"input_text","text":"follow-up"}]
+        }));
+
+        let first = openai_responses_to_claude_messages(
+            &serde_json::to_vec(&base).unwrap(),
+            "claude",
+        )
+        .unwrap();
+        let second = openai_responses_to_claude_messages(
+            &serde_json::to_vec(&next).unwrap(),
+            "claude",
+        )
+        .unwrap();
+        let first_wire = serde_json::to_value(first).unwrap();
+        let second_wire = serde_json::to_value(second).unwrap();
+
+        assert_eq!(first_wire["cache_control"], second_wire["cache_control"]);
+        assert_eq!(first_wire["system"], second_wire["system"]);
+        assert_eq!(first_wire["tools"], second_wire["tools"]);
+        assert_eq!(
+            first_wire["messages"][0]["content"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert!(first_wire["cache_control"].is_null());
+        assert_eq!(
+            first_wire["system"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert_eq!(
+            first_wire["tools"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert_eq!(
+            second_wire["messages"][2]["content"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        let mut first_without_markers = first_wire.clone();
+        let mut second_without_markers = second_wire.clone();
+        strip_cache_controls(&mut first_without_markers);
+        strip_cache_controls(&mut second_without_markers);
+        let first_messages = first_without_markers["messages"].as_array().unwrap();
+        let second_messages = second_without_markers["messages"].as_array().unwrap();
+        assert_eq!(&first_messages[..], &second_messages[..first_messages.len()]);
+        let first_messages = first_wire["messages"].as_array().unwrap();
+        let second_messages = second_wire["messages"].as_array().unwrap();
+        assert_eq!(
+            first_messages[3]["content"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert!(second_messages[3]["content"][0]
+            .get("cache_control")
+            .is_none());
     }
 
     #[test]
@@ -2135,11 +2490,13 @@ mod tests {
                 claude::ContentBlock::Thinking {
                     thinking:  "why".to_string(),
                     signature: Some("cipher".to_string()),
+                    cache_control: None,
                 },
                 claude::ContentBlock::ToolUse {
                     id:    "toolu_1".to_string(),
                     name:  "lookup".to_string(),
                     input: json!({"q":1}),
+                    cache_control: None,
                 },
             ],
             stop_reason:   Some("tool_use".to_string()),
@@ -2166,6 +2523,7 @@ mod tests {
             content:       vec![claude::ContentBlock::Thinking {
                 thinking:  "why".to_string(),
                 signature: Some("cipher".to_string()),
+                cache_control: None,
             }],
             stop_reason:   Some("end_turn".to_string()),
             usage:         None,
@@ -2185,14 +2543,17 @@ mod tests {
             content:       vec![
                 claude::ContentBlock::Text {
                     text: "before".to_string(),
+                    cache_control: None,
                 },
                 claude::ContentBlock::ToolUse {
                     id:    "toolu_1".to_string(),
                     name:  "lookup".to_string(),
                     input: json!({}),
+                    cache_control: None,
                 },
                 claude::ContentBlock::Text {
                     text: "after".to_string(),
+                    cache_control: None,
                 },
             ],
             stop_reason:   Some("end_turn".to_string()),
@@ -2386,6 +2747,7 @@ mod tests {
                 id:    "toolu_1".to_string(),
                 name:  "collaboration__spawn_agent".to_string(),
                 input: json!({}),
+                cache_control: None,
             }],
             stop_reason:   Some("tool_use".to_string()),
             usage:         None,
@@ -2569,6 +2931,7 @@ mod tests {
                 id:    "srvu_1".to_string(),
                 name:  "web_search".to_string(),
                 input: json!({"query":"halolake"}),
+                cache_control: None,
             }],
             stop_reason:   Some("end_turn".to_string()),
             usage:         None,
@@ -2643,6 +3006,7 @@ mod tests {
                     id:    "toolu_1".to_string(),
                     name:  "lookup".to_string(),
                     input: serde_json::from_str(input).unwrap_or(json!({})),
+                    cache_control: None,
                 }],
                 stop_reason:   Some("end_turn".to_string()),
                 usage:         None,
