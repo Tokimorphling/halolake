@@ -19,6 +19,36 @@ const CODEX_DEFAULT_ORIGINATOR: &str = "codex-tui";
 const CODEX_DEFAULT_USER_AGENT: &str =
     "codex-tui/0.135.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.135.0)";
 
+/// Anthropic rejects base64 image payloads larger than 5 MiB; fetch only what
+/// we can actually forward.
+const MAX_IMAGE_FETCH_BYTES: usize = 5 * 1024 * 1024;
+const IMAGE_FETCH_MAX_REDIRECTS: usize = 5;
+
+/// Determines the Anthropic media type for a fetched image. The HTTP
+/// `Content-Type` header wins when it is an `image/*` MIME; otherwise fall
+/// back to a small set of URL extensions Anthropic accepts.
+fn image_media_type(content_type: Option<&str>, url: &str) -> Option<String> {
+    if let Some(content_type) = content_type {
+        let mime = content_type
+            .split(';')
+            .next()
+            .unwrap_or(content_type)
+            .trim();
+        if mime.to_ascii_lowercase().starts_with("image/") {
+            return Some(mime.to_ascii_lowercase());
+        }
+    }
+    let path = url.split('?').next().unwrap_or(url);
+    let extension = path.rsplit('.').next()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png".to_string()),
+        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
+        "gif" => Some("image/gif".to_string()),
+        "webp" => Some("image/webp".to_string()),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RelayService {
     claude_version:      Arc<str>,
@@ -136,7 +166,7 @@ impl RelayService {
                 can_reuse,
                 "https upstream responded"
             );
-            Ok(resp)
+            Ok(decompress_upstream_response(resp).await)
         } else {
             let host = uri.host().context("http upstream uri missing host")?;
             let port = uri.port_u16().unwrap_or(80);
@@ -161,7 +191,7 @@ impl RelayService {
                 can_reuse,
                 "http upstream responded"
             );
-            Ok(resp)
+            Ok(decompress_upstream_response(resp).await)
         }
     }
 
@@ -190,7 +220,8 @@ impl RelayService {
             "connecting upstream via proxy"
         );
 
-        self.proxy_transport
+        let response = self
+            .proxy_transport
             .call(ProxyTransportRequest {
                 channel_identity: channel_identity.to_string(),
                 proxy,
@@ -201,7 +232,112 @@ impl RelayService {
             })
             .await
             .map_err(anyhow::Error::from)
-            .with_context(|| format!("send request via proxy to {target_host}:{target_port}"))
+            .with_context(|| format!("send request via proxy to {target_host}:{target_port}"))?;
+        Ok(decompress_upstream_response(response).await)
+    }
+
+    /// Replaces Anthropic `image` blocks whose source is an external URL with
+    /// an inline base64 source. Anthropic supports `source.type=url` on paper,
+    /// but many models/accounts do not fetch arbitrary public URLs, which
+    /// silently turns `input_image` into "I don't see an image". Fetching the
+    /// URL in the gateway and inlining it makes vision work regardless of the
+    /// upstream's outbound fetch behavior. This is best-effort: a fetch that
+    /// fails or whose media type cannot be determined leaves the URL block
+    /// untouched so the upstream still gets the original representation.
+    async fn resolve_claude_url_images(&self, request: &mut claude::MessagesRequest) {
+        for message in &mut request.messages {
+            for block in &mut message.content {
+                let claude::ContentBlock::Image { source, .. } = block else {
+                    continue;
+                };
+                if source.source_type != "url" {
+                    continue;
+                }
+                let Some(url) = source.url.clone() else {
+                    continue;
+                };
+                let (content_type, data) = match self.fetch_image_url(&url).await {
+                    Ok(fetched) => fetched,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            url = %url,
+                            "failed to fetch image URL; forwarding original URL to Anthropic upstream"
+                        );
+                        continue;
+                    }
+                };
+                let media_type = image_media_type(content_type.as_deref(), &url);
+                let Some(media_type) = media_type else {
+                    warn!(
+                        url = %url,
+                        "image URL media type could not be determined; forwarding original URL to Anthropic upstream"
+                    );
+                    continue;
+                };
+                source.source_type = "base64".to_string();
+                source.media_type = Some(media_type);
+                source.data = Some(data_encoding::BASE64.encode(&data));
+                source.url = None;
+            }
+        }
+    }
+
+    async fn fetch_image_url(&self, url: &str) -> Result<(Option<String>, Bytes), anyhow::Error> {
+        let mut uri: Uri = url.parse().context("invalid image URL")?;
+        let scheme = uri.scheme_str().unwrap_or("http");
+        if !matches!(scheme, "http" | "https") {
+            anyhow::bail!("unsupported image URL scheme: {scheme}");
+        }
+        // Follow a small number of absolute redirects (CDNs commonly redirect
+        // to a signed object-storage URL).
+        for _ in 0..IMAGE_FETCH_MAX_REDIRECTS {
+            let request = Request::builder()
+                .method(Method::GET)
+                .uri(path_and_query(&uri, "/"))
+                .header(header::HOST, authority(&uri)?)
+                .header(header::USER_AGENT, "halolake-gateway")
+                .header(header::ACCEPT, "image/*")
+                .body(HttpBody::default())
+                .context("build image URL request")?;
+            let response = self
+                .send_upstream("image-url-fetch", uri.clone(), request, &ProxyRoute::Direct)
+                .await
+                .context("fetch image URL")?;
+            if response.status().is_redirection() {
+                let Some(location) = response
+                    .headers()
+                    .get(header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                else {
+                    anyhow::bail!("image URL redirect missing Location");
+                };
+                uri = location.parse().context("invalid image URL redirect")?;
+                continue;
+            }
+            if !response.status().is_success() {
+                anyhow::bail!("image URL returned {}", response.status());
+            }
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let mut body = response.into_body();
+            let mut collected = Vec::new();
+            while let Some(chunk) = MonoioBody::next_data(&mut body).await {
+                let chunk = chunk.context("read image URL response")?;
+                if collected.len().saturating_add(chunk.len()) > MAX_IMAGE_FETCH_BYTES {
+                    anyhow::bail!("image URL exceeds {MAX_IMAGE_FETCH_BYTES} bytes");
+                }
+                collected.extend_from_slice(&chunk);
+            }
+            if collected.is_empty() {
+                anyhow::bail!("image URL returned an empty body");
+            }
+            return Ok((content_type, Bytes::from(collected)));
+        }
+        anyhow::bail!("image URL exceeded redirect limit")
     }
 }
 
@@ -348,7 +484,7 @@ where
 
         match route.provider {
             Provider::Claude => {
-                let claude_req = match openai_chat_to_claude_messages(
+                let mut claude_req = match openai_chat_to_claude_messages(
                     &req.request,
                     route.upstream_model.as_str(),
                 ) {
@@ -361,6 +497,7 @@ where
                         ));
                     }
                 };
+                self.resolve_claude_url_images(&mut claude_req).await;
                 let upstream = match self
                     .send_claude_json(&route, &req.downstream_headers, &claude_req, "/v1/messages")
                     .await
@@ -903,21 +1040,23 @@ where
                 }
             };
             let cache_mode = prompt_cache_mode_for_base_url(&route.base_url);
-            let claude_request = match openai_responses_to_claude_messages_with_tools_and_cache_mode(
-                &req.body,
-                route.upstream_model.clone(),
-                &tool_mapping,
-                cache_mode,
-            ) {
-                Ok(request) => request,
-                Err(err) => {
-                    return Ok(json_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_request_error",
-                        &format!("failed to convert Responses request to Claude: {err}"),
-                    ));
-                }
-            };
+            let mut claude_request =
+                match openai_responses_to_claude_messages_with_tools_and_cache_mode(
+                    &req.body,
+                    route.upstream_model.clone(),
+                    &tool_mapping,
+                    cache_mode,
+                ) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to convert Responses request to Claude: {err}"),
+                        ));
+                    }
+                };
+            self.resolve_claude_url_images(&mut claude_request).await;
             let upstream = match self
                 .send_claude_json(
                     &route,
@@ -4163,6 +4302,104 @@ data: {"type":"message_stop"}
                 .iter()
                 .any(|t| *t == "response.completed" || *t == "response.incomplete"),
             "missing terminal event after EOF: {event_types:?}"
+        );
+    }
+
+    #[monoio::test_all(enable_timer = true)]
+    async fn resolves_url_images_to_inline_base64() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind image upstream");
+        let address = listener.local_addr().expect("image upstream address");
+        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\nnot-a-real-png-but-image-content";
+
+        let server = monoio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept image connection");
+            let head = read_http_head(&mut stream).await;
+            assert!(head.starts_with(b"GET /cat.png HTTP/1.1\r\n"));
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                        png_bytes.len()
+                    )
+                    .as_bytes()
+                    .to_vec(),
+                )
+                .await
+                .0
+                .expect("write image response head");
+            stream
+                .write_all(png_bytes.to_vec())
+                .await
+                .0
+                .expect("write image body");
+        });
+
+        let relay = test_relay_service();
+        let image_url = format!("http://{address}/cat.png");
+        let mut request = claude::MessagesRequest {
+            model:          "claude-sonnet-4".to_string(),
+            max_tokens:     1024,
+            system:         None,
+            cache_control:  None,
+            messages:       vec![claude::Message {
+                role:    "user".to_string(),
+                content: vec![
+                    claude::ContentBlock::Text {
+                        text:          "what is in this image?".to_string(),
+                        cache_control: None,
+                    },
+                    claude::ContentBlock::Image {
+                        source:        claude::ImageSource {
+                            source_type: "url".to_string(),
+                            media_type:  None,
+                            data:        None,
+                            url:         Some(image_url),
+                        },
+                        cache_control: None,
+                    },
+                ],
+            }],
+            temperature:    None,
+            top_p:          None,
+            top_k:          None,
+            stream:         Some(false),
+            tools:          None,
+            tool_choice:    None,
+            stop_sequences: Vec::new(),
+            thinking:       None,
+            output_config:  None,
+        };
+        relay.resolve_claude_url_images(&mut request).await;
+        server.await;
+
+        let claude::ContentBlock::Image { source, .. } = &request.messages[0].content[1] else {
+            panic!("image block should still be present");
+        };
+        assert_eq!(source.source_type, "base64");
+        assert_eq!(source.media_type.as_deref(), Some("image/png"));
+        assert!(source.url.is_none());
+        let data = source.data.as_deref().expect("base64 image data");
+        assert_eq!(
+            data_encoding::BASE64.decode(data.as_bytes()).unwrap(),
+            png_bytes
+        );
+    }
+
+    #[test]
+    fn infers_image_media_type_from_header_and_url() {
+        assert_eq!(
+            image_media_type(Some("image/png; charset=binary"), "https://x.test/a"),
+            Some("image/png".to_string())
+        );
+        assert_eq!(
+            image_media_type(None, "https://x.test/a.JPG?token=1"),
+            Some("image/jpeg".to_string())
+        );
+        assert_eq!(image_media_type(None, "https://x.test/a"), None);
+        assert_eq!(
+            image_media_type(Some("application/octet-stream"), "https://x.test/a.webp"),
+            Some("image/webp".to_string())
         );
     }
 }

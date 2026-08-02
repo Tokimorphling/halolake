@@ -167,6 +167,7 @@ fn nonzero_u32(value: u32) -> Option<u64> {
     (value > 0).then_some(value as u64)
 }
 
+mod compression;
 mod config;
 mod context;
 mod control;
@@ -181,6 +182,7 @@ mod services;
 mod upstream_proxy;
 mod util;
 
+pub(crate) use compression::*;
 pub use config::{
     AuthConfig, ControlPlaneConfig, GatewayConfig, ProtocolConfig, ServerConfig, UpstreamConfig,
 };

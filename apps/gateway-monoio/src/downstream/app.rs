@@ -186,7 +186,37 @@ impl Gateway {
             }
             collected.extend_from_slice(&chunk);
         }
-        let body = Bytes::from(collected);
+        let mut headers = headers;
+        let body_bytes = Bytes::from(collected);
+        // Clients (Codex TUI) compress Responses API payloads with zstd; the
+        // upstream providers do not accept `Content-Encoding` on the request,
+        // so decode the body and strip the framing headers here. Decompression
+        // is CPU-bound, so dispatch it to the blocking pool to keep the monoio
+        // event loop responsive.
+        let (headers, body) = match monoio::spawn_blocking(move || {
+            let result = decompress_request_body(&mut headers, body_bytes);
+            (headers, result)
+        })
+        .await
+        {
+            Ok((headers, result)) => match result {
+                Ok(body) => (headers, body),
+                Err(err) => {
+                    return Err(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request_error",
+                        &err.to_string(),
+                    ));
+                }
+            },
+            Err(err) => {
+                return Err(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request_error",
+                    &format!("failed to dispatch body decompression: {err:?}"),
+                ));
+            }
+        };
         Ok(GatewayRequest {
             headers,
             path,

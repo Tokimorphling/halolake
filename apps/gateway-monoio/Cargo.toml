@@ -17,11 +17,13 @@ halolake-telemetry = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-stream = { workspace = true }
+brotli = { workspace = true }
 bytes = { workspace = true }
 data-encoding = { workspace = true }
 certain-map = { workspace = true }
 clap = { workspace = true }
 faststr = { workspace = true }
+flate2 = { workspace = true }
 futures-channel = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
@@ -31,6 +33,7 @@ monoio-native-tls = { workspace = true }
 native-tls = "0.2"
 monoio-transports = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+ruzstd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 service-async = { workspace = true }
@@ -40,3 +43,6 @@ toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 mimalloc = { workspace = true }
+
+[dev-dependencies]
+zstd = "0.13"
