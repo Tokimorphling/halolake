@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use certain_map::{Param, ParamRef, ParamSet};
+use faststr::FastStr;
 use halolake_api_contract::{JsonValue, claude, gemini, openai};
 use halolake_control_plane::{
     ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError, ChannelFeedbackEvent,
@@ -11,8 +12,7 @@ use halolake_domain::{UsageEvent, UsageStatus};
 use halolake_protocol::{
     ClaudeSseToResponsesTranslator, ClaudeSseTranslator, GeminiSseToOpenAiTranslator,
     OpenAiSseToClaudeTranslator, OpenAiSseToGeminiTranslator, PromptCacheMode,
-    ResponsesToolMapping,
-    claude_messages_to_openai_chat, claude_messages_to_openai_chat_request,
+    ResponsesToolMapping, claude_messages_to_openai_chat, claude_messages_to_openai_chat_request,
     claude_messages_to_openai_responses_with_options_and_tools,
     gemini_imagen_to_openai_image_response, gemini_request_to_openai_chat,
     gemini_response_to_openai_chat, openai_chat_to_claude_messages,

@@ -238,7 +238,8 @@ pub(crate) async fn send_pooled_http1(
     // opening another socket, which serializes long-lived SSE requests.
     let body = streaming_hyper_response_body(HyperIncomingBody::new(incoming), read_timeout, conn);
     debug!(%addr, http1_reused = reused, can_reuse, "pooled HTTP/1 response head received");
-    Ok((Response::from_parts(parts, body), can_reuse))
+    let resp = Response::from_parts(parts, body);
+    Ok((resp, can_reuse))
 }
 
 fn prepare_hyper_request_headers(req: &mut Request<HttpBody>) {
@@ -275,44 +276,45 @@ where
 {
     let (payload, mut sender) = stream_payload_pair::<Bytes, HttpError>();
     monoio::spawn(async move {
-        loop {
-            let next = match read_timeout {
-                Some(read_timeout) => {
-                    match monoio::time::timeout(read_timeout, body.next_data()).await {
-                        Ok(next) => next,
-                        Err(_) => {
-                            sender.feed_error(HttpError::IOError(std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "upstream response body idle timeout",
-                            )));
-                            sender.feed_data(None);
-                            break;
-                        }
-                    }
+        let terminal_error = loop {
+            // Always enforce a default 30s idle timeout even when
+            // `read_timeout` is `None`. Without this, a downstream client
+            // disconnect mid-SSE leaves the producer task parked on
+            // `body.next_data()` until the upstream closes — holding a
+            // pooled H1 connection for the entire (potentially 60s+) LLM
+            // stream. The 30s ceiling bounds orphaned-stream resource cost.
+            let effective_timeout = read_timeout.unwrap_or(Duration::from_secs(30));
+            let next = match monoio::time::timeout(effective_timeout, body.next_data()).await {
+                Ok(next) => next,
+                Err(_) => {
+                    break Some(HttpError::IOError(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "upstream response body idle timeout",
+                    )));
                 }
-                None => body.next_data().await,
             };
 
             match next {
                 Some(Ok(data)) => sender.feed_data(Some(data)),
                 Some(Err(error)) => {
-                    sender.feed_error(HttpError::IOError(std::io::Error::other(format!(
+                    break Some(HttpError::IOError(std::io::Error::other(format!(
                         "hyper upstream response body: {error}"
                     ))));
-                    sender.feed_data(None);
-                    break;
                 }
-                None => {
-                    sender.feed_data(None);
-                    break;
-                }
+                None => break None,
             }
-        }
+        };
         // Drop the incoming body before returning the sender lease to the
         // connector pool. On cancellation/error this lets Hyper mark the
         // connection unusable before `Pooled::drop` evaluates it.
         drop(body);
         drop(connection_guard);
+        // Publish EOF only after the lease is available. A consumer may issue
+        // another request immediately after observing the terminal item.
+        if let Some(error) = terminal_error {
+            sender.feed_error(error);
+        }
+        sender.feed_data(None);
     });
     HttpBody::H1(Payload::Stream(payload))
 }
@@ -328,13 +330,16 @@ pub(crate) struct OpenAiChatRelayRequest<CX> {
 
 impl<CX> Service<OpenAiChatRelayRequest<CX>> for RelayService
 where
-    CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestAuth>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
 
     async fn call(&self, req: OpenAiChatRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
-        let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
+        let route = ParamRef::<Rc<RouteContext>>::param_ref(&req.cx).clone();
         debug_relay(
             &req.cx,
             req.request.is_stream(),
@@ -343,17 +348,19 @@ where
 
         match route.provider {
             Provider::Claude => {
-                let claude_req =
-                    match openai_chat_to_claude_messages(&req.request, &route.upstream_model) {
-                        Ok(req) => req,
-                        Err(err) => {
-                            return Ok(json_error(
-                                StatusCode::BAD_REQUEST,
-                                "invalid_request_error",
-                                &err.to_string(),
-                            ));
-                        }
-                    };
+                let claude_req = match openai_chat_to_claude_messages(
+                    &req.request,
+                    route.upstream_model.as_str(),
+                ) {
+                    Ok(req) => req,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &err.to_string(),
+                        ));
+                    }
+                };
                 let upstream = match self
                     .send_claude_json(&route, &req.downstream_headers, &claude_req, "/v1/messages")
                     .await
@@ -374,9 +381,12 @@ where
                     return Ok(upstream_error_response(upstream).await);
                 }
                 if req.request.is_stream() {
-                    Ok(stream_claude_as_openai(upstream, route.requested_model))
+                    Ok(stream_claude_as_openai(
+                        upstream,
+                        route.requested_model.clone(),
+                    ))
                 } else {
-                    Ok(buffered_claude_as_openai(upstream, route.requested_model).await)
+                    Ok(buffered_claude_as_openai(upstream, route.requested_model.clone()).await)
                 }
             }
             Provider::OpenAi => {
@@ -399,7 +409,7 @@ where
                     stream:          req.request.is_stream(),
                     requested_model: route.requested_model.clone(),
                 };
-                self.openai_passthrough(route, prepared, &req.downstream_headers, target)
+                self.openai_passthrough(&route, prepared, &req.downstream_headers, target)
                     .await
             }
             Provider::Gemini => {
@@ -435,9 +445,12 @@ where
                     return Ok(upstream_error_response(upstream).await);
                 }
                 if req.request.is_stream() {
-                    Ok(stream_gemini_as_openai(upstream, route.requested_model))
+                    Ok(stream_gemini_as_openai(
+                        upstream,
+                        route.requested_model.clone(),
+                    ))
                 } else {
-                    Ok(buffered_gemini_as_openai(upstream, route.requested_model).await)
+                    Ok(buffered_gemini_as_openai(upstream, route.requested_model.clone()).await)
                 }
             }
         }
@@ -452,7 +465,10 @@ pub(crate) struct ClaudeMessagesRelayRequest<CX> {
 
 impl<CX> Service<ClaudeMessagesRelayRequest<CX>> for RelayService
 where
-    CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestAuth>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -461,7 +477,7 @@ where
         &self,
         req: ClaudeMessagesRelayRequest<CX>,
     ) -> Result<Self::Response, Self::Error> {
-        let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
+        let route = ParamRef::<Rc<RouteContext>>::param_ref(&req.cx).clone();
         let is_stream = req
             .value
             .get("stream")
@@ -473,7 +489,7 @@ where
         match route.provider {
             Provider::Claude => {
                 let mut value = req.value;
-                value["model"] = JsonValue::String(route.upstream_model.clone());
+                value["model"] = JsonValue::String(route.upstream_model.to_string());
                 let body = match serde_json::to_vec(&value) {
                     Ok(body) => Bytes::from(body),
                     Err(err) => {
@@ -515,7 +531,7 @@ where
                 };
                 let openai_req = match claude_messages_to_openai_chat_request(
                     &claude_req,
-                    &route.upstream_model,
+                    route.upstream_model.as_str(),
                 ) {
                     Ok(req) => req,
                     Err(err) => {
@@ -597,9 +613,12 @@ where
                     return Ok(upstream);
                 }
                 if openai_req.is_stream() {
-                    Ok(stream_openai_as_claude(upstream, route.requested_model))
+                    Ok(stream_openai_as_claude(
+                        upstream,
+                        route.requested_model.clone(),
+                    ))
                 } else {
-                    Ok(buffered_openai_as_claude(upstream, route.requested_model).await)
+                    Ok(buffered_openai_as_claude(upstream, route.requested_model.clone()).await)
                 }
             }
             Provider::Gemini => {
@@ -615,7 +634,7 @@ where
                 };
                 let openai_req = match claude_messages_to_openai_chat_request(
                     &claude_req,
-                    &route.upstream_model,
+                    route.upstream_model.as_str(),
                 ) {
                     Ok(req) => req,
                     Err(err) => {
@@ -658,9 +677,12 @@ where
                     return Ok(upstream_error_response(upstream).await);
                 }
                 if openai_req.is_stream() {
-                    Ok(stream_gemini_as_claude(upstream, route.requested_model))
+                    Ok(stream_gemini_as_claude(
+                        upstream,
+                        route.requested_model.clone(),
+                    ))
                 } else {
-                    Ok(buffered_gemini_as_claude(upstream, route.requested_model).await)
+                    Ok(buffered_gemini_as_claude(upstream, route.requested_model.clone()).await)
                 }
             }
         }
@@ -694,20 +716,23 @@ pub(crate) struct GeminiNativeRelayRequest<CX> {
 
 impl<CX> Service<OpenAiImageRelayRequest<CX>> for RelayService
 where
-    CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestAuth>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
 
     async fn call(&self, req: OpenAiImageRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
-        let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
+        let route = ParamRef::<Rc<RouteContext>>::param_ref(&req.cx).clone();
         debug_relay(&req.cx, req.stream, Some(req.body.as_ref()));
 
         match route.provider {
             Provider::OpenAi => {
                 let body = match req.payload {
                     OpenAiImagePayload::Json { mut value, .. } => {
-                        value["model"] = JsonValue::String(route.upstream_model.clone());
+                        value["model"] = JsonValue::String(route.upstream_model.to_string());
                         match serde_json::to_vec(&value) {
                             Ok(body) => Bytes::from(body),
                             Err(err) => {
@@ -825,7 +850,10 @@ where
 
 impl<CX> Service<OpenAiPassthroughRelayRequest<CX>> for RelayService
 where
-    CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestAuth>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -834,7 +862,7 @@ where
         &self,
         req: OpenAiPassthroughRelayRequest<CX>,
     ) -> Result<Self::Response, Self::Error> {
-        let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
+        let route = ParamRef::<Rc<RouteContext>>::param_ref(&req.cx).clone();
         let client_path = req.path.split('?').next().unwrap_or(req.path.as_str());
         let client_is_responses =
             client_path.ends_with("/responses") || client_path.ends_with("/responses/compact");
@@ -917,14 +945,14 @@ where
             return if stream {
                 Ok(stream_claude_as_responses(
                     upstream,
-                    route.requested_model,
+                    route.requested_model.clone(),
                     include_encrypted_reasoning,
                     tool_mapping,
                 ))
             } else {
                 Ok(buffered_claude_as_responses(
                     upstream,
-                    route.requested_model,
+                    route.requested_model.clone(),
                     include_encrypted_reasoning,
                     tool_mapping,
                 )
@@ -961,20 +989,23 @@ where
         } else {
             OpenAiResponseTarget::Passthrough
         };
-        self.openai_passthrough(route, prepared, &req.downstream_headers, target)
+        self.openai_passthrough(&route, prepared, &req.downstream_headers, target)
             .await
     }
 }
 
 impl<CX> Service<GeminiNativeRelayRequest<CX>> for RelayService
 where
-    CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestAuth>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
 
     async fn call(&self, req: GeminiNativeRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
-        let route = ParamRef::<RouteContext>::param_ref(&req.cx).clone();
+        let route = ParamRef::<Rc<RouteContext>>::param_ref(&req.cx).clone();
         debug_relay(&req.cx, req.stream, Some(req.body.as_ref()));
 
         match route.provider {
@@ -1012,7 +1043,7 @@ where
                 };
                 let openai_req = match gemini_request_to_openai_chat(
                     &gemini_req,
-                    &route.upstream_model,
+                    route.upstream_model.as_str(),
                     req.stream,
                 ) {
                     Ok(req) => req,
@@ -1364,13 +1395,13 @@ impl RelayService {
 
     async fn openai_passthrough(
         &self,
-        route: RouteContext,
+        route: &RouteContext,
         prepared: PreparedOpenAiText,
         downstream_headers: &HeaderMap,
         target: OpenAiResponseTarget,
     ) -> Result<Response<GatewayBody>, Infallible> {
         match self
-            .send_openai_body(&route, downstream_headers, prepared.body, &prepared.path)
+            .send_openai_body(route, downstream_headers, prepared.body, &prepared.path)
             .await
         {
             Ok(resp) if !resp.status().is_success() => {
@@ -1463,11 +1494,11 @@ enum OpenAiResponseTarget {
     Passthrough,
     ChatCompletions {
         stream:          bool,
-        requested_model: String,
+        requested_model: FastStr,
     },
     Responses {
         stream:          bool,
-        requested_model: String,
+        requested_model: FastStr,
     },
 }
 
@@ -3606,25 +3637,25 @@ mod tests {
 
     fn test_route_context(base_url: String) -> RouteContext {
         RouteContext {
-            channel_id: "test-channel".to_string(),
-            management_channel_id: Some(42),
-            provider: Provider::Claude,
-            base_url,
-            api_key: "test-anthropic-key".to_string(),
-            api_key_fingerprint: "sha256:test-fingerprint".to_string(),
-            api_key_index: Some(0),
-            using_group: "default".to_string(),
-            requested_model: "gpt-5".to_string(),
-            upstream_model: "claude-sonnet-4".to_string(),
-            proxy: ProxyRoute::Direct,
-            header_override: std::collections::BTreeMap::new(),
-            upstream_endpoint_type: "auto".to_string(),
+            channel_id:             FastStr::new("test-channel"),
+            management_channel_id:  Some(42),
+            provider:               Provider::Claude,
+            base_url:               FastStr::from_string(base_url),
+            api_key:                FastStr::new("test-anthropic-key"),
+            api_key_fingerprint:    FastStr::new("sha256:test-fingerprint"),
+            api_key_index:          Some(0),
+            using_group:            FastStr::new("default"),
+            requested_model:        FastStr::new("gpt-5"),
+            upstream_model:         FastStr::new("claude-sonnet-4"),
+            proxy:                  ProxyRoute::Direct,
+            header_override:        std::collections::BTreeMap::new(),
+            upstream_endpoint_type: FastStr::new("auto"),
         }
     }
 
     fn test_full_context(
         route: RouteContext,
-    ) -> impl ParamRef<RouteContext>
+    ) -> impl ParamRef<Rc<RouteContext>>
     + ParamRef<RequestAuth>
     + ParamRef<RequestId>
     + ParamRef<PeerAddr>
@@ -3637,7 +3668,7 @@ mod tests {
                 user_id:  "user-1".to_string(),
                 token_id: "token-1".to_string(),
             })
-            .param_set(route)
+            .param_set(Rc::new(route))
     }
 
     /// Read a full HTTP/1.1 request: head up to `\r\n\r\n` then a
@@ -4084,7 +4115,8 @@ data: {"type":"message_stop"}
             let frame = "event: message_start\ndata: \
                          {\"type\":\"message_start\",\"message\":{\"id\":\"msg_eof\",\"type\":\"\
                          message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"\
-                         stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+                         stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\\
+                         n\n";
             let chunk = format!("{:x}\r\n{}\r\n", frame.len(), frame);
             stream
                 .write_all(chunk.into_bytes())

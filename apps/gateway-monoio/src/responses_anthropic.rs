@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 
 pub(crate) async fn buffered_claude_as_responses(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
     include_encrypted_reasoning: bool,
     tool_mapping: halolake_protocol::ResponsesToolMapping,
 ) -> Response<GatewayBody> {
@@ -44,7 +44,7 @@ pub(crate) async fn buffered_claude_as_responses(
 
 pub(crate) fn stream_claude_as_responses(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
     include_encrypted_reasoning: bool,
     tool_mapping: halolake_protocol::ResponsesToolMapping,
 ) -> Response<GatewayBody> {
@@ -106,7 +106,7 @@ pub(crate) fn stream_claude_as_responses(
         sender.feed_data(None);
     });
 
-    response_builder(StatusCode::OK)
+    let mut resp = response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
@@ -117,7 +117,8 @@ pub(crate) fn stream_claude_as_responses(
                 "internal_error",
                 &err.to_string(),
             )
-        })
+        });
+    resp
 }
 
 fn write_responses_sse_event(out: &mut Vec<u8>, event: &JsonValue) {

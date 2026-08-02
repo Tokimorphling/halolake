@@ -85,9 +85,12 @@ impl ChatGatewayService {
 impl<CX> Service<(GatewayRequest, CX)> for ChatGatewayService
 where
     CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
-    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<RouteContext>,
-    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<RouteContext>>::Transformed:
-        ParamRef<RequestAuth> + ParamRef<RouteContext> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
+    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
+        ParamRef<RequestAuth>
+            + ParamRef<Rc<RouteContext>>
+            + ParamRef<RequestId>
+            + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -185,9 +188,12 @@ impl ImageGatewayService {
 impl<CX> Service<(GatewayRequest, CX)> for ImageGatewayService
 where
     CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
-    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<RouteContext>,
-    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<RouteContext>>::Transformed:
-        ParamRef<RequestAuth> + ParamRef<RouteContext> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
+    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
+        ParamRef<RequestAuth>
+            + ParamRef<Rc<RouteContext>>
+            + ParamRef<RequestId>
+            + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -282,9 +288,12 @@ impl ClaudeMessagesGatewayService {
 impl<CX> Service<(GatewayRequest, CX)> for ClaudeMessagesGatewayService
 where
     CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
-    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<RouteContext>,
-    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<RouteContext>>::Transformed:
-        ParamRef<RequestAuth> + ParamRef<RouteContext> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
+    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
+        ParamRef<RequestAuth>
+            + ParamRef<Rc<RouteContext>>
+            + ParamRef<RequestId>
+            + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -397,9 +406,12 @@ impl GeminiGatewayService {
 impl<CX> Service<(GatewayRequest, CX)> for GeminiGatewayService
 where
     CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
-    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<RouteContext>,
-    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<RouteContext>>::Transformed:
-        ParamRef<RequestAuth> + ParamRef<RouteContext> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
+    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
+        ParamRef<RequestAuth>
+            + ParamRef<Rc<RouteContext>>
+            + ParamRef<RequestId>
+            + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -495,9 +507,12 @@ impl RawOpenAiGatewayService {
 impl<CX> Service<(GatewayRequest, CX)> for RawOpenAiGatewayService
 where
     CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
-    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<RouteContext>,
-    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<RouteContext>>::Transformed:
-        ParamRef<RequestAuth> + ParamRef<RouteContext> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
+    <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
+        ParamRef<RequestAuth>
+            + ParamRef<Rc<RouteContext>>
+            + ParamRef<RequestId>
+            + ParamRef<PeerAddr>,
 {
     type Response = Response<GatewayBody>;
     type Error = Infallible;
@@ -551,7 +566,7 @@ where
         };
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
-        value["model"] = JsonValue::String(route.route.upstream_model.clone());
+        value["model"] = JsonValue::String(route.route.upstream_model.to_string());
         // new-api ForceStreamOption targets OpenAI chat/completions (and legacy
         // completions). Responses API carries usage in `response.completed` instead.
         let path_for_stream = req.path.split('?').next().unwrap_or(req.path.as_str());
@@ -660,24 +675,24 @@ impl Service<RouteLookup> for AuthRouteService {
                 user_id:  route.user_id.to_string(),
                 token_id: auth.token.id().to_string(),
             },
-            route:    RouteContext {
-                channel_id: route.channel.id.clone(),
+            route:    Rc::new(RouteContext {
+                channel_id: route.channel.id.clone().into(),
                 management_channel_id: route.channel.management_id,
                 provider: route.channel.provider,
-                base_url: route.channel.base_url.clone(),
-                api_key: api_key.to_string(),
-                api_key_fingerprint,
+                base_url: route.channel.base_url.clone().into(),
+                api_key: api_key.to_string().into(),
+                api_key_fingerprint: api_key_fingerprint.into(),
                 api_key_index,
-                using_group: route.using_group.to_string(),
-                requested_model: route.requested_model.to_string(),
-                upstream_model: route.upstream_model.to_string(),
+                using_group: route.using_group.to_string().into(),
+                requested_model: route.requested_model.to_string().into(),
+                upstream_model: route.upstream_model.to_string().into(),
                 proxy: ProxyRoute::from_snapshot(
                     route.channel.proxy.clone(),
                     route.channel.proxy_required,
                 ),
                 header_override: route.channel.header_override.clone(),
-                upstream_endpoint_type: route.channel.upstream_endpoint_type.clone(),
-            },
+                upstream_endpoint_type: route.channel.upstream_endpoint_type.clone().into(),
+            }),
             affinity: affinity.map(route_affinity_context),
         })
     }
@@ -743,10 +758,13 @@ struct UsageEventParts {
 
 fn usage_event_parts<CX>(cx: &CX, is_stream: bool) -> UsageEventParts
 where
-    CX: ParamRef<RequestAuth> + ParamRef<RouteContext> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<RequestAuth>
+        + ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
     let auth = ParamRef::<RequestAuth>::param_ref(cx);
-    let route = ParamRef::<RouteContext>::param_ref(cx);
+    let route = ParamRef::<Rc<RouteContext>>::param_ref(cx);
     let request_id = ParamRef::<RequestId>::param_ref(cx);
     let peer = ParamRef::<PeerAddr>::param_ref(cx);
     UsageEventParts {
@@ -755,10 +773,10 @@ where
         token_id: auth.token_id.clone(),
         channel_id: reporting_channel_id(route.management_channel_id, &route.channel_id),
         api_key_index: route.api_key_index,
-        api_key_fingerprint: route.api_key_fingerprint.clone(),
-        using_group: route.using_group.clone(),
-        requested_model: route.requested_model.clone(),
-        upstream_model: route.upstream_model.clone(),
+        api_key_fingerprint: route.api_key_fingerprint.to_string(),
+        using_group: route.using_group.to_string(),
+        requested_model: route.requested_model.to_string(),
+        upstream_model: route.upstream_model.to_string(),
         is_stream,
         ip: peer.0.ip().to_string(),
         upstream_request_id: String::new(),
@@ -779,8 +797,8 @@ fn finalize_response_usage(
         let body = std::mem::replace(resp.body_mut(), full_body(Bytes::new()));
         // Tee the stream into a monoio-http payload while collecting usage from
         // SSE frames via monoio-http stream payload.
-        *resp.body_mut() =
-            wrap_streaming_usage_body(body, reporter.clone(), parts, status, started);
+        let new_body = wrap_streaming_usage_body(body, reporter.clone(), parts, status, started);
+        *resp.body_mut() = new_body;
         resp
     } else {
         report_response_usage(reporter, parts, &resp, started.elapsed().as_millis() as u64);
@@ -912,7 +930,7 @@ fn wrap_streaming_usage_body(
     status: UsageStatus,
     started: Instant,
 ) -> GatewayBody {
-    stream_body_from_async(move |mut sender| async move {
+    let body = stream_body_from_async(move |mut sender| async move {
         let mut collector = SseUsageCollector::default();
         let mut status = status;
         let mut body = inner;
@@ -977,7 +995,8 @@ fn wrap_streaming_usage_body(
             upstream_request_id: parts.upstream_request_id,
             created_at_unix_ms: now_unix_ms_i64(),
         });
-    })
+    });
+    body
 }
 
 #[derive(Default)]

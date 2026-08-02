@@ -1,4 +1,5 @@
 use super::*;
+use faststr::FastStr;
 
 certain_map::certain_map! {
     #[empty(_RequestContextEmpty)]
@@ -10,7 +11,7 @@ certain_map::certain_map! {
         peer_addr: PeerAddr,
         downstream_protocol: DownstreamProtocol,
         request_auth: RequestAuth,
-        route_context: RouteContext,
+        route_context: Rc<RouteContext>,
     }
 }
 
@@ -43,7 +44,7 @@ pub struct RequestAuth {
 #[derive(Clone, PartialEq, Eq)]
 pub enum ProxyRoute {
     Direct,
-    Required(String),
+    Required(FastStr),
     Unavailable,
 }
 
@@ -60,7 +61,7 @@ impl std::fmt::Debug for ProxyRoute {
 impl ProxyRoute {
     pub fn from_snapshot(proxy: Option<String>, required: bool) -> Self {
         match proxy.map(|value| value.trim().to_string()) {
-            Some(url) if !url.is_empty() => Self::Required(url),
+            Some(url) if !url.is_empty() => Self::Required(FastStr::from_string(url)),
             _ if required => Self::Unavailable,
             _ => Self::Direct,
         }
@@ -78,23 +79,23 @@ impl ProxyRoute {
 #[derive(Clone)]
 pub struct RouteContext {
     /// Route alias used only by model mappings and affinity.
-    pub channel_id:             String,
+    pub channel_id:             FastStr,
     /// Stable management-store ID used by feedback, usage and runtime isolation.
     pub management_channel_id:  Option<u64>,
     pub provider:               Provider,
-    pub base_url:               String,
-    pub api_key:                String,
+    pub base_url:               FastStr,
+    pub api_key:                FastStr,
     /// SHA-256 of the selected credential; safe for stale-feedback comparison.
-    pub api_key_fingerprint:    String,
+    pub api_key_fingerprint:    FastStr,
     pub api_key_index:          Option<usize>,
-    pub using_group:            String,
-    pub requested_model:        String,
-    pub upstream_model:         String,
+    pub using_group:            FastStr,
+    pub requested_model:        FastStr,
+    pub upstream_model:         FastStr,
     pub proxy:                  ProxyRoute,
     /// Explicit channel header overrides (after default/auth headers).
     pub header_override:        std::collections::BTreeMap<String, String>,
     /// auto | openai | openai-response (channel setting upstream_endpoint_type).
-    pub upstream_endpoint_type: String,
+    pub upstream_endpoint_type: FastStr,
 }
 
 impl std::fmt::Debug for RouteContext {
@@ -136,6 +137,7 @@ pub(crate) fn proxy_circuit_channel_identity(
 #[cfg(test)]
 mod tests {
     use super::{ProxyRoute, RouteContext, proxy_circuit_channel_identity, reporting_channel_id};
+    use faststr::FastStr;
     use halolake_router_core::Provider;
 
     #[test]
@@ -143,7 +145,7 @@ mod tests {
         assert_eq!(ProxyRoute::from_snapshot(None, false), ProxyRoute::Direct);
         assert_eq!(
             ProxyRoute::from_snapshot(Some(" http://proxy.test:8080 ".into()), false),
-            ProxyRoute::Required("http://proxy.test:8080".into())
+            ProxyRoute::Required(FastStr::new("http://proxy.test:8080"))
         );
         assert_eq!(
             ProxyRoute::from_snapshot(None, true),
@@ -154,8 +156,9 @@ mod tests {
             ProxyRoute::Unavailable
         );
 
-        let route =
-            ProxyRoute::Required("http://unique-user:unique-password@proxy.test:8080".into());
+        let route = ProxyRoute::Required(FastStr::new(
+            "http://unique-user:unique-password@proxy.test:8080",
+        ));
         let debug = format!("{route:?}");
         assert!(!debug.contains("unique-user"));
         assert!(!debug.contains("unique-password"));
@@ -183,19 +186,19 @@ mod tests {
             "Bearer unique-override-secret".to_string(),
         );
         let route = RouteContext {
-            channel_id: "route-a".to_string(),
+            channel_id: FastStr::new("route-a"),
             management_channel_id: Some(42),
             provider: Provider::OpenAi,
-            base_url: "https://example.com".to_string(),
-            api_key: "unique-plaintext-secret".to_string(),
-            api_key_fingerprint: "safe-fingerprint".to_string(),
+            base_url: FastStr::new("https://example.com"),
+            api_key: FastStr::new("unique-plaintext-secret"),
+            api_key_fingerprint: FastStr::new("safe-fingerprint"),
             api_key_index: Some(1),
-            using_group: "default".to_string(),
-            requested_model: "model-a".to_string(),
-            upstream_model: "model-a".to_string(),
+            using_group: FastStr::new("default"),
+            requested_model: FastStr::new("model-a"),
+            upstream_model: FastStr::new("model-a"),
             proxy: ProxyRoute::Direct,
             header_override,
-            upstream_endpoint_type: "auto".to_string(),
+            upstream_endpoint_type: FastStr::new("auto"),
         };
 
         let debug = format!("{route:?}");

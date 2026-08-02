@@ -53,9 +53,9 @@ pub fn openai_chat_to_claude_messages(
             }),
             "tool" | "function" => {
                 let block = claude::ContentBlock::ToolResult {
-                    tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
-                    content:     openai_content_to_claude_tool_result(msg.content.as_ref()),
-                    is_error:    None,
+                    tool_use_id:   msg.tool_call_id.clone().unwrap_or_default(),
+                    content:       openai_content_to_claude_tool_result(msg.content.as_ref()),
+                    is_error:      None,
                     cache_control: None,
                 };
                 if let Some(last) = messages.last_mut() {
@@ -84,7 +84,7 @@ pub fn openai_chat_to_claude_messages(
         messages.insert(0, claude::Message {
             role:    "user".to_string(),
             content: vec![claude::ContentBlock::Text {
-                text: "...".to_string(),
+                text:          "...".to_string(),
                 cache_control: None,
             }],
         });
@@ -255,9 +255,9 @@ pub fn openai_chat_to_claude_messages_response(
                 tool_calls
                     .into_iter()
                     .map(|call| claude::ContentBlock::ToolUse {
-                        id:    call.id,
-                        name:  call.function.name,
-                        input: parse_tool_input_object(&call.function.arguments),
+                        id:            call.id,
+                        name:          call.function.name,
+                        input:         parse_tool_input_object(&call.function.arguments),
                         cache_control: None,
                     }),
             );
@@ -865,7 +865,9 @@ fn append_claude_message_as_openai(message: &claude::Message, out: &mut Vec<open
                     });
                 }
             }
-            claude::ContentBlock::ToolUse { id, name, input, .. } => {
+            claude::ContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
                 tool_calls.push(openai::ToolCall {
                     id:                id.clone(),
                     tool_type:         "function".to_string(),
@@ -1083,8 +1085,8 @@ fn assistant_content_blocks(msg: &openai::ChatMessage) -> Vec<claude::ContentBlo
     let mut blocks = Vec::new();
     if msg.reasoning_content.is_some() || msg.reasoning_signature.is_some() {
         blocks.push(claude::ContentBlock::Thinking {
-            thinking:  msg.reasoning_content.clone().unwrap_or_default(),
-            signature: msg.reasoning_signature.clone(),
+            thinking:      msg.reasoning_content.clone().unwrap_or_default(),
+            signature:     msg.reasoning_signature.clone(),
             cache_control: None,
         });
     }
@@ -1093,15 +1095,15 @@ fn assistant_content_blocks(msg: &openai::ChatMessage) -> Vec<claude::ContentBlo
     }
     if let Some(tool_calls) = &msg.tool_calls {
         blocks.extend(tool_calls.iter().map(|call| claude::ContentBlock::ToolUse {
-            id:    call.id.clone(),
-            name:  call.function.name.clone(),
-            input: parse_tool_input_object(&call.function.arguments),
+            id:            call.id.clone(),
+            name:          call.function.name.clone(),
+            input:         parse_tool_input_object(&call.function.arguments),
             cache_control: None,
         }));
     }
     if blocks.is_empty() {
         blocks.push(claude::ContentBlock::Text {
-            text: String::new(),
+            text:          String::new(),
             cache_control: None,
         });
     }
@@ -1120,10 +1122,10 @@ fn convert_tools(tools: &[openai::Tool]) -> Vec<claude::Tool> {
         .iter()
         .filter(|tool| tool.tool_type == "function")
         .map(|tool| claude::Tool {
-            tool_type:    None,
-            name:         tool.function.name.clone(),
-            description:  tool.function.description.clone(),
-            input_schema: tool
+            tool_type:     None,
+            name:          tool.function.name.clone(),
+            description:   tool.function.description.clone(),
+            input_schema:  tool
                 .function
                 .parameters
                 .clone()
@@ -1201,7 +1203,9 @@ fn claude_content_to_openai(
     for block in content {
         match block {
             claude::ContentBlock::Text { text: t, .. } => text.push(t),
-            claude::ContentBlock::ToolUse { id, name, input, .. } => {
+            claude::ContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
                 tool_calls.push(openai::ToolCall {
                     id,
                     tool_type: "function".to_string(),
@@ -1252,7 +1256,7 @@ fn openai_content_to_claude_blocks(
     match content {
         Some(openai::MessageContent::Text(text)) => {
             blocks.push(claude::ContentBlock::Text {
-                text: text.clone(),
+                text:          text.clone(),
                 cache_control: None,
             });
         }
@@ -1261,7 +1265,7 @@ fn openai_content_to_claude_blocks(
                 match part {
                     openai::ContentPart::Text { text, .. } => {
                         blocks.push(claude::ContentBlock::Text {
-                            text: text.clone(),
+                            text:          text.clone(),
                             cache_control: None,
                         });
                     }
@@ -1276,7 +1280,7 @@ fn openai_content_to_claude_blocks(
                     openai::ContentPart::Other(value) => {
                         if let Some(text) = value.get("text").and_then(JsonValue::as_str) {
                             blocks.push(claude::ContentBlock::Text {
-                                text: text.to_string(),
+                                text:          text.to_string(),
                                 cache_control: None,
                             });
                         }
@@ -1288,7 +1292,7 @@ fn openai_content_to_claude_blocks(
     }
     if blocks.is_empty() {
         blocks.push(claude::ContentBlock::Text {
-            text: String::new(),
+            text:          String::new(),
             cache_control: None,
         });
     }

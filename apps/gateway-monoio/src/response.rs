@@ -31,7 +31,7 @@ fn attach_channel_feedback(resp: &mut Response<GatewayBody>, meta: ChannelFeedba
 
 pub(crate) async fn buffered_claude_as_openai(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let payload = match upstream.body_mut().to_ready().await {
         Ok(Some(bytes)) => bytes,
@@ -65,7 +65,7 @@ pub(crate) async fn buffered_claude_as_openai(
 
 pub(crate) fn stream_claude_as_openai(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let body = stream_body_from_async(move |mut sender| async move {
         use futures_util::StreamExt;
@@ -112,7 +112,7 @@ pub(crate) fn stream_claude_as_openai(
         sender.feed_data(None);
     });
 
-    response_builder(StatusCode::OK)
+    let mut resp = response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
@@ -123,12 +123,13 @@ pub(crate) fn stream_claude_as_openai(
                 "internal_error",
                 &err.to_string(),
             )
-        })
+        });
+    resp
 }
 
 pub(crate) async fn buffered_openai_as_claude(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let payload = match upstream.body_mut().to_ready().await {
         Ok(Some(bytes)) => bytes,
@@ -162,7 +163,7 @@ pub(crate) async fn buffered_openai_as_claude(
 
 pub(crate) fn stream_openai_as_claude(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let body = stream_body_from_async(move |mut sender| async move {
         use futures_util::StreamExt;
@@ -211,7 +212,7 @@ pub(crate) fn stream_openai_as_claude(
         sender.feed_data(None);
     });
 
-    response_builder(StatusCode::OK)
+    let mut resp = response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
@@ -222,12 +223,13 @@ pub(crate) fn stream_openai_as_claude(
                 "internal_error",
                 &err.to_string(),
             )
-        })
+        });
+    resp
 }
 
 pub(crate) async fn buffered_responses_as_openai_chat(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
     tool_name_reverse: std::collections::BTreeMap<String, String>,
 ) -> Response<GatewayBody> {
     let status = upstream.status();
@@ -278,7 +280,7 @@ pub(crate) async fn buffered_responses_as_openai_chat(
 
 pub(crate) fn stream_responses_as_openai_chat(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
     tool_name_reverse: std::collections::BTreeMap<String, String>,
 ) -> Response<GatewayBody> {
     let (parts, upstream_body) = upstream.into_parts();
@@ -317,18 +319,19 @@ pub(crate) fn stream_responses_as_openai_chat(
             builder = builder.header(name, value);
         }
     }
-    builder.body(body).unwrap_or_else(|err| {
+    let mut resp = builder.body(body).unwrap_or_else(|err| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             &err.to_string(),
         )
-    })
+    });
+    resp
 }
 
 pub(crate) async fn buffered_openai_chat_as_responses(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
     tool_mapping: ResponsesToolMapping,
 ) -> Response<GatewayBody> {
     let status = upstream.status();
@@ -379,7 +382,7 @@ pub(crate) async fn buffered_openai_chat_as_responses(
 
 pub(crate) fn stream_openai_chat_as_responses(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
     tool_mapping: ResponsesToolMapping,
 ) -> Response<GatewayBody> {
     let (parts, upstream_body) = upstream.into_parts();
@@ -448,13 +451,14 @@ pub(crate) fn stream_openai_chat_as_responses(
             builder = builder.header(name, value);
         }
     }
-    builder.body(body).unwrap_or_else(|err| {
+    let mut resp = builder.body(body).unwrap_or_else(|err| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             &err.to_string(),
         )
-    })
+    });
+    resp
 }
 
 fn openai_chat_json_to_responses(
@@ -720,7 +724,7 @@ struct ResponsesStreamTool {
 }
 
 struct OpenAiChatSseToResponses {
-    requested_model:        String,
+    requested_model:        FastStr,
     response_id:            String,
     created_at:             u64,
     sequence_number:        u64,
@@ -740,11 +744,11 @@ struct OpenAiChatSseToResponses {
 
 impl OpenAiChatSseToResponses {
     #[cfg(test)]
-    fn new(requested_model: String) -> Self {
+    fn new(requested_model: FastStr) -> Self {
         Self::with_tool_mapping(requested_model, ResponsesToolMapping::default())
     }
 
-    fn with_tool_mapping(requested_model: String, tool_mapping: ResponsesToolMapping) -> Self {
+    fn with_tool_mapping(requested_model: FastStr, tool_mapping: ResponsesToolMapping) -> Self {
         Self {
             requested_model,
             response_id: String::new(),
@@ -1612,7 +1616,7 @@ fn responses_usage_to_openai_chat(usage: &JsonValue) -> Option<JsonValue> {
 }
 
 struct ResponsesSseToOpenAiChat {
-    requested_model:          String,
+    requested_model:          FastStr,
     response_id:              String,
     created_at:               u64,
     next_tool_index:          u64,
@@ -1630,7 +1634,7 @@ struct ResponsesSseToOpenAiChat {
 
 impl ResponsesSseToOpenAiChat {
     fn new(
-        requested_model: String,
+        requested_model: FastStr,
         tool_name_reverse: std::collections::BTreeMap<String, String>,
     ) -> Self {
         Self {
@@ -2034,7 +2038,7 @@ fn responses_terminal_finish_reason(response: &JsonValue, tool_calls_seen: bool)
 
 pub(crate) async fn buffered_gemini_as_openai(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let payload = match upstream.body_mut().to_ready().await {
         Ok(Some(bytes)) => bytes,
@@ -2068,7 +2072,7 @@ pub(crate) async fn buffered_gemini_as_openai(
 
 pub(crate) fn stream_gemini_as_openai(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let mut translator = GeminiSseToOpenAiTranslator::new(requested_model);
     let mut decoder = SseBuffer::default();
@@ -2092,7 +2096,7 @@ pub(crate) fn stream_gemini_as_openai(
         })
     });
 
-    response_builder(StatusCode::OK)
+    let mut resp = response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
@@ -2103,12 +2107,13 @@ pub(crate) fn stream_gemini_as_openai(
                 "internal_error",
                 &err.to_string(),
             )
-        })
+        });
+    resp
 }
 
 pub(crate) async fn buffered_gemini_as_claude(
     mut upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let payload = match upstream.body_mut().to_ready().await {
         Ok(Some(bytes)) => bytes,
@@ -2143,7 +2148,7 @@ pub(crate) async fn buffered_gemini_as_claude(
 
 pub(crate) fn stream_gemini_as_claude(
     upstream: Response<HttpBody>,
-    requested_model: String,
+    requested_model: FastStr,
 ) -> Response<GatewayBody> {
     let mut gemini_to_openai = GeminiSseToOpenAiTranslator::new(requested_model.clone());
     let mut openai_to_claude = OpenAiSseToClaudeTranslator::new(requested_model);
@@ -2177,7 +2182,7 @@ pub(crate) fn stream_gemini_as_claude(
         })
     });
 
-    response_builder(StatusCode::OK)
+    let mut resp = response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
@@ -2188,7 +2193,8 @@ pub(crate) fn stream_gemini_as_claude(
                 "internal_error",
                 &err.to_string(),
             )
-        })
+        });
+    resp
 }
 
 pub(crate) async fn buffered_openai_as_gemini(
@@ -2244,7 +2250,7 @@ pub(crate) fn stream_openai_as_gemini(upstream: Response<HttpBody>) -> Response<
         })
     });
 
-    response_builder(StatusCode::OK)
+    let mut resp = response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
@@ -2255,7 +2261,8 @@ pub(crate) fn stream_openai_as_gemini(upstream: Response<HttpBody>) -> Response<
                 "internal_error",
                 &err.to_string(),
             )
-        })
+        });
+    resp
 }
 
 pub(crate) async fn buffered_gemini_imagen_as_openai(
@@ -2356,11 +2363,12 @@ pub(crate) async fn openai_image_json_as_stream(
     }
     write_sse_data(&mut out, "[DONE]");
 
+    let body: Bytes = out.into();
     response_builder(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(full_body(out))
+        .body(full_body(body))
         .unwrap_or_else(|err| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2986,7 +2994,8 @@ mod tests {
 
     #[test]
     fn translates_chat_sse_to_responses_text_reasoning_tools_and_usage() {
-        let mut translator = OpenAiChatSseToResponses::new("requested-model".to_string());
+        let mut translator =
+            OpenAiChatSseToResponses::new(FastStr::from_static_str("requested-model"));
         let first = translator
             .translate_sse_payload(
                 r#"{"id":"chatcmpl-abc","created":1700000000,"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"think ","content":"hi","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":"}}]},"finish_reason":null}]}"#,
@@ -3051,7 +3060,8 @@ mod tests {
 
     #[test]
     fn chat_sse_length_finish_emits_response_incomplete() {
-        let mut translator = OpenAiChatSseToResponses::new("requested-model".to_string());
+        let mut translator =
+            OpenAiChatSseToResponses::new(FastStr::from_static_str("requested-model"));
         translator
             .translate_sse_payload(
                 r#"{"id":"chatcmpl-abc","created":1700000000,"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":"length"}]}"#,
@@ -3072,7 +3082,8 @@ mod tests {
 
     #[test]
     fn chat_sse_eof_keeps_signature_only_reasoning_and_tool_signature() {
-        let mut translator = OpenAiChatSseToResponses::new("requested-model".to_string());
+        let mut translator =
+            OpenAiChatSseToResponses::new(FastStr::from_static_str("requested-model"));
         translator
             .translate_sse_payload(
                 r#"{"id":"chatcmpl-abc","created":1700000000,"choices":[{"index":0,"delta":{"reasoning_signature":"encrypted-reasoning","tool_calls":[{"index":0,"id":"call_1","type":"function","thoughtSignature":"tool-signature","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#,
@@ -3102,7 +3113,8 @@ mod tests {
             "short_tool".to_string(),
             "original_tool_name".to_string(),
         )]);
-        let mut translator = ResponsesSseToOpenAiChat::new("requested-model".to_string(), reverse);
+        let mut translator =
+            ResponsesSseToOpenAiChat::new(FastStr::from_static_str("requested-model"), reverse);
         assert!(translator
             .translate_sse_payload(
                 r#"{"type":"response.created","response":{"id":"resp_1","created_at":1700000000}}"#,
@@ -3157,8 +3169,10 @@ mod tests {
 
     #[test]
     fn responses_sse_incomplete_maps_reason_and_failed_is_idempotent() {
-        let mut incomplete =
-            ResponsesSseToOpenAiChat::new("requested-model".to_string(), Default::default());
+        let mut incomplete = ResponsesSseToOpenAiChat::new(
+            FastStr::from_static_str("requested-model"),
+            Default::default(),
+        );
         let terminal = incomplete
             .translate_sse_payload(
                 r#"{"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}"#,
@@ -3170,8 +3184,10 @@ mod tests {
         assert_eq!(terminal.last().map(String::as_str), Some("[DONE]"));
         assert!(incomplete.finish(None).unwrap().is_empty());
 
-        let mut failed =
-            ResponsesSseToOpenAiChat::new("requested-model".to_string(), Default::default());
+        let mut failed = ResponsesSseToOpenAiChat::new(
+            FastStr::from_static_str("requested-model"),
+            Default::default(),
+        );
         let terminal = failed
             .translate_sse_payload(
                 r#"{"type":"response.failed","response":{"error":{"message":"upstream failed"}}}"#,
@@ -3192,7 +3208,7 @@ mod tests {
             "input":"hi"
         }));
         let mut translator =
-            OpenAiChatSseToResponses::with_tool_mapping("model".to_string(), mapping);
+            OpenAiChatSseToResponses::with_tool_mapping(FastStr::from_static_str("model"), mapping);
         let mut all_events: Vec<JsonValue> = Vec::new();
         for chunk in [
             r#"{"id":"chatcmpl-abc","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"exec","arguments":"{\"input\":"}}]},"finish_reason":null}]}"#,
@@ -3240,7 +3256,7 @@ mod tests {
             "input":"hi"
         }));
         let mut translator =
-            OpenAiChatSseToResponses::with_tool_mapping("model".to_string(), mapping);
+            OpenAiChatSseToResponses::with_tool_mapping(FastStr::from_static_str("model"), mapping);
         let mut all_events: Vec<JsonValue> = Vec::new();
         for chunk in [
             r#"{"id":"chatcmpl-abc","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"tool_search","arguments":"{\"query\":"}}]},"finish_reason":null}]}"#,
@@ -3284,7 +3300,7 @@ mod tests {
             "input":"hi"
         }));
         let mut translator =
-            OpenAiChatSseToResponses::with_tool_mapping("model".to_string(), mapping);
+            OpenAiChatSseToResponses::with_tool_mapping(FastStr::from_static_str("model"), mapping);
         // First chunk: id + arguments arrive, but name is empty.
         let first = translator
             .translate_sse_payload(
@@ -3326,7 +3342,7 @@ mod tests {
             "input":"hi"
         }));
         let mut translator =
-            OpenAiChatSseToResponses::with_tool_mapping("model".to_string(), mapping);
+            OpenAiChatSseToResponses::with_tool_mapping(FastStr::from_static_str("model"), mapping);
         let mut all_events: Vec<JsonValue> = Vec::new();
         for chunk in [
             r#"{"id":"chatcmpl-abc","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"collaboration__spawn_agent","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#,
@@ -3379,8 +3395,10 @@ mod tests {
 
     #[test]
     fn responses_sse_emits_reasoning_signature_delta_before_terminal() {
-        let mut translator =
-            ResponsesSseToOpenAiChat::new("requested-model".to_string(), Default::default());
+        let mut translator = ResponsesSseToOpenAiChat::new(
+            FastStr::from_static_str("requested-model"),
+            Default::default(),
+        );
         translator
             .translate_sse_payload(
                 r#"{"type":"response.created","response":{"id":"resp_1","created_at":1700000000}}"#,
@@ -3416,8 +3434,10 @@ mod tests {
 
     #[test]
     fn responses_sse_redacted_reasoning_with_only_signature_emits_signature_delta() {
-        let mut translator =
-            ResponsesSseToOpenAiChat::new("requested-model".to_string(), Default::default());
+        let mut translator = ResponsesSseToOpenAiChat::new(
+            FastStr::from_static_str("requested-model"),
+            Default::default(),
+        );
         translator
             .translate_sse_payload(
                 r#"{"type":"response.created","response":{"id":"resp_1","created_at":1700000000}}"#,
@@ -3503,12 +3523,12 @@ mod tests {
             model:         "claude".to_string(),
             content:       vec![
                 claude::ContentBlock::Thinking {
-                    thinking:  "why".to_string(),
-                    signature: Some("cipher".to_string()),
+                    thinking:      "why".to_string(),
+                    signature:     Some("cipher".to_string()),
                     cache_control: None,
                 },
                 claude::ContentBlock::RedactedThinking {
-                    data: "redacted".to_string(),
+                    data:          "redacted".to_string(),
                     cache_control: None,
                 },
             ],

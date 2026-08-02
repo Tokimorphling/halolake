@@ -11,7 +11,7 @@ pub struct MessagesRequest {
     /// for the growing messages prefix. Keep this as raw JSON so TTL variants
     /// can pass through without coupling the API contract to one TTL shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_control:   Option<JsonValue>,
+    pub cache_control:  Option<JsonValue>,
     pub messages:       Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature:    Option<f32>,
@@ -92,65 +92,65 @@ pub struct Message {
 pub enum ContentBlock {
     #[serde(rename = "text")]
     Text {
-        text: String,
+        text:          String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "image")]
     Image {
-        source: ImageSource,
+        source:        ImageSource,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "tool_use")]
     ToolUse {
-        id:    String,
-        name:  String,
+        id:            String,
+        name:          String,
         #[serde(default)]
-        input: JsonValue,
+        input:         JsonValue,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "server_tool_use")]
     ServerToolUse {
-        id:    String,
-        name:  String,
+        id:            String,
+        name:          String,
         #[serde(default)]
-        input: JsonValue,
+        input:         JsonValue,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "web_search_tool_result")]
     WebSearchToolResult {
-        tool_use_id: String,
+        tool_use_id:   String,
         #[serde(default)]
-        content:     JsonValue,
+        content:       JsonValue,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        is_error:    Option<bool>,
+        is_error:      Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "tool_result")]
     ToolResult {
-        tool_use_id: String,
+        tool_use_id:   String,
         #[serde(default)]
-        content:     ToolResultContent,
+        content:       ToolResultContent,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        is_error:    Option<bool>,
+        is_error:      Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "thinking")]
     Thinking {
-        thinking:  String,
+        thinking:      String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        signature: Option<String>,
+        signature:     Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
     #[serde(rename = "redacted_thinking")]
     RedactedThinking {
-        data: String,
+        data:          String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<JsonValue>,
     },
@@ -224,12 +224,12 @@ impl ToolResultContent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Tool {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
-    pub tool_type:    Option<String>,
-    pub name:         String,
+    pub tool_type:     Option<String>,
+    pub name:          String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description:  Option<String>,
+    pub description:   Option<String>,
     #[serde(default, skip_serializing_if = "JsonValue::is_null")]
-    pub input_schema: JsonValue,
+    pub input_schema:  JsonValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<JsonValue>,
 }

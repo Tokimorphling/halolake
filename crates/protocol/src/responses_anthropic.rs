@@ -22,12 +22,7 @@ pub enum PromptCacheMode {
 fn request_cache_control(request: &JsonValue) -> JsonValue {
     request
         .get("cache_control")
-        .filter(|value| {
-            value
-                .get("type")
-                .and_then(JsonValue::as_str)
-                == Some("ephemeral")
-        })
+        .filter(|value| value.get("type").and_then(JsonValue::as_str) == Some("ephemeral"))
         .cloned()
         .unwrap_or_else(ephemeral_cache_control)
 }
@@ -337,7 +332,7 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
     match request.get("input") {
         Some(JsonValue::String(text)) => {
             push_message(&mut messages, "user", vec![claude::ContentBlock::Text {
-                text: text.clone(),
+                text:          text.clone(),
                 cache_control: None,
             }])
         }
@@ -365,7 +360,7 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
         }
         Some(value) if !value.is_null() => {
             push_message(&mut messages, "user", vec![claude::ContentBlock::Text {
-                text: value.to_string(),
+                text:          value.to_string(),
                 cache_control: None,
             }])
         }
@@ -459,7 +454,7 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
         extra.insert("cache_control".to_string(), cache_control.clone());
         claude::SystemContent::Blocks(vec![claude::SystemBlock {
             block_type: "text".to_string(),
-            text:       Some(system.join("\n\n")),
+            text: Some(system.join("\n\n")),
             extra,
         }])
     });
@@ -469,8 +464,7 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
         max_tokens,
         // Automatic mode is opt-in because Bedrock and older compatible APIs
         // may reject the top-level cache_control field.
-        cache_control: (cache_mode == PromptCacheMode::Automatic)
-            .then_some(cache_control),
+        cache_control: (cache_mode == PromptCacheMode::Automatic).then_some(cache_control),
         system,
         messages,
         temperature: request
@@ -582,11 +576,15 @@ pub fn claude_messages_to_openai_responses_with_options_and_tools(
             claude::ContentBlock::Text { text, .. } => {
                 message_parts.push(json!({"type": "output_text", "text": text, "annotations": []}));
             }
-            claude::ContentBlock::ToolUse { id, name, input, .. } => {
+            claude::ContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
                 flush_message_parts(&mut output, &mut message_parts);
                 output.push(tool_use_to_responses_item(id, name, input, tool_mapping));
             }
-            claude::ContentBlock::ServerToolUse { id, name, input, .. } => {
+            claude::ContentBlock::ServerToolUse {
+                id, name, input, ..
+            } => {
                 flush_message_parts(&mut output, &mut message_parts);
                 output.push(server_tool_use_to_responses_item(id, name, input));
             }
@@ -960,7 +958,9 @@ impl ClaudeSseToResponsesTranslator {
                             },
                         });
                     }
-                    Some(claude::ContentBlock::ServerToolUse { id, name, input, .. }) => {
+                    Some(claude::ContentBlock::ServerToolUse {
+                        id, name, input, ..
+                    }) => {
                         let output_index = self.output_index;
                         out.push(self.event(
                             "response.output_item.added",
@@ -1407,14 +1407,14 @@ fn convert_input_item(
                 ));
             }
             push_message(messages, "assistant", vec![claude::ContentBlock::ToolUse {
-                id:    anthropic_call_id(
+                id:            anthropic_call_id(
                     item.get("call_id")
                         .or_else(|| item.get("id"))
                         .and_then(JsonValue::as_str)
                         .unwrap_or_default(),
                 ),
-                name:  resolve_function_call_name(item, item_type, tool_mapping),
-                input: arguments,
+                name:          resolve_function_call_name(item, item_type, tool_mapping),
+                input:         arguments,
                 cache_control: None,
             }]);
         }
@@ -1430,18 +1430,18 @@ fn convert_input_item(
                         .unwrap_or_default()
                 });
             push_message(messages, "assistant", vec![claude::ContentBlock::ToolUse {
-                id:    anthropic_call_id(
+                id:            anthropic_call_id(
                     item.get("call_id")
                         .or_else(|| item.get("id"))
                         .and_then(JsonValue::as_str)
                         .unwrap_or_default(),
                 ),
-                name:  item
+                name:          item
                     .get("name")
                     .and_then(JsonValue::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                input: json!({"input": input}),
+                input:         json!({"input": input}),
                 cache_control: None,
             }]);
         }
@@ -1505,12 +1505,10 @@ fn content_to_claude(
     allow_images: bool,
 ) -> Result<Vec<claude::ContentBlock>, ProtocolError> {
     match content {
-        Some(JsonValue::String(text)) => {
-            Ok(vec![claude::ContentBlock::Text {
-                text: text.clone(),
-                cache_control: None,
-            }])
-        }
+        Some(JsonValue::String(text)) => Ok(vec![claude::ContentBlock::Text {
+            text:          text.clone(),
+            cache_control: None,
+        }]),
         Some(JsonValue::Array(parts)) => {
             let mut blocks = Vec::with_capacity(parts.len());
             for part in parts {
@@ -1518,7 +1516,7 @@ fn content_to_claude(
                     Some("input_text" | "output_text" | "text") => {
                         if let Some(text) = part.get("text").and_then(JsonValue::as_str) {
                             blocks.push(claude::ContentBlock::Text {
-                                text: text.to_string(),
+                                text:          text.to_string(),
                                 cache_control: None,
                             });
                         }
@@ -1561,7 +1559,7 @@ fn content_to_claude(
             Ok(blocks)
         }
         Some(value) if !value.is_null() => Ok(vec![claude::ContentBlock::Text {
-            text: value.to_string(),
+            text:          value.to_string(),
             cache_control: None,
         }]),
         _ => Ok(Vec::new()),
@@ -1572,7 +1570,7 @@ fn image_block(url: &str) -> Option<claude::ContentBlock> {
     if let Some(rest) = url.strip_prefix("data:") {
         let (media_type, data) = rest.split_once(";base64,")?;
         return Some(claude::ContentBlock::Image {
-            source: claude::ImageSource {
+            source:        claude::ImageSource {
                 source_type: "base64".to_string(),
                 media_type:  Some(media_type.to_string()),
                 data:        Some(data.to_string()),
@@ -1582,7 +1580,7 @@ fn image_block(url: &str) -> Option<claude::ContentBlock> {
         });
     }
     Some(claude::ContentBlock::Image {
-        source: claude::ImageSource {
+        source:        claude::ImageSource {
             source_type: "url".to_string(),
             media_type:  None,
             data:        None,
@@ -1631,10 +1629,10 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
             "web_search" | "web_search_preview" | "google_search" | "web_search_20250305"
         ) {
             converted.push(claude::Tool {
-                tool_type:    Some("web_search_20250305".to_string()),
-                name:         "web_search".to_string(),
-                description:  None,
-                input_schema: JsonValue::Null,
+                tool_type:     Some("web_search_20250305".to_string()),
+                name:          "web_search".to_string(),
+                description:   None,
+                input_schema:  JsonValue::Null,
                 cache_control: None,
             });
             continue;
@@ -1700,13 +1698,13 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
                     .unwrap_or_else(|| json!({"type":"object","properties":{}}));
                 normalize_schema(&mut schema);
                 converted.push(claude::Tool {
-                    tool_type:    None,
-                    name:         flat,
-                    description:  child
+                    tool_type:     None,
+                    name:          flat,
+                    description:   child
                         .get("description")
                         .and_then(JsonValue::as_str)
                         .map(str::to_string),
-                    input_schema: schema,
+                    input_schema:  schema,
                     cache_control: None,
                 });
             }
@@ -1733,13 +1731,13 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
         }
         normalize_schema(&mut schema);
         converted.push(claude::Tool {
-            tool_type:    None,
-            name:         name.to_string(),
-            description:  function
+            tool_type:     None,
+            name:          name.to_string(),
+            description:   function
                 .get("description")
                 .and_then(JsonValue::as_str)
                 .map(str::to_string),
-            input_schema: schema,
+            input_schema:  schema,
             cache_control: None,
         });
     }
@@ -1872,13 +1870,17 @@ fn apply_explicit_message_cache_breakpoints(
     }
 
     let mut user_count = 0;
-    let second_last_user = messages.iter().enumerate().rev().find_map(|(index, message)| {
-        if message.role != "user" {
-            return None;
-        }
-        user_count += 1;
-        (user_count == 2).then_some(index)
-    });
+    let second_last_user = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, message)| {
+            if message.role != "user" {
+                return None;
+            }
+            user_count += 1;
+            (user_count == 2).then_some(index)
+        });
     if let Some(index) = second_last_user {
         mark_last_content_block(&mut messages[index], cache_control);
     }
@@ -2142,10 +2144,7 @@ mod tests {
                     && blocks[0].extra.get("cache_control")
                         == Some(&json!({"type":"ephemeral"}))
         ));
-        assert_eq!(
-            converted.cache_control,
-            Some(json!({"type":"ephemeral"}))
-        );
+        assert_eq!(converted.cache_control, Some(json!({"type":"ephemeral"})));
         assert_eq!(
             converted
                 .tools
@@ -2188,10 +2187,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            converted.cache_control,
-            Some(json!({"type":"ephemeral"}))
-        );
+        assert_eq!(converted.cache_control, Some(json!({"type":"ephemeral"})));
         assert!(converted.system.is_none());
         assert!(converted.tools.is_none());
     }
@@ -2213,11 +2209,9 @@ mod tests {
             "cache_control":{"type":"ephemeral","ttl":"1h"},
             "input":"hello"
         });
-        let converted = openai_responses_to_claude_messages(
-            &serde_json::to_vec(&request).unwrap(),
-            "claude",
-        )
-        .unwrap();
+        let converted =
+            openai_responses_to_claude_messages(&serde_json::to_vec(&request).unwrap(), "claude")
+                .unwrap();
         assert!(converted.cache_control.is_none());
         let wire = serde_json::to_value(converted).unwrap();
         assert_eq!(
@@ -2237,11 +2231,9 @@ mod tests {
                 {"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}
             ]
         });
-        let converted = openai_responses_to_claude_messages(
-            &serde_json::to_vec(&request).unwrap(),
-            "claude",
-        )
-        .unwrap();
+        let converted =
+            openai_responses_to_claude_messages(&serde_json::to_vec(&request).unwrap(), "claude")
+                .unwrap();
         assert_eq!(
             converted.system.as_ref().unwrap().as_text_lossy(),
             "initial instructions"
@@ -2269,16 +2261,12 @@ mod tests {
             "content":[{"type":"input_text","text":"follow-up"}]
         }));
 
-        let first = openai_responses_to_claude_messages(
-            &serde_json::to_vec(&base).unwrap(),
-            "claude",
-        )
-        .unwrap();
-        let second = openai_responses_to_claude_messages(
-            &serde_json::to_vec(&next).unwrap(),
-            "claude",
-        )
-        .unwrap();
+        let first =
+            openai_responses_to_claude_messages(&serde_json::to_vec(&base).unwrap(), "claude")
+                .unwrap();
+        let second =
+            openai_responses_to_claude_messages(&serde_json::to_vec(&next).unwrap(), "claude")
+                .unwrap();
         let first_wire = serde_json::to_value(first).unwrap();
         let second_wire = serde_json::to_value(second).unwrap();
 
@@ -2308,16 +2296,21 @@ mod tests {
         strip_cache_controls(&mut second_without_markers);
         let first_messages = first_without_markers["messages"].as_array().unwrap();
         let second_messages = second_without_markers["messages"].as_array().unwrap();
-        assert_eq!(&first_messages[..], &second_messages[..first_messages.len()]);
+        assert_eq!(
+            &first_messages[..],
+            &second_messages[..first_messages.len()]
+        );
         let first_messages = first_wire["messages"].as_array().unwrap();
         let second_messages = second_wire["messages"].as_array().unwrap();
         assert_eq!(
             first_messages[3]["content"][0]["cache_control"],
             json!({"type":"ephemeral"})
         );
-        assert!(second_messages[3]["content"][0]
-            .get("cache_control")
-            .is_none());
+        assert!(
+            second_messages[3]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2488,14 +2481,14 @@ mod tests {
             model:         "claude".to_string(),
             content:       vec![
                 claude::ContentBlock::Thinking {
-                    thinking:  "why".to_string(),
-                    signature: Some("cipher".to_string()),
+                    thinking:      "why".to_string(),
+                    signature:     Some("cipher".to_string()),
                     cache_control: None,
                 },
                 claude::ContentBlock::ToolUse {
-                    id:    "toolu_1".to_string(),
-                    name:  "lookup".to_string(),
-                    input: json!({"q":1}),
+                    id:            "toolu_1".to_string(),
+                    name:          "lookup".to_string(),
+                    input:         json!({"q":1}),
                     cache_control: None,
                 },
             ],
@@ -2521,8 +2514,8 @@ mod tests {
             role:          "assistant".to_string(),
             model:         "claude".to_string(),
             content:       vec![claude::ContentBlock::Thinking {
-                thinking:  "why".to_string(),
-                signature: Some("cipher".to_string()),
+                thinking:      "why".to_string(),
+                signature:     Some("cipher".to_string()),
                 cache_control: None,
             }],
             stop_reason:   Some("end_turn".to_string()),
@@ -2542,17 +2535,17 @@ mod tests {
             model:         "claude".to_string(),
             content:       vec![
                 claude::ContentBlock::Text {
-                    text: "before".to_string(),
+                    text:          "before".to_string(),
                     cache_control: None,
                 },
                 claude::ContentBlock::ToolUse {
-                    id:    "toolu_1".to_string(),
-                    name:  "lookup".to_string(),
-                    input: json!({}),
+                    id:            "toolu_1".to_string(),
+                    name:          "lookup".to_string(),
+                    input:         json!({}),
                     cache_control: None,
                 },
                 claude::ContentBlock::Text {
-                    text: "after".to_string(),
+                    text:          "after".to_string(),
                     cache_control: None,
                 },
             ],
@@ -2744,9 +2737,9 @@ mod tests {
             role:          "assistant".to_string(),
             model:         "claude".to_string(),
             content:       vec![claude::ContentBlock::ToolUse {
-                id:    "toolu_1".to_string(),
-                name:  "collaboration__spawn_agent".to_string(),
-                input: json!({}),
+                id:            "toolu_1".to_string(),
+                name:          "collaboration__spawn_agent".to_string(),
+                input:         json!({}),
                 cache_control: None,
             }],
             stop_reason:   Some("tool_use".to_string()),
@@ -2928,9 +2921,9 @@ mod tests {
             role:          "assistant".to_string(),
             model:         "claude".to_string(),
             content:       vec![claude::ContentBlock::ServerToolUse {
-                id:    "srvu_1".to_string(),
-                name:  "web_search".to_string(),
-                input: json!({"query":"halolake"}),
+                id:            "srvu_1".to_string(),
+                name:          "web_search".to_string(),
+                input:         json!({"query":"halolake"}),
                 cache_control: None,
             }],
             stop_reason:   Some("end_turn".to_string()),
@@ -3003,9 +2996,9 @@ mod tests {
                 role:          "assistant".to_string(),
                 model:         "claude".to_string(),
                 content:       vec![claude::ContentBlock::ToolUse {
-                    id:    "toolu_1".to_string(),
-                    name:  "lookup".to_string(),
-                    input: serde_json::from_str(input).unwrap_or(json!({})),
+                    id:            "toolu_1".to_string(),
+                    name:          "lookup".to_string(),
+                    input:         serde_json::from_str(input).unwrap_or(json!({})),
                     cache_control: None,
                 }],
                 stop_reason:   Some("end_turn".to_string()),

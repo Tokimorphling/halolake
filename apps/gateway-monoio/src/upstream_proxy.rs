@@ -795,17 +795,17 @@ async fn next_body_data<B>(
 where
     B: MonoioBody<Data = Bytes, Error = HttpError>,
 {
-    match read_timeout {
-        Some(duration) => {
-            match monoio::time::timeout(duration, MonoioBody::next_data(body)).await {
-                Ok(item) => item,
-                Err(_) => Some(Err(HttpError::from(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("proxy upstream body idle timeout after {duration:?}"),
-                )))),
-            }
-        }
-        None => MonoioBody::next_data(body).await,
+    // Always enforce a default 30s idle timeout even when `read_timeout` is
+    // `None`. Without this, a downstream client disconnect mid-SSE leaves the
+    // producer task parked on `next_data` until the upstream closes — holding
+    // the proxy connection for the entire LLM stream.
+    let duration = read_timeout.unwrap_or(Duration::from_secs(30));
+    match monoio::time::timeout(duration, MonoioBody::next_data(body)).await {
+        Ok(item) => item,
+        Err(_) => Some(Err(HttpError::from(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("proxy upstream body idle timeout after {duration:?}"),
+        )))),
     }
 }
 

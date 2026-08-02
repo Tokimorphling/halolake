@@ -18,7 +18,7 @@ pub(crate) struct RouteLookup {
 #[derive(Debug, Clone)]
 pub(crate) struct RouteParts {
     pub(crate) auth:     RequestAuth,
-    pub(crate) route:    RouteContext,
+    pub(crate) route:    Rc<RouteContext>,
     pub(crate) affinity: Option<RouteAffinityContext>,
 }
 

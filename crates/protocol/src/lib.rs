@@ -17,8 +17,7 @@ pub use responses_anthropic::{
     ClaudeSseToResponsesTranslator, PromptCacheMode, ResponsesToolMapping,
     claude_messages_to_openai_responses, claude_messages_to_openai_responses_with_options,
     claude_messages_to_openai_responses_with_options_and_tools,
-    openai_responses_to_claude_messages,
-    openai_responses_to_claude_messages_with_cache_mode,
+    openai_responses_to_claude_messages, openai_responses_to_claude_messages_with_cache_mode,
     openai_responses_to_claude_messages_with_tools,
     openai_responses_to_claude_messages_with_tools_and_cache_mode, responses_tool_mapping,
 };

@@ -107,9 +107,12 @@ impl LocalDnsResolver {
 
 pub(crate) fn debug_relay<CX>(cx: &CX, stream: bool, body: Option<&[u8]>)
 where
-    CX: ParamRef<RouteContext> + ParamRef<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: ParamRef<Rc<RouteContext>>
+        + ParamRef<RequestAuth>
+        + ParamRef<RequestId>
+        + ParamRef<PeerAddr>,
 {
-    let route = ParamRef::<RouteContext>::param_ref(cx);
+    let route = ParamRef::<Rc<RouteContext>>::param_ref(cx);
     let auth = ParamRef::<RequestAuth>::param_ref(cx);
     let request_id = ParamRef::<RequestId>::param_ref(cx);
     let peer = ParamRef::<PeerAddr>::param_ref(cx);
