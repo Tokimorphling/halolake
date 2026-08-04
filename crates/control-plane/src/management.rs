@@ -2791,7 +2791,8 @@ fn insert_default_header(
 }
 
 /// Channel setting key aligned with new-api force path selection for OpenAI text APIs.
-/// Values: auto | openai | openai-response | openai-response-compact | xai-response | codex
+/// Values: auto | openai | openai-response | openai-response-compact |
+/// sub2api-response | sub2api-anthropic | xai-response | codex
 fn channel_upstream_endpoint_type(channel: &ChannelRecord) -> String {
     let raw = channel.setting.as_deref().unwrap_or("").trim();
     if raw.is_empty() {

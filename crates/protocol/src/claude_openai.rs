@@ -105,6 +105,7 @@ pub fn openai_chat_to_claude_messages(
         max_tokens,
         system: (!system.is_empty()).then(|| claude::SystemContent::Text(system.join("\n\n"))),
         cache_control: None,
+        metadata: None,
         messages,
         temperature: req.temperature,
         top_p: req.top_p,

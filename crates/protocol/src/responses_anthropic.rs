@@ -5,6 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 const DEFAULT_MAX_TOKENS: u32 = 8192;
+/// sub2api's Anthropic budget rectifier uses 64k for thinking requests. Use
+/// the same generous default only when Responses enables reasoning without an
+/// explicit output limit.
+const DEFAULT_THINKING_MAX_TOKENS: u32 = 64_000;
 
 fn ephemeral_cache_control() -> JsonValue {
     json!({"type": "ephemeral"})
@@ -140,11 +144,12 @@ fn responses_tool_mapping_from_value(
 /// Top-level `tools` plus any `additional_tools` carried inside the input
 /// history; both declare tools the model may call.
 fn collect_declared_tools(request: &JsonValue) -> Vec<JsonValue> {
-    let mut tools = request
-        .get("tools")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let mut tools = Vec::new();
+    if let Some(declared) = request.get("tools").and_then(JsonValue::as_array) {
+        for tool in declared {
+            push_unique_tool(&mut tools, tool);
+        }
+    }
     for item in request
         .get("input")
         .and_then(JsonValue::as_array)
@@ -154,10 +159,22 @@ fn collect_declared_tools(request: &JsonValue) -> Vec<JsonValue> {
         if item.get("type").and_then(JsonValue::as_str) == Some("additional_tools")
             && let Some(extra) = item.get("tools").and_then(JsonValue::as_array)
         {
-            tools.extend(extra.iter().cloned());
+            for tool in extra {
+                push_unique_tool(&mut tools, tool);
+            }
         }
     }
     tools
+}
+
+/// Responses histories can repeat an identical `additional_tools` declaration
+/// on every turn.  Keeping the first copy preserves declaration order while
+/// preventing an otherwise unchanged tool prefix from growing and invalidating
+/// the Anthropic prompt cache.
+fn push_unique_tool(tools: &mut Vec<JsonValue>, tool: &JsonValue) {
+    if !tools.iter().any(|existing| existing == tool) {
+        tools.push(tool.clone());
+    }
 }
 
 fn collect_namespace_tools(
@@ -382,10 +399,13 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
         .and_then(|reasoning| reasoning.get("effort"))
         .and_then(JsonValue::as_str);
     let anthropic_effort = reasoning_effort.map(|effort| {
-        if effort == "xhigh" {
-            "max".to_string()
-        } else {
-            effort.to_string()
+        match effort {
+            // Codex resolves its highest internal tier to max on the provider
+            // wire; Anthropic has no separate ultra tier.
+            "xhigh" | "ultra" => "max".to_string(),
+            // These Responses aliases mean that extended thinking is off.
+            "minimal" | "none" => "low".to_string(),
+            _ => effort.to_string(),
         }
     });
     let thinking = anthropic_effort.as_deref().and_then(|effort| {
@@ -405,15 +425,18 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
         .get("max_output_tokens")
         .and_then(JsonValue::as_u64)
         .and_then(|tokens| u32::try_from(tokens).ok())
-        .filter(|tokens| *tokens > 0)
-        .unwrap_or(DEFAULT_MAX_TOKENS);
+        .filter(|tokens| *tokens > 0);
     // Anthropic requires max_tokens to exceed the thinking budget; keep room
     // for visible output even when Responses asks for high/xhigh reasoning.
     let max_tokens = thinking
         .as_ref()
         .and_then(|thinking| thinking.budget_tokens)
-        .map(|budget| requested_max_tokens.max(budget.saturating_add(1024)))
-        .unwrap_or(requested_max_tokens);
+        .map(|budget| {
+            requested_max_tokens
+                .unwrap_or(DEFAULT_THINKING_MAX_TOKENS)
+                .max(budget.saturating_add(1024))
+        })
+        .unwrap_or_else(|| requested_max_tokens.unwrap_or(DEFAULT_MAX_TOKENS));
 
     let effective_tools = effective_tools(&request);
     let mut tools = convert_tools(effective_tools.as_ref())?;
@@ -446,7 +469,15 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
     }
 
     if cache_mode == PromptCacheMode::Explicit {
-        apply_explicit_message_cache_breakpoints(&mut messages, &cache_control);
+        // Anthropic/sub2api accept at most four explicit cache breakpoints
+        // across system, tools, and messages. Reserve the slots already used
+        // by the converted system/tool prefixes before marking history.
+        let reserved_breakpoints = usize::from(!system.is_empty()) + usize::from(tools.is_some());
+        apply_explicit_message_cache_breakpoints(
+            &mut messages,
+            &cache_control,
+            4usize.saturating_sub(reserved_breakpoints),
+        );
     }
 
     let system = (!system.is_empty()).then(|| {
@@ -465,6 +496,7 @@ pub fn openai_responses_to_claude_messages_with_tools_and_cache_mode(
         // Automatic mode is opt-in because Bedrock and older compatible APIs
         // may reject the top-level cache_control field.
         cache_control: (cache_mode == PromptCacheMode::Automatic).then_some(cache_control),
+        metadata: None,
         system,
         messages,
         temperature: request
@@ -1745,23 +1777,7 @@ fn convert_tools(tools: Option<&JsonValue>) -> Result<Option<Vec<claude::Tool>>,
 }
 
 fn effective_tools(request: &JsonValue) -> Option<JsonValue> {
-    let mut tools = request
-        .get("tools")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for item in request
-        .get("input")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if item.get("type").and_then(JsonValue::as_str) == Some("additional_tools")
-            && let Some(additional) = item.get("tools").and_then(JsonValue::as_array)
-        {
-            tools.extend(additional.iter().cloned());
-        }
-    }
+    let tools = collect_declared_tools(request);
     (!tools.is_empty()).then_some(JsonValue::Array(tools))
 }
 
@@ -1854,19 +1870,12 @@ fn mark_last_content_block(message: &mut claude::Message, cache_control: &JsonVa
 fn apply_explicit_message_cache_breakpoints(
     messages: &mut [claude::Message],
     cache_control: &JsonValue,
+    max_breakpoints: usize,
 ) {
     for message in messages.iter_mut() {
         for block in &mut message.content {
             *block.cache_control_mut() = None;
         }
-    }
-
-    if let Some(last) = messages.last_mut() {
-        mark_last_content_block(last, cache_control);
-    }
-
-    if messages.len() < 4 {
-        return;
     }
 
     let mut user_count = 0;
@@ -1881,8 +1890,36 @@ fn apply_explicit_message_cache_breakpoints(
             user_count += 1;
             (user_count == 2).then_some(index)
         });
-    if let Some(index) = second_last_user {
-        mark_last_content_block(&mut messages[index], cache_control);
+
+    // Match sub2api's own message rewrite: current tail plus second-newest
+    // user turn. Session affinity is carried independently by metadata.user_id
+    // on the sub2api fallback path, so message slots can maximize prompt-cache
+    // reuse. Deduplicate overlapping indices in short histories.
+    let last_message = messages.len().checked_sub(1);
+    let mut marked = 0;
+    let mut seen = BTreeSet::new();
+    for index in [last_message, second_last_user].into_iter().flatten() {
+        if marked >= max_breakpoints || !seen.insert(index) {
+            continue;
+        }
+        mark_cacheable_content_block(&mut messages[index], cache_control);
+        marked += 1;
+    }
+}
+
+/// Prefer a text block for a breakpoint.  Marking an image or a tool result
+/// as the penultimate breakpoint can be invisible to gateways (including
+/// sub2api) that derive sticky sessions from top-level text blocks.
+fn mark_cacheable_content_block(message: &mut claude::Message, cache_control: &JsonValue) {
+    if let Some(block) = message
+        .content
+        .iter_mut()
+        .rev()
+        .find(|block| matches!(block, claude::ContentBlock::Text { .. }))
+    {
+        *block.cache_control_mut() = Some(cache_control.clone());
+    } else {
+        mark_last_content_block(message, cache_control);
     }
 }
 
@@ -2168,13 +2205,37 @@ mod tests {
             Some("max")
         );
         assert_eq!(converted.thinking.unwrap().budget_tokens, Some(32768));
-        assert_eq!(converted.max_tokens, 33792);
+        assert_eq!(converted.max_tokens, 64_000);
         assert!(converted.messages.iter().any(|message| message.content.iter().any(
             |block| matches!(block, claude::ContentBlock::Thinking { signature: Some(sig), .. } if sig == "sig")
         )));
         assert!(converted.messages.iter().any(|message| message.content.iter().any(
             |block| matches!(block, claude::ContentBlock::Image { source, .. } if source.data.as_deref() == Some("AAAA"))
         )));
+    }
+
+    #[test]
+    fn normalizes_codex_reasoning_aliases_for_anthropic() {
+        for (effort, expected, thinking) in [
+            ("ultra", "max", true),
+            ("minimal", "low", false),
+            ("none", "low", false),
+        ] {
+            let request = json!({
+                "input":"hello",
+                "reasoning":{"effort":effort}
+            });
+            let converted = openai_responses_to_claude_messages(
+                &serde_json::to_vec(&request).unwrap(),
+                "claude-sonnet",
+            )
+            .unwrap();
+            assert_eq!(
+                converted.output_config.unwrap().effort.as_deref(),
+                Some(expected)
+            );
+            assert_eq!(converted.thinking.is_some(), thinking);
+        }
     }
 
     #[test]
@@ -2311,6 +2372,77 @@ mod tests {
                 .get("cache_control")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn marks_text_breakpoints_in_short_growing_history() {
+        let request = json!({
+            "input":[
+                {"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"first"},
+                    {"type":"input_image","image_url":"data:image/png;base64,AAAA"}
+                ]},
+                {"type":"message","role":"assistant","content":[
+                    {"type":"output_text","text":"answer"}
+                ]},
+                {"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"follow-up"}
+                ]}
+            ]
+        });
+        let converted =
+            openai_responses_to_claude_messages(&serde_json::to_vec(&request).unwrap(), "claude")
+                .unwrap();
+        let wire = serde_json::to_value(converted).unwrap();
+
+        assert_eq!(
+            wire["messages"][0]["content"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert!(
+            wire["messages"][0]["content"][1]
+                .get("cache_control")
+                .is_none()
+        );
+        assert_eq!(
+            wire["messages"][2]["content"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+    }
+
+    #[test]
+    fn deduplicates_identical_additional_tools_without_reordering() {
+        let lookup = json!({
+            "type":"function",
+            "name":"lookup",
+            "description":"stable",
+            "parameters":{"type":"object","properties":{}}
+        });
+        let fetch = json!({
+            "type":"function",
+            "name":"fetch",
+            "parameters":{"type":"object","properties":{}}
+        });
+        let request = json!({
+            "tools":[lookup.clone()],
+            "input":[
+                {"type":"additional_tools","tools":[lookup.clone(), fetch.clone()]},
+                {"type":"additional_tools","tools":[lookup, fetch]},
+                {"type":"message","role":"user","content":[
+                    {"type":"input_text","text":"go"}
+                ]}
+            ]
+        });
+        let converted =
+            openai_responses_to_claude_messages(&serde_json::to_vec(&request).unwrap(), "claude")
+                .unwrap();
+        let names = converted
+            .tools
+            .unwrap()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["lookup", "fetch"]);
     }
 
     #[test]

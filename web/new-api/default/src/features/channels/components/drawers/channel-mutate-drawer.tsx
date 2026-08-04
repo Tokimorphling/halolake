@@ -4112,6 +4112,7 @@ export function ChannelMutateDrawer({
 
                               {(currentType === 1 ||
                                 currentType === 8 ||
+                                currentType === 14 ||
                                 currentType === 48 ||
                                 currentType === 57) && (
                                 <FormField
@@ -4125,7 +4126,7 @@ export function ChannelMutateDrawer({
                                         </FormLabel>
                                         <FormDescription>
                                           {t(
-                                            'Force upstream OpenAI text API path: auto (client path), openai (/v1/chat/completions), or openai-response (/v1/responses). Body is converted when needed.'
+                                            'Force upstream text API path. For an Anthropic channel backed by sub2api, select openai-response to preserve the original Responses request and prompt-cache session.'
                                           )}
                                         </FormDescription>
                                       </div>
@@ -4147,6 +4148,12 @@ export function ChannelMutateDrawer({
                                             <SelectItem value='openai-response'>
                                               openai-response (/v1/responses)
                                             </SelectItem>
+                                            {currentType === 14 && (
+                                              <SelectItem value='sub2api-anthropic'>
+                                                sub2api-anthropic (/v1/messages
+                                                fallback)
+                                              </SelectItem>
+                                            )}
                                             <SelectItem value='openai-response-compact'>
                                               openai-response-compact
                                             </SelectItem>

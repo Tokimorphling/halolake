@@ -9,6 +9,7 @@ use monoio_transports::{
     connectors::pollio::PollIo,
     http::hyper::{HyperBody, HyperH1Connector, MonoioBody as HyperIncomingBody},
 };
+use sha2::{Digest, Sha256};
 
 pub(crate) type HyperRequestBody =
     HyperBody<HttpBody, Option<std::result::Result<Bytes, HttpError>>>;
@@ -1013,13 +1014,69 @@ where
             Some(req.body.as_ref()),
         );
         if route.provider == Provider::Claude && client_is_responses {
-            if client_path.ends_with("/responses/compact") {
+            let endpoint_mode = normalize_upstream_endpoint_type(&route.upstream_endpoint_type);
+            if client_path.ends_with("/responses/compact")
+                && endpoint_mode != "openai-response-compact"
+            {
                 return Ok(json_error(
                     StatusCode::NOT_IMPLEMENTED,
                     "not_supported",
-                    "OpenAI Responses compact is not supported by Anthropic upstreams; use an \
-                     OpenAI channel for /v1/responses/compact",
+                    "OpenAI Responses compact is not supported by Anthropic upstreams; configure \
+                     openai-response-compact only when the compatible upstream implements it",
                 ));
+            }
+            if matches!(
+                endpoint_mode.as_str(),
+                "openai-response" | "openai-response-compact" | "sub2api-response"
+            ) {
+                let prepared_endpoint = if endpoint_mode == "sub2api-response" {
+                    "openai-response"
+                } else {
+                    endpoint_mode.as_str()
+                };
+                let mut prepared = match prepare_openai_text_upstream(
+                    &req.path,
+                    &req.body,
+                    &route.upstream_model,
+                    prepared_endpoint,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to prepare sub2api Responses request: {err}"),
+                        ));
+                    }
+                };
+                let (body, rectification) = match rectify_sub2api_responses_request(prepared.body) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        return Ok(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &format!("failed to rectify sub2api Responses request: {err}"),
+                        ));
+                    }
+                };
+                prepared.body = body;
+                debug!(
+                    channel_id = %route.channel_id,
+                    base_url = %route.base_url,
+                    path = %prepared.path,
+                    thinking_budget_tokens = ?rectification.as_ref().and_then(|item| item.budget_tokens),
+                    max_output_tokens = ?rectification.as_ref().and_then(|item| item.max_output_tokens),
+                    effort_normalized = rectification.as_ref().is_some_and(|item| item.effort_normalized),
+                    "passing Responses request through to Anthropic-compatible upstream"
+                );
+                return self
+                    .openai_passthrough(
+                        &route,
+                        prepared,
+                        &req.downstream_headers,
+                        OpenAiResponseTarget::Passthrough,
+                    )
+                    .await;
             }
             let include_encrypted_reasoning = serde_json::from_slice::<JsonValue>(&req.body)
                 .ok()
@@ -1056,6 +1113,23 @@ where
                         ));
                     }
                 };
+            if endpoint_mode == "sub2api-anthropic" {
+                let auth = ParamRef::<RequestAuth>::param_ref(&req.cx);
+                let metadata_injected = ensure_sub2api_session_metadata(
+                    &mut claude_request.metadata,
+                    &req.body,
+                    &req.downstream_headers,
+                    auth,
+                );
+                debug!(
+                    channel_id = %route.channel_id,
+                    metadata_injected,
+                    has_session_metadata = claude_request.metadata.as_ref().is_some_and(|value| {
+                        value.get("user_id").and_then(JsonValue::as_str).is_some()
+                    }),
+                    "prepared Anthropic-compatible session metadata"
+                );
+            }
             self.resolve_claude_url_images(&mut claude_request).await;
             let upstream = match self
                 .send_claude_json(
@@ -1291,6 +1365,312 @@ fn prompt_cache_mode_for_base_url(base_url: &str) -> PromptCacheMode {
     }
 }
 
+const SUB2API_DEFAULT_THINKING_MAX_OUTPUT_TOKENS: u64 = 64_000;
+const ANTHROPIC_THINKING_OUTPUT_PADDING: u64 = 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Sub2ApiResponsesCompatibility {
+    effort_normalized: bool,
+    budget_tokens:     Option<u64>,
+    max_output_tokens: Option<u64>,
+}
+
+/// sub2api currently lowers Responses reasoning to Anthropic with fixed
+/// thinking budgets, but defaults `max_tokens` to 8192.  High and xhigh then
+/// violate Anthropic's `max_tokens > budget_tokens` constraint.  Rectify the
+/// Responses request before sub2api parses it so account selection still sees
+/// the original Responses history while the eventual Messages request is
+/// valid.
+fn rectify_sub2api_responses_request(
+    body: Bytes,
+) -> Result<(Bytes, Option<Sub2ApiResponsesCompatibility>)> {
+    let mut value: JsonValue =
+        serde_json::from_slice(&body).context("parse sub2api Responses request body")?;
+    let tools_changed = deduplicate_responses_tools(&mut value)?;
+    let Some(effort) = value
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .map(str::to_string)
+    else {
+        let body = if tools_changed {
+            Bytes::from(
+                serde_json::to_vec(&value)
+                    .context("serialize normalized sub2api Responses request")?,
+            )
+        } else {
+            body
+        };
+        return Ok((body, None));
+    };
+
+    let normalized_effort = match effort.as_str() {
+        // Anthropic has no distinct minimal/none effort.  sub2api otherwise
+        // treats these unknown values as enabled thinking with a high budget.
+        "minimal" | "none" => "low",
+        "ultra" => "max",
+        "low" | "medium" | "high" | "xhigh" | "max" => effort.as_str(),
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported Anthropic reasoning effort {other:?}"
+            ));
+        }
+    };
+    let effort_normalized = normalized_effort != effort;
+    if effort_normalized {
+        value["reasoning"]["effort"] = JsonValue::String(normalized_effort.to_string());
+    }
+
+    let budget_tokens: Option<u64> = match normalized_effort {
+        "medium" => Some(4096),
+        "high" => Some(10_240),
+        "xhigh" | "max" => Some(32_768),
+        _ => None,
+    };
+    let mut max_output_tokens = None;
+    let mut body_changed = tools_changed || effort_normalized;
+    if let Some(budget_tokens) = budget_tokens {
+        let minimum = budget_tokens.saturating_add(ANTHROPIC_THINKING_OUTPUT_PADDING);
+        let requested = value.get("max_output_tokens").and_then(JsonValue::as_u64);
+        let rectified = requested
+            .map(|tokens| tokens.max(minimum))
+            .unwrap_or(SUB2API_DEFAULT_THINKING_MAX_OUTPUT_TOKENS.max(minimum));
+        max_output_tokens = Some(rectified);
+        if requested != Some(rectified) {
+            value["max_output_tokens"] = JsonValue::Number(rectified.into());
+            body_changed = true;
+        }
+    }
+
+    let body = if body_changed {
+        Bytes::from(
+            serde_json::to_vec(&value).context("serialize rectified sub2api Responses request")?,
+        )
+    } else {
+        body
+    };
+    Ok((
+        body,
+        Some(Sub2ApiResponsesCompatibility {
+            effort_normalized,
+            budget_tokens,
+            max_output_tokens,
+        }),
+    ))
+}
+
+/// sub2api lifts every `additional_tools` history item into top-level `tools`
+/// without deduplicating it. Normalize identical declarations before that
+/// conversion so the Anthropic tool prefix remains byte-stable across turns.
+fn deduplicate_responses_tools(request: &mut JsonValue) -> Result<bool> {
+    let Some(object) = request.as_object_mut() else {
+        return Err(anyhow::anyhow!(
+            "Responses request body must be a JSON object"
+        ));
+    };
+    let mut tools = Vec::<JsonValue>::new();
+    if let Some(declared) = object.get("tools") {
+        let declared = declared
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Responses tools must be an array"))?;
+        for tool in declared {
+            push_unique_json_value(&mut tools, tool);
+        }
+    }
+
+    let mut input_changed = false;
+    if let Some(input) = object.get_mut("input").and_then(JsonValue::as_array_mut) {
+        let original_len = input.len();
+        let mut kept = Vec::with_capacity(original_len);
+        for item in input.drain(..) {
+            if item.get("type").and_then(JsonValue::as_str) == Some("additional_tools") {
+                let additional = item
+                    .get("tools")
+                    .and_then(JsonValue::as_array)
+                    .ok_or_else(|| anyhow::anyhow!("additional_tools.tools must be an array"))?;
+                for tool in additional {
+                    push_unique_json_value(&mut tools, tool);
+                }
+                input_changed = true;
+            } else {
+                kept.push(item);
+            }
+        }
+        *input = kept;
+    }
+
+    let existing_tools = object.get("tools").and_then(JsonValue::as_array);
+    let tools_changed = match existing_tools {
+        Some(existing) => existing != &tools,
+        None => !tools.is_empty(),
+    };
+    if !tools.is_empty() {
+        object.insert("tools".to_string(), JsonValue::Array(tools));
+    }
+    Ok(input_changed || tools_changed)
+}
+
+fn push_unique_json_value(values: &mut Vec<JsonValue>, value: &JsonValue) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.clone());
+    }
+}
+
+/// Inject a deterministic, sub2api-compatible `metadata.user_id` for the
+/// Responses-to-Messages fallback.  It is scoped by the authenticated HaloLake
+/// user and prefers real thread/session headers over `prompt_cache_key`.
+fn ensure_sub2api_session_metadata(
+    metadata: &mut Option<JsonValue>,
+    raw_body: &[u8],
+    headers: &HeaderMap,
+    auth: &RequestAuth,
+) -> bool {
+    let request: JsonValue = match serde_json::from_slice(raw_body) {
+        Ok(request) => request,
+        Err(_) => return false,
+    };
+    if let Some(user_id) = request
+        .get("metadata")
+        .and_then(|value| value.get("user_id"))
+        .and_then(JsonValue::as_str)
+        .filter(|user_id| is_sub2api_metadata_user_id(user_id))
+    {
+        let object = metadata.get_or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
+        if !object.is_object() {
+            *object = JsonValue::Object(serde_json::Map::new());
+        }
+        object
+            .as_object_mut()
+            .expect("metadata is an object")
+            .insert(
+                "user_id".to_string(),
+                JsonValue::String(user_id.to_string()),
+            );
+        return true;
+    }
+    if metadata
+        .as_ref()
+        .and_then(|value| value.get("user_id"))
+        .and_then(JsonValue::as_str)
+        .is_some_and(is_sub2api_metadata_user_id)
+    {
+        return false;
+    }
+    let session_seed = [
+        "X-Codex-Parent-Thread-Id",
+        "Thread-Id",
+        "X-Thread-Id",
+        "Session_id",
+        "Session-Id",
+        "X-Claude-Code-Session-Id",
+    ]
+    .iter()
+    .find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("header:{name}:{value}"))
+    })
+    .or_else(|| {
+        request
+            .get("prompt_cache_key")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("prompt_cache_key:{value}"))
+    });
+    let Some(session_seed) = session_seed else {
+        return false;
+    };
+
+    let user_scope = if auth.user_id.trim().is_empty() {
+        auth.token_id.trim()
+    } else {
+        auth.user_id.trim()
+    };
+    let device_id = sha256_hex(&["halolake-sub2api-device-v1", user_scope]);
+    let session_id =
+        deterministic_session_uuid(&["halolake-sub2api-session-v1", user_scope, &session_seed])
+            .to_string();
+    let user_id = match serde_json::to_string(&serde_json::json!({
+        "device_id": device_id,
+        "account_uuid": "",
+        "session_id": session_id,
+    })) {
+        Ok(user_id) => user_id,
+        Err(_) => return false,
+    };
+
+    if !metadata.as_ref().is_some_and(JsonValue::is_object) {
+        *metadata = Some(JsonValue::Object(serde_json::Map::new()));
+    }
+    let object = metadata
+        .as_mut()
+        .and_then(JsonValue::as_object_mut)
+        .expect("metadata is an object");
+    object.insert("user_id".to_string(), JsonValue::String(user_id));
+    true
+}
+
+fn is_sub2api_metadata_user_id(raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.starts_with('{') {
+        return serde_json::from_str::<JsonValue>(raw)
+            .ok()
+            .is_some_and(|value| {
+                value
+                    .get("device_id")
+                    .and_then(JsonValue::as_str)
+                    .is_some_and(|value| !value.is_empty())
+                    && value
+                        .get("session_id")
+                        .and_then(JsonValue::as_str)
+                        .is_some_and(|value| !value.is_empty())
+            });
+    }
+
+    let Some((device_id, tail)) = raw
+        .strip_prefix("user_")
+        .and_then(|value| value.split_once("_account_"))
+    else {
+        return false;
+    };
+    let Some((_account_uuid, session_id)) = tail.rsplit_once("_session_") else {
+        return false;
+    };
+    device_id.len() == 64
+        && device_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && Uuid::parse_str(session_id).is_ok()
+}
+
+fn sha256_hex(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    data_encoding::HEXLOWER.encode(&hasher.finalize())
+}
+
+fn deterministic_session_uuid(parts: &[&str]) -> Uuid {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // UUIDv8 is reserved for application-defined deterministic layouts.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
 impl RelayService {
     async fn send_claude_json<T: Serialize>(
         &self,
@@ -1440,6 +1820,10 @@ impl RelayService {
         // Common Codex / OpenAI client headers (allowlisted; credentials never forwarded).
         for name in [
             "Session_id",
+            "X-Codex-Parent-Thread-Id",
+            "Thread-Id",
+            "X-Thread-Id",
+            "X-Session-Id",
             "X-Codex-Beta-Features",
             "X-Codex-Turn-Metadata",
             "OpenAI-Organization",
@@ -1794,6 +2178,12 @@ fn normalize_upstream_endpoint_type(raw: &str) -> String {
         }
         "openai-response-compact" | "openai_response_compact" | "responses-compact" => {
             "openai-response-compact".to_string()
+        }
+        "sub2api-response" | "sub2api_response" | "sub2api-responses" => {
+            "sub2api-response".to_string()
+        }
+        "sub2api" | "sub2api-anthropic" | "sub2api_anthropic" | "sub2api-messages" => {
+            "sub2api-anthropic".to_string()
         }
         "xai-response" | "xai_response" => "xai-response".to_string(),
         "codex" | "chatgpt-codex" | "chatgpt_codex" => "codex".to_string(),
@@ -3100,6 +3490,155 @@ mod tests {
     }
 
     #[test]
+    fn rectifies_sub2api_responses_thinking_budget() {
+        let body = Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model":"claude-sonnet-4",
+                "tools":[
+                    {"type":"function","name":"lookup","parameters":{"type":"object"}}
+                ],
+                "input":[
+                    {"type":"additional_tools","tools":[
+                        {"type":"function","name":"lookup","parameters":{"type":"object"}},
+                        {"type":"function","name":"fetch","parameters":{"type":"object"}}
+                    ]},
+                    {"type":"additional_tools","tools":[
+                        {"type":"function","name":"fetch","parameters":{"type":"object"}}
+                    ]},
+                    {"type":"message","role":"user","content":[
+                        {"type":"input_text","text":"hello"}
+                    ]}
+                ],
+                "prompt_cache_key":"stable-cache-key",
+                "reasoning":{"effort":"high"}
+            }))
+            .unwrap(),
+        );
+        let (body, compatibility) = rectify_sub2api_responses_request(body).unwrap();
+        let value: JsonValue = serde_json::from_slice(&body).unwrap();
+        let compatibility = compatibility.expect("reasoning compatibility");
+        assert_eq!(value["max_output_tokens"], 64_000);
+        assert_eq!(value["prompt_cache_key"], "stable-cache-key");
+        assert_eq!(value["tools"].as_array().unwrap().len(), 2);
+        assert_eq!(value["tools"][0]["name"], "lookup");
+        assert_eq!(value["tools"][1]["name"], "fetch");
+        assert_eq!(value["input"].as_array().unwrap().len(), 1);
+        assert_eq!(value["input"][0]["type"], "message");
+        assert_eq!(compatibility.budget_tokens, Some(10_240));
+        assert_eq!(compatibility.max_output_tokens, Some(64_000));
+        assert!(!compatibility.effort_normalized);
+
+        let body = Bytes::from_static(
+            br#"{"input":"hello","max_output_tokens":100,"reasoning":{"effort":"xhigh"}}"#,
+        );
+        let (body, compatibility) = rectify_sub2api_responses_request(body).unwrap();
+        let value: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["max_output_tokens"], 33_792);
+        assert_eq!(compatibility.unwrap().budget_tokens, Some(32_768));
+
+        let body = Bytes::from_static(br#"{"input":"hello","reasoning":{"effort":"minimal"}}"#);
+        let (body, compatibility) = rectify_sub2api_responses_request(body).unwrap();
+        let value: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["reasoning"]["effort"], "low");
+        assert!(value.get("max_output_tokens").is_none());
+        assert!(compatibility.unwrap().effort_normalized);
+
+        let body = Bytes::from_static(br#"{"input":"hello","reasoning":{"effort":"ultra"}}"#);
+        let (body, compatibility) = rectify_sub2api_responses_request(body).unwrap();
+        let value: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["reasoning"]["effort"], "max");
+        assert_eq!(value["max_output_tokens"], 64_000);
+        assert!(compatibility.unwrap().effort_normalized);
+    }
+
+    #[test]
+    fn generates_stable_sub2api_metadata_from_session_or_prompt_cache_key() {
+        let auth = RequestAuth {
+            user_id:  "user-1".to_string(),
+            token_id: "token-1".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("Session_id", HeaderValue::from_static("thread-a"));
+        let first_body = serde_json::to_vec(&serde_json::json!({
+            "input":"hello",
+            "prompt_cache_key":"cache-a"
+        }))
+        .unwrap();
+        let second_body = serde_json::to_vec(&serde_json::json!({
+            "input":"hello again",
+            "prompt_cache_key":"cache-b"
+        }))
+        .unwrap();
+        let mut first = None;
+        let mut second = None;
+        assert!(ensure_sub2api_session_metadata(
+            &mut first,
+            &first_body,
+            &headers,
+            &auth,
+        ));
+        assert!(ensure_sub2api_session_metadata(
+            &mut second,
+            &second_body,
+            &headers,
+            &auth,
+        ));
+        assert_eq!(
+            first, second,
+            "session header must outrank prompt_cache_key"
+        );
+
+        let user_id = first
+            .as_ref()
+            .and_then(|value| value.get("user_id"))
+            .and_then(JsonValue::as_str)
+            .expect("metadata.user_id");
+        assert!(is_sub2api_metadata_user_id(user_id));
+        let parsed: JsonValue = serde_json::from_str(user_id).unwrap();
+        assert_eq!(parsed["device_id"].as_str().unwrap().len(), 64);
+        assert!(Uuid::parse_str(parsed["session_id"].as_str().unwrap()).is_ok());
+
+        let mut by_prompt_cache_key = None;
+        assert!(ensure_sub2api_session_metadata(
+            &mut by_prompt_cache_key,
+            &first_body,
+            &HeaderMap::new(),
+            &auth,
+        ));
+        assert_ne!(first, by_prompt_cache_key);
+
+        let mut existing = first.clone();
+        assert!(!ensure_sub2api_session_metadata(
+            &mut existing,
+            &second_body,
+            &HeaderMap::new(),
+            &auth,
+        ));
+        assert_eq!(existing, first);
+
+        let existing_user_id = first
+            .as_ref()
+            .and_then(|value| value.get("user_id"))
+            .and_then(JsonValue::as_str)
+            .unwrap()
+            .to_string();
+        let request_with_metadata = serde_json::to_vec(&serde_json::json!({
+            "input": "hello",
+            "prompt_cache_key": "different-key",
+            "metadata": {"user_id": existing_user_id}
+        }))
+        .unwrap();
+        let mut preserved = None;
+        assert!(ensure_sub2api_session_metadata(
+            &mut preserved,
+            &request_with_metadata,
+            &HeaderMap::new(),
+            &auth,
+        ));
+        assert_eq!(preserved, first);
+    }
+
+    #[test]
     fn hyper_request_framing_is_rebuilt_from_the_actual_body() {
         let mut fixed = Request::builder()
             .header(header::CONTENT_LENGTH, "999")
@@ -3444,6 +3983,14 @@ mod tests {
     fn codex_endpoint_targets_chatgpt_backend_responses() {
         assert_eq!(normalize_upstream_endpoint_type("codex"), "codex");
         assert_eq!(normalize_upstream_endpoint_type("chatgpt_codex"), "codex");
+        assert_eq!(
+            normalize_upstream_endpoint_type("sub2api_response"),
+            "sub2api-response"
+        );
+        assert_eq!(
+            normalize_upstream_endpoint_type("sub2api"),
+            "sub2api-anthropic"
+        );
         let body = serde_json::json!({
             "model": "requested-model",
             "messages": [{"role": "user", "content": "hello"}],
@@ -3899,6 +4446,7 @@ mod tests {
         serde_json::to_vec(&serde_json::json!({
             "model": "gpt-5",
             "instructions": "be precise",
+            "prompt_cache_key": "integration-session",
             "input": [
                 {"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}
             ],
@@ -3931,6 +4479,10 @@ mod tests {
             let claude_request: JsonValue =
                 serde_json::from_slice(&body).expect("upstream body should be Claude JSON");
             assert_eq!(claude_request["model"], "claude-sonnet-4");
+            let metadata_user_id = claude_request["metadata"]["user_id"]
+                .as_str()
+                .expect("fallback bridge should carry metadata.user_id");
+            assert!(is_sub2api_metadata_user_id(metadata_user_id));
             // Namespace child flattened to collaboration__spawn_agent.
             let tools = claude_request["tools"].as_array().expect("tools array");
             let tool_names: Vec<&str> = tools
@@ -3971,7 +4523,9 @@ mod tests {
         });
 
         let relay = test_relay_service();
-        let cx = test_full_context(test_route_context(format!("http://{address}")));
+        let mut route = test_route_context(format!("http://{address}"));
+        route.upstream_endpoint_type = FastStr::new("sub2api-anthropic");
+        let cx = test_full_context(route);
         let request = OpenAiPassthroughRelayRequest {
             path: "/v1/responses".to_string(),
             body: Bytes::from(integration_responses_request(false)),
@@ -4021,6 +4575,75 @@ mod tests {
         assert_eq!(usage["cache_creation_input_tokens"], 2);
         assert_eq!(usage["output_tokens"], 5);
         assert_eq!(usage["total_tokens"], 20);
+    }
+
+    #[monoio::test_all(enable_timer = true)]
+    async fn responses_passthrough_to_sub2api_preserves_responses_body() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock sub2api responses");
+        let address = listener.local_addr().expect("mock sub2api address");
+
+        let server = monoio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let (request_line, body) = read_http_request_with_body(&mut stream).await;
+            assert!(request_line.starts_with("POST /v1/responses HTTP/1.1"));
+            let request: JsonValue = serde_json::from_slice(&body).expect("Responses JSON");
+            assert_eq!(request["model"], "claude-sonnet-4");
+            assert_eq!(request["prompt_cache_key"], "direct-session");
+            assert_eq!(request["reasoning"]["effort"], "high");
+            assert_eq!(request["max_output_tokens"], 64_000);
+            assert_eq!(request["input"], "hello");
+
+            let response = serde_json::json!({
+                "id":"resp_direct",
+                "object":"response",
+                "model":"claude-sonnet-4",
+                "status":"completed",
+                "output":[],
+                "usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}
+            });
+            let body = serde_json::to_vec(&response).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(head.into_bytes())
+                .await
+                .0
+                .expect("write head");
+            stream.write_all(body).await.0.expect("write body");
+        });
+
+        let relay = test_relay_service();
+        let mut route = test_route_context(format!("http://{address}"));
+        route.upstream_endpoint_type = FastStr::new("openai-response");
+        let cx = test_full_context(route);
+        let request = OpenAiPassthroughRelayRequest {
+            path: "/v1/responses".to_string(),
+            body: Bytes::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "model":"gpt-5",
+                    "input":"hello",
+                    "prompt_cache_key":"direct-session",
+                    "reasoning":{"effort":"high"},
+                    "stream":false
+                }))
+                .unwrap(),
+            ),
+            downstream_headers: HeaderMap::new(),
+            cx,
+        };
+        let response = monoio::time::timeout(Duration::from_secs(5), relay.call(request))
+            .await
+            .expect("relay call should not time out")
+            .expect("infallible");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = collect_response_body(response).await;
+        server.await;
+        let value: JsonValue = serde_json::from_slice(&payload).expect("Responses JSON");
+        assert_eq!(value["id"], "resp_direct");
+        assert_eq!(value["object"], "response");
     }
 
     #[monoio::test_all(enable_timer = true)]
@@ -4298,9 +4921,9 @@ data: {"type":"message_stop"}
         let event_types: Vec<&str> = events.iter().map(|(t, _)| t.as_str()).collect();
         // finish() must still emit a terminal event even without message_stop.
         assert!(
-            event_types
-                .iter()
-                .any(|t| *t == "response.completed" || *t == "response.incomplete"),
+            event_types.iter().any(|t| {
+                *t == "response.completed" || *t == "response.incomplete" || *t == "response.failed"
+            }),
             "missing terminal event after EOF: {event_types:?}"
         );
     }
@@ -4342,6 +4965,7 @@ data: {"type":"message_stop"}
             max_tokens:     1024,
             system:         None,
             cache_control:  None,
+            metadata:       None,
             messages:       vec![claude::Message {
                 role:    "user".to_string(),
                 content: vec![

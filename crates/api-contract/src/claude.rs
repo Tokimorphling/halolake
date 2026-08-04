@@ -12,6 +12,11 @@ pub struct MessagesRequest {
     /// can pass through without coupling the API contract to one TTL shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_control:  Option<JsonValue>,
+    /// Optional request metadata.  The Responses-to-Messages bridge uses
+    /// `user_id` here to carry a stable sub2api session identity when the
+    /// upstream is a compatible gateway rather than api.anthropic.com.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata:       Option<JsonValue>,
     pub messages:       Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature:    Option<f32>,
