@@ -9,10 +9,10 @@ use halolake_control_plane::{
     PatchChannelModelStateRequest, PatchChannelProbeMetricsRequest,
     PublishManagementSnapshotRequest, RegisterUserRequest, RegisteredUser, RevealChannelKeyRequest,
     RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey, RotateChannelCredentialRequest,
-    SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageRequest,
-    SnapshotPublished, SnapshotPublisher, UpdateChannelRequest, UpdateChannelsByTagRequest,
-    UpdateTokenRequest, UpdateUserAccessTokenRequest, UpdateUserRequest, UsageSettlement,
-    ValidateUserAccessTokenRequest,
+    SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageIdempotentRequest,
+    SettleUsageRequest, SnapshotPublished, SnapshotPublisher, UpdateChannelRequest,
+    UpdateChannelsByTagRequest, UpdateTokenRequest, UpdateUserAccessTokenRequest,
+    UpdateUserRequest, UsageSettlement, ValidateUserAccessTokenRequest,
 };
 use halolake_domain::{ChannelRecord, PageResult, TokenRecord, UserRecord};
 use halolake_router_core::ModelMapping;
@@ -23,7 +23,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
@@ -125,9 +125,10 @@ impl SqliteManagementStore {
             load_data(&pool).await?
         };
 
+        let usage_settlement_keys = load_usage_settlement_keys_sqlite(&pool).await?;
         Ok(Self {
             pool,
-            memory: MemoryManagementStore::new(data),
+            memory: MemoryManagementStore::with_usage_settlement_keys(data, usage_settlement_keys),
             write_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -305,7 +306,7 @@ impl Service<SettleUsageRequest> for SqliteManagementStore {
     async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
         let _guard = self.write_lock.lock().await;
         let plan = self.memory.plan_usage_settlement(req)?;
-        persist_usage_settlement_sqlite(&self.pool, plan.settlement()).await?;
+        persist_usage_settlement_sqlite(&self.pool, plan.settlement(), None).await?;
         self.memory.apply_planned_usage_settlement(plan)
     }
 }
@@ -317,7 +318,7 @@ impl Service<SettleUsageRequest> for MySqlManagementStore {
     async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
         let _guard = self.write_lock.lock().await;
         let plan = self.memory.plan_usage_settlement(req)?;
-        persist_usage_settlement_mysql(&self.pool, plan.settlement()).await?;
+        persist_usage_settlement_mysql(&self.pool, plan.settlement(), None).await?;
         self.memory.apply_planned_usage_settlement(plan)
     }
 }
@@ -329,9 +330,110 @@ impl Service<SettleUsageRequest> for PostgresManagementStore {
     async fn call(&self, req: SettleUsageRequest) -> Result<Self::Response, Self::Error> {
         let _guard = self.write_lock.lock().await;
         let plan = self.memory.plan_usage_settlement(req)?;
-        match persist_usage_settlement_pg(&self.pool, plan.settlement(), plan.base_version()).await
+        match persist_usage_settlement_pg(&self.pool, plan.settlement(), plan.base_version(), None)
+            .await
         {
             Ok(()) => self.memory.apply_planned_usage_settlement(plan),
+            Err(err @ ManagementError::StaleManagementVersion { .. }) => {
+                self.refresh_from_database().await?;
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+impl Service<SettleUsageIdempotentRequest> for ManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageIdempotentRequest) -> Result<Self::Response, Self::Error> {
+        match self {
+            Self::Memory(store) => store.call(req).await,
+            Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
+        }
+    }
+}
+
+impl Service<SettleUsageIdempotentRequest> for SqliteManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageIdempotentRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        if usage_settlement_exists_sqlite(&self.pool, &req.settlement_key).await? {
+            self.memory
+                .remember_usage_settlement_key(req.settlement_key)?;
+            return Ok(UsageSettlement::default());
+        }
+        let key = req.settlement_key;
+        let Some(plan) = self
+            .memory
+            .plan_idempotent_usage_settlement(&key, req.request)?
+        else {
+            return Ok(UsageSettlement::default());
+        };
+        persist_usage_settlement_sqlite(&self.pool, plan.settlement(), Some(&key)).await?;
+        self.memory
+            .apply_planned_idempotent_usage_settlement(key, plan)
+    }
+}
+
+impl Service<SettleUsageIdempotentRequest> for MySqlManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageIdempotentRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        if usage_settlement_exists_mysql(&self.pool, &req.settlement_key).await? {
+            self.memory
+                .remember_usage_settlement_key(req.settlement_key)?;
+            return Ok(UsageSettlement::default());
+        }
+        let key = req.settlement_key;
+        let Some(plan) = self
+            .memory
+            .plan_idempotent_usage_settlement(&key, req.request)?
+        else {
+            return Ok(UsageSettlement::default());
+        };
+        persist_usage_settlement_mysql(&self.pool, plan.settlement(), Some(&key)).await?;
+        self.memory
+            .apply_planned_idempotent_usage_settlement(key, plan)
+    }
+}
+
+impl Service<SettleUsageIdempotentRequest> for PostgresManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageIdempotentRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        if usage_settlement_exists_pg(&self.pool, &req.settlement_key).await? {
+            self.memory
+                .remember_usage_settlement_key(req.settlement_key)?;
+            return Ok(UsageSettlement::default());
+        }
+        let key = req.settlement_key;
+        let Some(plan) = self
+            .memory
+            .plan_idempotent_usage_settlement(&key, req.request)?
+        else {
+            return Ok(UsageSettlement::default());
+        };
+        match persist_usage_settlement_pg(
+            &self.pool,
+            plan.settlement(),
+            plan.base_version(),
+            Some(&key),
+        )
+        .await
+        {
+            Ok(()) => self
+                .memory
+                .apply_planned_idempotent_usage_settlement(key, plan),
             Err(err @ ManagementError::StaleManagementVersion { .. }) => {
                 self.refresh_from_database().await?;
                 Err(err)
@@ -466,9 +568,10 @@ impl MySqlManagementStore {
             load_data_mysql(&pool).await?
         };
 
+        let usage_settlement_keys = load_usage_settlement_keys_mysql(&pool).await?;
         Ok(Self {
             pool,
-            memory: MemoryManagementStore::new(data),
+            memory: MemoryManagementStore::with_usage_settlement_keys(data, usage_settlement_keys),
             write_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -506,9 +609,10 @@ impl PostgresManagementStore {
 
         let data = load_or_seed_pg(&pool, seed).await?;
 
+        let usage_settlement_keys = load_usage_settlement_keys_pg(&pool).await?;
         Ok(Self {
             pool,
-            memory: MemoryManagementStore::new(data),
+            memory: MemoryManagementStore::with_usage_settlement_keys(data, usage_settlement_keys),
             write_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -534,13 +638,18 @@ impl PostgresManagementStore {
     }
 
     async fn refresh_from_database(&self) -> Result<(), ManagementError> {
-        self.memory.replace_data(load_data_pg(&self.pool).await?)
+        self.memory.replace_data(load_data_pg(&self.pool).await?)?;
+        for key in load_usage_settlement_keys_pg(&self.pool).await? {
+            self.memory.remember_usage_settlement_key(key)?;
+        }
+        Ok(())
     }
 }
 
 async fn migrate(pool: &SqlitePool) -> Result<(), ManagementError> {
     for stmt in [
         "CREATE TABLE IF NOT EXISTS control_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS usage_settlements (request_id TEXT PRIMARY KEY)",
         "CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -623,6 +732,7 @@ async fn migrate(pool: &SqlitePool) -> Result<(), ManagementError> {
 async fn migrate_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
     for stmt in [
         "CREATE TABLE IF NOT EXISTS control_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS usage_settlements (request_id VARCHAR(200) PRIMARY KEY)",
         "CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -700,6 +810,79 @@ async fn migrate_mysql(pool: &MySqlPool) -> Result<(), ManagementError> {
         .execute(pool)
         .await;
     Ok(())
+}
+
+async fn load_usage_settlement_keys_sqlite(
+    pool: &SqlitePool,
+) -> Result<HashSet<String>, ManagementError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT request_id FROM usage_settlements")
+            .fetch_all(pool)
+            .await
+            .map_err(storage_err)?
+            .into_iter()
+            .collect(),
+    )
+}
+
+async fn load_usage_settlement_keys_mysql(
+    pool: &MySqlPool,
+) -> Result<HashSet<String>, ManagementError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT request_id FROM usage_settlements")
+            .fetch_all(pool)
+            .await
+            .map_err(storage_err)?
+            .into_iter()
+            .collect(),
+    )
+}
+
+async fn load_usage_settlement_keys_pg(pool: &PgPool) -> Result<HashSet<String>, ManagementError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT request_id FROM usage_settlements")
+            .fetch_all(pool)
+            .await
+            .map_err(storage_err)?
+            .into_iter()
+            .collect(),
+    )
+}
+
+async fn usage_settlement_exists_sqlite(
+    pool: &SqlitePool,
+    key: &str,
+) -> Result<bool, ManagementError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM usage_settlements WHERE request_id = ?)",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .map_err(storage_err)
+}
+
+async fn usage_settlement_exists_mysql(
+    pool: &MySqlPool,
+    key: &str,
+) -> Result<bool, ManagementError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM usage_settlements WHERE request_id = ?)",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .map_err(storage_err)
+}
+
+async fn usage_settlement_exists_pg(pool: &PgPool, key: &str) -> Result<bool, ManagementError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM usage_settlements WHERE request_id = $1)",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .map_err(storage_err)
 }
 
 async fn is_empty(pool: &SqlitePool) -> Result<bool, ManagementError> {
@@ -1006,11 +1189,19 @@ async fn load_data_mysql(pool: &MySqlPool) -> Result<ManagementData, ManagementE
 async fn persist_usage_settlement_sqlite(
     pool: &SqlitePool,
     settlement: &UsageSettlement,
+    settlement_key: Option<&str>,
 ) -> Result<(), ManagementError> {
     let Some(version) = settlement.version else {
         return Ok(());
     };
     let mut tx = pool.begin().await.map_err(storage_err)?;
+    if let Some(key) = settlement_key {
+        sqlx::query("INSERT INTO usage_settlements (request_id) VALUES (?)")
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
     sqlx::query(
         "INSERT INTO control_meta (key, value) VALUES ('version', ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1057,11 +1248,19 @@ async fn persist_usage_settlement_sqlite(
 async fn persist_usage_settlement_mysql(
     pool: &MySqlPool,
     settlement: &UsageSettlement,
+    settlement_key: Option<&str>,
 ) -> Result<(), ManagementError> {
     let Some(version) = settlement.version else {
         return Ok(());
     };
     let mut tx = pool.begin().await.map_err(storage_err)?;
+    if let Some(key) = settlement_key {
+        sqlx::query("INSERT INTO usage_settlements (request_id) VALUES (?)")
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
     sqlx::query(
         "INSERT INTO control_meta (`key`, value) VALUES ('version', ?)
          ON DUPLICATE KEY UPDATE value = VALUES(value)",
@@ -1109,12 +1308,20 @@ async fn persist_usage_settlement_pg(
     pool: &PgPool,
     settlement: &UsageSettlement,
     expected_version: u64,
+    settlement_key: Option<&str>,
 ) -> Result<(), ManagementError> {
     let Some(version) = settlement.version else {
         return Ok(());
     };
     let mut tx = pool.begin().await.map_err(storage_err)?;
     lock_expected_management_version_pg(&mut tx, expected_version).await?;
+    if let Some(key) = settlement_key {
+        sqlx::query("INSERT INTO usage_settlements (request_id) VALUES ($1)")
+            .bind(key)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_err)?;
+    }
     sqlx::query(
         "INSERT INTO control_meta (key, value) VALUES ('version', $1)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
@@ -1787,6 +1994,7 @@ pub fn storage_err(err: impl std::fmt::Display) -> ManagementError {
 async fn migrate_pg(pool: &PgPool) -> Result<(), ManagementError> {
     for stmt in [
         "CREATE TABLE IF NOT EXISTS control_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS usage_settlements (request_id TEXT PRIMARY KEY)",
         "CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -2470,7 +2678,7 @@ mod tests {
             vec![test_channel(1), test_channel(2)],
             Vec::new(),
         );
-        let store = ManagementStore::sqlite(&url, seed)
+        let store = ManagementStore::sqlite(&url, seed.clone())
             .await
             .expect("sqlite management store");
         let ManagementStore::Sqlite(sqlite) = &store else {
@@ -2493,8 +2701,9 @@ mod tests {
                 .expect("create update guard");
         }
 
-        let settlement = store
-            .call(SettleUsageRequest {
+        let request = SettleUsageIdempotentRequest {
+            settlement_key: "req-1".into(),
+            request:        SettleUsageRequest {
                 events:  vec![UsageEvent {
                     request_id:            "req-1".to_string(),
                     user_id:               "1".to_string(),
@@ -2520,7 +2729,10 @@ mod tests {
                     created_at_unix_ms:    1,
                 }],
                 pricing: UsagePricing::default(),
-            })
+            },
+        };
+        let settlement = store
+            .call(request.clone())
             .await
             .expect("settle usage without touching unrelated rows");
         assert_eq!(settlement.quota, 15);
@@ -2544,7 +2756,27 @@ mod tests {
         assert_eq!(user_quota, 985);
         assert_eq!(unrelated_quota, 1_000);
 
+        let duplicate = store
+            .call(request.clone())
+            .await
+            .expect("same-process duplicate settlement");
+        assert_eq!(duplicate, UsageSettlement::default());
+
         sqlite.pool.close().await;
+        drop(store);
+
+        let reopened = ManagementStore::sqlite(&url, seed)
+            .await
+            .expect("reopen sqlite management store");
+        let duplicate = reopened
+            .call(request)
+            .await
+            .expect("post-restart duplicate settlement");
+        assert_eq!(duplicate, UsageSettlement::default());
+        assert_eq!(reopened.current_data().unwrap().users[0].quota, 985);
+        if let ManagementStore::Sqlite(sqlite) = &reopened {
+            sqlite.pool.close().await;
+        }
         let _ = std::fs::remove_file(path);
     }
 
@@ -2594,14 +2826,24 @@ mod tests {
 
         assert!(
             store
-                .call(SettleUsageRequest {
-                    events:  vec![test_usage_event("rollback-settlement")],
-                    pricing: UsagePricing::default(),
+                .call(SettleUsageIdempotentRequest {
+                    settlement_key: "rollback-settlement".into(),
+                    request:        SettleUsageRequest {
+                        events:  vec![test_usage_event("rollback-settlement")],
+                        pricing: UsagePricing::default(),
+                    },
                 })
                 .await
                 .is_err()
         );
         assert_management_seed_unchanged(&store);
+        let ledger_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM usage_settlements WHERE request_id = 'rollback-settlement'",
+        )
+        .fetch_one(&sqlite.pool)
+        .await
+        .expect("read settlement ledger");
+        assert_eq!(ledger_rows, 0);
         sqlx::query("DROP TRIGGER reject_user_quota")
             .execute(&sqlite.pool)
             .await

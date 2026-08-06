@@ -1,0 +1,50 @@
+version = 1
+
+[server]
+listen = "127.0.0.1:9090"
+
+[internal]
+# Use the same value in tokiame-hub.toml. In production prefer the
+# HALOLAKE_INTERNAL_SECRET environment variable/bootstrap credentials file.
+secret = "replace-with-a-long-random-secret"
+
+[system]
+name = "Halolake"
+
+[web]
+enabled = true
+default_dist = "web/new-api/default/dist"
+theme = "default"
+
+[storage]
+backend = "sqlite"
+sqlite_url = "sqlite://target/halolake-media.db?mode=rwc"
+
+[media]
+enabled = true
+hub_base_url = "http://127.0.0.1:9091"
+heartbeat_interval_seconds = 15
+artifact_prefix = "halolake-media"
+max_input_bytes = 2147483648
+max_output_bytes = 5368709120
+# Enable only behind a trusted reverse proxy that overwrites X-Forwarded-For.
+trust_x_forwarded_for = false
+
+[[media.workflows]]
+id = "sdxl-txt2img"
+version = "v1"
+model = "comfy-sdxl"
+quota = 50000
+description = "SDXL text-to-image"
+output_types = ["image/png", "image/jpeg", "image/webp"]
+
+[object_storage.s3]
+bucket = "halolake-private"
+region = "us-east-1"
+# MinIO example. Omit endpoint_url for AWS S3; use the account endpoint for R2.
+endpoint_url = "http://127.0.0.1:9000"
+force_path_style = true
+presign_ttl_seconds = 900
+access_key_id_env = "HALOLAKE_S3_ACCESS_KEY_ID"
+secret_access_key_env = "HALOLAKE_S3_SECRET_ACCESS_KEY"
+

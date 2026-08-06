@@ -445,6 +445,13 @@ pub struct SettleUsageRequest {
     pub pricing: UsagePricing,
 }
 
+#[derive(Debug, Clone)]
+pub struct SettleUsageIdempotentRequest {
+    /// Stable operation key stored atomically with the quota mutation.
+    pub settlement_key: String,
+    pub request:        SettleUsageRequest,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageSettlement {
     /// Snapshot version produced by this mutation. `None` means the request
@@ -817,14 +824,26 @@ impl ManagementIdentityIndexes {
 
 #[derive(Debug)]
 struct MemoryManagementState {
-    data:     ManagementData,
-    identity: ManagementIdentityIndexes,
+    data:                  ManagementData,
+    identity:              ManagementIdentityIndexes,
+    usage_settlement_keys: HashSet<String>,
 }
 
 impl MemoryManagementState {
     fn new(data: ManagementData) -> Self {
+        Self::with_usage_settlement_keys(data, HashSet::new())
+    }
+
+    fn with_usage_settlement_keys(
+        data: ManagementData,
+        usage_settlement_keys: HashSet<String>,
+    ) -> Self {
         let identity = ManagementIdentityIndexes::new(&data);
-        Self { data, identity }
+        Self {
+            data,
+            identity,
+            usage_settlement_keys,
+        }
     }
 
     fn rebuild_identity(&mut self) {
@@ -844,6 +863,17 @@ impl MemoryManagementStore {
         }
     }
 
+    pub fn with_usage_settlement_keys(
+        data: ManagementData,
+        usage_settlement_keys: HashSet<String>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(
+                MemoryManagementState::with_usage_settlement_keys(data, usage_settlement_keys),
+            )),
+        }
+    }
+
     pub fn current_data(&self) -> Result<ManagementData, ManagementError> {
         self.inner
             .read()
@@ -855,11 +885,12 @@ impl MemoryManagementStore {
     /// SQL-backed stores use this only after the candidate state commits, so
     /// failed persistence never becomes visible to readers or later writes.
     pub fn replace_data(&self, data: ManagementData) -> Result<(), ManagementError> {
-        let replacement = MemoryManagementState::new(data);
-        *self
+        let mut state = self
             .inner
             .write()
-            .map_err(|_| ManagementError::Poisoned("management"))? = replacement;
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        state.data = data;
+        state.rebuild_identity();
         Ok(())
     }
 
@@ -892,6 +923,26 @@ impl MemoryManagementStore {
         Ok(plan_usage_settlement(&state.data, &state.identity, req))
     }
 
+    pub fn plan_idempotent_usage_settlement(
+        &self,
+        settlement_key: &str,
+        req: SettleUsageRequest,
+    ) -> Result<Option<PlannedUsageSettlement>, ManagementError> {
+        validate_usage_settlement_key(settlement_key)?;
+        let state = self
+            .inner
+            .read()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        if state.usage_settlement_keys.contains(settlement_key) {
+            return Ok(None);
+        }
+        Ok(Some(plan_usage_settlement(
+            &state.data,
+            &state.identity,
+            req,
+        )))
+    }
+
     /// Atomically publishes a previously persisted sparse usage plan.
     pub fn apply_planned_usage_settlement(
         &self,
@@ -902,6 +953,37 @@ impl MemoryManagementStore {
             .write()
             .map_err(|_| ManagementError::Poisoned("management"))?;
         apply_usage_plan(&mut state.data, plan)
+    }
+
+    pub fn apply_planned_idempotent_usage_settlement(
+        &self,
+        settlement_key: String,
+        plan: PlannedUsageSettlement,
+    ) -> Result<UsageSettlement, ManagementError> {
+        validate_usage_settlement_key(&settlement_key)?;
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        if state.usage_settlement_keys.contains(&settlement_key) {
+            return Ok(UsageSettlement::default());
+        }
+        let settlement = apply_usage_plan(&mut state.data, plan)?;
+        state.usage_settlement_keys.insert(settlement_key);
+        Ok(settlement)
+    }
+
+    pub fn remember_usage_settlement_key(
+        &self,
+        settlement_key: String,
+    ) -> Result<(), ManagementError> {
+        validate_usage_settlement_key(&settlement_key)?;
+        self.inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))?
+            .usage_settlement_keys
+            .insert(settlement_key);
+        Ok(())
     }
 
     /// Advances the snapshot version without any other change. Options-derived
@@ -1412,6 +1494,15 @@ impl Service<AdjustUserQuotaRequest> for MemoryManagementStore {
     }
 }
 
+fn validate_usage_settlement_key(key: &str) -> Result<(), ManagementError> {
+    if key.trim().is_empty() || key.len() > 200 {
+        return Err(ManagementError::InvalidRequest(
+            "usage settlement key must contain 1 to 200 bytes",
+        ));
+    }
+    Ok(())
+}
+
 fn plan_usage_settlement(
     data: &ManagementData,
     identity: &ManagementIdentityIndexes,
@@ -1628,6 +1719,26 @@ impl Service<SettleUsageRequest> for MemoryManagementStore {
             .map_err(|_| ManagementError::Poisoned("management"))?;
         let plan = plan_usage_settlement(&state.data, &state.identity, req);
         apply_usage_plan(&mut state.data, plan)
+    }
+}
+
+impl Service<SettleUsageIdempotentRequest> for MemoryManagementStore {
+    type Response = UsageSettlement;
+    type Error = ManagementError;
+
+    async fn call(&self, req: SettleUsageIdempotentRequest) -> Result<Self::Response, Self::Error> {
+        validate_usage_settlement_key(&req.settlement_key)?;
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        if state.usage_settlement_keys.contains(&req.settlement_key) {
+            return Ok(UsageSettlement::default());
+        }
+        let plan = plan_usage_settlement(&state.data, &state.identity, req.request);
+        let settlement = apply_usage_plan(&mut state.data, plan)?;
+        state.usage_settlement_keys.insert(req.settlement_key);
+        Ok(settlement)
     }
 }
 
@@ -3488,6 +3599,12 @@ fn usage_event_quota(
     if event.status != UsageStatus::Success {
         return 0;
     }
+    // Non-token workloads (for example ComfyUI image/video jobs) report a
+    // fixed, pre-authorized quota directly. Token-based pricing remains the
+    // fallback for ordinary LLM usage events.
+    if let Some(quota) = event.quota {
+        return quota.max(0);
+    }
     let total_tokens = event.observed_tokens();
     if total_tokens == 0 {
         return 0;
@@ -3749,6 +3866,50 @@ mod tests {
             upstream_request_id:   String::new(),
             created_at_unix_ms:    1,
         }
+    }
+
+    #[test]
+    fn explicit_quota_settles_tokenless_media_usage() {
+        block_on(async {
+            let mut root = user(1, "root", ROLE_ROOT_USER);
+            root.quota = 1_000;
+            let access = token(1, 1, "media-key");
+            let channel = sample_channel(1, "tokiame", "default");
+            let store = MemoryManagementStore::new(ManagementData::new(
+                1,
+                vec![root],
+                vec![access],
+                vec![channel],
+                Vec::new(),
+            ));
+            let mut event = usage_event("media:job-1", "1", "1");
+            event.prompt_tokens = None;
+            event.total_tokens = None;
+            event.quota = Some(77);
+
+            let request = SettleUsageIdempotentRequest {
+                settlement_key: "media:job-1".into(),
+                request:        SettleUsageRequest {
+                    events:  vec![event],
+                    pricing: UsagePricing::default(),
+                },
+            };
+            let settlement = store
+                .call(request.clone())
+                .await
+                .expect("settle explicit media quota");
+            let duplicate = store
+                .call(request)
+                .await
+                .expect("duplicate media settlement is idempotent");
+            let data = store.current_data().expect("management data");
+
+            assert_eq!(settlement.quota, 77);
+            assert_eq!(duplicate, UsageSettlement::default());
+            assert_eq!(data.users[0].quota, 923);
+            assert_eq!(data.tokens[0].remain_quota, 923);
+            assert_eq!(data.channels[0].used_quota, 77);
+        });
     }
 
     #[test]

@@ -1,0 +1,44 @@
+work_dir = "./tokiame-work"
+
+[gateway]
+# Use wss:// in production. Only this outbound connection is required through NAT.
+url = "ws://127.0.0.1:9091/v1/tokiame/connect"
+reconnect_max_seconds = 30
+
+[worker]
+# This one-time token is returned by POST /api/tokiame/workers.
+# TOKIAME_WORKER_TOKEN overrides the value without writing it to disk.
+token = ""
+namespace = "home-gpu-01"
+node_name = "comfyui-01"
+concurrency = 1
+
+[worker.labels]
+gpu = "rtx-4090"
+location = "home"
+
+[comfyui]
+base_url = "http://127.0.0.1:8188"
+poll_interval_ms = 1000
+max_output_bytes = 5368709120
+# Faster than /upload/image when agent and ComfyUI share the same filesystem.
+# input_dir = "/opt/ComfyUI/input"
+
+[state]
+# Empty defaults to tokiame-agent.db next to this config file.
+sqlite_url = ""
+
+[[workflows]]
+id = "sdxl-txt2img"
+version = "v1"
+model = "comfy-sdxl"
+file = "./tokiame-workflows/sdxl-txt2img-api.json"
+output_types = ["image/png"]
+
+[workflows.parameters]
+prompt = "/6/inputs/text"
+negative_prompt = "/5/inputs/text"
+seed = "/3/inputs/seed"
+steps = "/3/inputs/steps"
+width = "/7/inputs/width"
+height = "/7/inputs/height"

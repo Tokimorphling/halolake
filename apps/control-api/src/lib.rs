@@ -48,6 +48,7 @@ mod config;
 mod control_api_ext;
 mod http_auth;
 mod http_response;
+mod media;
 #[cfg(feature = "admin-extras")]
 mod model_sync;
 mod options_util;
@@ -82,6 +83,8 @@ pub use config::{
     StorageBackend, StorageConfig, SystemConfig, WebConfig,
 };
 pub(crate) use config::{ensure_supported_storage_backend, storage_backend_name};
+use halolake_media::MediaStore;
+use halolake_object_store::ObjectStore;
 pub(crate) use http_auth::{current_user, require_role};
 pub(crate) use http_response::{
     api_error_status, api_ok, api_ok_message, api_success, management_error,
@@ -97,6 +100,7 @@ pub(crate) use snapshot_publish::{
 use storage::{ManagementStore, OptionStore, UsageStore};
 use system_instance::{SystemInstanceStore, spawn_system_instance_reporter};
 use system_task::SystemTaskStore;
+use tokio::sync::broadcast;
 
 pub(crate) const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
 pub(crate) const SNAPSHOT_VERSION_HEADER: &str = "x-halolake-snapshot-version";
@@ -146,6 +150,11 @@ pub(crate) struct AppState {
     pub(crate) start_time_unix:  i64,
     pub(crate) system_name:      Arc<str>,
     pub(crate) storage_backend:  StorageBackend,
+    pub(crate) media:            MediaStore,
+    pub(crate) object_store:     ObjectStore,
+    pub(crate) media_config:     Arc<config::MediaConfig>,
+    pub(crate) media_events:     broadcast::Sender<halolake_media::MediaJobRecord>,
+    pub(crate) media_http:       reqwest::Client,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -272,6 +281,7 @@ pub(crate) struct ChannelBatchTagPayload {
 impl ControlApi {
     pub async fn try_from_config(config: ControlApiConfig) -> Result<Self> {
         ensure_supported_storage_backend(&config.storage)?;
+        config.media.validate()?;
         let start_time_unix = now_unix();
 
         // Generate missing session/internal secrets and persist to credentials file.
@@ -353,6 +363,49 @@ impl ControlApi {
         let system_instances: SystemInstanceStore =
             store_open::open_from_config(&config.storage).await?;
         let sessions: SessionStore = store_open::open_from_config(&config.storage).await?;
+        let media = match config.storage.backend {
+            StorageBackend::Memory => MediaStore::memory(),
+            StorageBackend::Sqlite => MediaStore::sqlite(
+                config
+                    .storage
+                    .sqlite_url
+                    .as_deref()
+                    .context("storage.sqlite_url is required for media state")?,
+            )
+            .await
+            .context("open SQLite media state")?,
+            StorageBackend::MySql => MediaStore::mysql(&config::normalize_mysql_url(
+                config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required for media state")?,
+            ))
+            .await
+            .context("open MySQL media state")?,
+            StorageBackend::Postgres => MediaStore::postgres(
+                config
+                    .storage
+                    .database_url
+                    .as_deref()
+                    .context("storage.database_url is required for media state")?,
+            )
+            .await
+            .context("open PostgreSQL media state")?,
+        };
+        if config.media.enabled && config.object_storage.s3.is_none() {
+            anyhow::bail!("media.enabled requires [object_storage.s3]");
+        }
+        let object_store = ObjectStore::from_s3_config(config.object_storage.s3.clone())
+            .await
+            .context("initialize media object storage")?;
+        let media_config = Arc::new(config.media.clone());
+        let (media_events, _) = broadcast::channel(256);
+        let media_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(15))
+            .build()
+            .context("build Tokiame control client")?;
         let session_secret = secrets.session_secret.clone().unwrap_or_default();
         if session_secret.is_empty() {
             warn!(
@@ -410,6 +463,11 @@ impl ControlApi {
                 start_time_unix,
                 system_name,
                 storage_backend: config.storage.backend,
+                media,
+                object_store,
+                media_config,
+                media_events,
+                media_http,
             },
         })
     }
@@ -620,6 +678,7 @@ impl ControlApi {
                 "/internal/gateway/system-instance",
                 post(gateway_system_instance),
             );
+        let router = media::mount(router);
         #[cfg(feature = "admin-extras")]
         let router = admin_extras::mount(router);
         #[cfg(feature = "admin-extras")]
@@ -642,10 +701,14 @@ pub async fn serve(addr: SocketAddr, api: ControlApi) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .context("bind control-api listener")?;
-    axum::serve(listener, api.router())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve control-api")
+    axum::serve(
+        listener,
+        api.router()
+            .into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serve control-api")
 }
 
 fn normalize_config_users(users: &mut [UserRecord]) -> Result<()> {

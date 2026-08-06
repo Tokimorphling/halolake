@@ -2,11 +2,16 @@
 
 use anyhow::{Context, Result, bail};
 use halolake_domain::UserRecord;
+use halolake_object_store::S3ObjectStoreConfig;
 use halolake_router_core::{
     ChannelAffinityConfig, ChannelConfig, GatewaySnapshot, GroupRoutingConfig,
 };
 use serde::Deserialize;
-use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    path::PathBuf,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ControlApiConfig {
@@ -23,6 +28,10 @@ pub struct ControlApiConfig {
     #[serde(default)]
     pub session:        SessionConfig,
     #[serde(default)]
+    pub media:          MediaConfig,
+    #[serde(default)]
+    pub object_storage: ObjectStorageConfig,
+    #[serde(default)]
     pub options:        BTreeMap<String, toml::Value>,
     #[serde(default)]
     pub users:          Vec<UserRecord>,
@@ -34,6 +43,132 @@ pub struct ControlApiConfig {
     pub channels:       Vec<ChannelConfig>,
     #[serde(default)]
     pub model_mappings: Vec<halolake_router_core::ModelMapping>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ObjectStorageConfig {
+    /// A private S3-compatible bucket. Presigned URLs are ephemeral and are
+    /// never persisted in Halolake's database.
+    #[serde(default)]
+    pub s3: Option<S3ObjectStoreConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaConfig {
+    #[serde(default)]
+    pub enabled:                    bool,
+    #[serde(default = "default_tokiame_hub_base_url")]
+    pub hub_base_url:               String,
+    #[serde(default = "default_heartbeat_interval_seconds")]
+    pub heartbeat_interval_seconds: u64,
+    #[serde(default = "default_artifact_prefix")]
+    pub artifact_prefix:            String,
+    #[serde(default = "default_max_input_bytes")]
+    pub max_input_bytes:            u64,
+    #[serde(default = "default_max_output_bytes")]
+    pub max_output_bytes:           u64,
+    /// Trust the first `X-Forwarded-For` hop for token IP allowlists. Enable
+    /// only when control-api is reachable exclusively through a trusted proxy.
+    #[serde(default)]
+    pub trust_x_forwarded_for:      bool,
+    #[serde(default)]
+    pub workflows:                  Vec<MediaWorkflowConfig>,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        Self {
+            enabled:                    false,
+            hub_base_url:               default_tokiame_hub_base_url(),
+            heartbeat_interval_seconds: default_heartbeat_interval_seconds(),
+            artifact_prefix:            default_artifact_prefix(),
+            max_input_bytes:            default_max_input_bytes(),
+            max_output_bytes:           default_max_output_bytes(),
+            trust_x_forwarded_for:      false,
+            workflows:                  Vec::new(),
+        }
+    }
+}
+
+impl MediaConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let hub_url = reqwest::Url::parse(&self.hub_base_url)
+            .context("media.hub_base_url must be an absolute URL")?;
+        if !matches!(hub_url.scheme(), "http" | "https") {
+            bail!("media.hub_base_url must use http or https");
+        }
+        if !(5..=300).contains(&self.heartbeat_interval_seconds) {
+            bail!("media.heartbeat_interval_seconds must be between 5 and 300");
+        }
+        for (name, size) in [
+            ("max_input_bytes", self.max_input_bytes),
+            ("max_output_bytes", self.max_output_bytes),
+        ] {
+            if size == 0 || size > 5 * 1024 * 1024 * 1024 {
+                bail!("media.{name} must be between 1 byte and 5 GiB");
+            }
+        }
+        let prefix = self.artifact_prefix.trim_matches('/');
+        if prefix.is_empty()
+            || prefix.len() > 200
+            || prefix
+                .split('/')
+                .any(|part| part.is_empty() || matches!(part, "." | ".."))
+            || prefix.contains('\\')
+            || prefix.chars().any(char::is_control)
+        {
+            bail!("media.artifact_prefix must be a safe relative object-key prefix");
+        }
+        if self.workflows.is_empty() {
+            bail!("media.workflows must contain at least one allowlisted workflow");
+        }
+        let mut identities = BTreeSet::new();
+        for workflow in &self.workflows {
+            if workflow.id.trim().is_empty()
+                || workflow.version.trim().is_empty()
+                || workflow.model.trim().is_empty()
+            {
+                bail!("media workflow id, version and model are required");
+            }
+            if workflow.quota < 0 {
+                bail!("media workflow quota cannot be negative");
+            }
+            if workflow.output_types.is_empty()
+                || workflow.output_types.iter().any(|content_type| {
+                    content_type.len() > 100
+                        || !content_type.contains('/')
+                        || content_type.chars().any(char::is_whitespace)
+                })
+            {
+                bail!("media workflow output_types must contain valid MIME types");
+            }
+            if !identities.insert((
+                workflow.id.as_str(),
+                workflow.version.as_str(),
+                workflow.model.as_str(),
+            )) {
+                bail!("duplicate media workflow id/version/model");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct MediaWorkflowConfig {
+    pub id:           String,
+    #[serde(default = "default_workflow_version")]
+    pub version:      String,
+    pub model:        String,
+    #[serde(default)]
+    pub quota:        i64,
+    #[serde(default)]
+    pub description:  String,
+    #[serde(default)]
+    pub output_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -239,6 +374,32 @@ pub(crate) fn default_listen() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 9090))
 }
 
+fn default_tokiame_hub_base_url() -> String {
+    "http://127.0.0.1:9091".into()
+}
+
+fn default_heartbeat_interval_seconds() -> u64 {
+    15
+}
+
+fn default_artifact_prefix() -> String {
+    "halolake-media".into()
+}
+
+fn default_max_input_bytes() -> u64 {
+    2 * 1024 * 1024 * 1024
+}
+
+fn default_max_output_bytes() -> u64 {
+    // Current transport uses one presigned PUT. S3 multipart upload is the
+    // next transport extension for artifacts larger than 5 GiB.
+    5 * 1024 * 1024 * 1024
+}
+
+fn default_workflow_version() -> String {
+    "v1".into()
+}
+
 pub(crate) fn default_version() -> u64 {
     1
 }
@@ -372,5 +533,24 @@ pub(crate) fn log_storage_backend_name(backend: LogStorageBackend) -> &'static s
         LogStorageBackend::MySql => "mysql",
         LogStorageBackend::Postgres => "postgres",
         LogStorageBackend::ClickHouse => "clickhouse",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokiame_example_config_stays_parseable() {
+        let config: ControlApiConfig = toml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/tokiame-control-api.toml"
+        )))
+        .unwrap();
+
+        assert!(config.media.enabled);
+        config.media.validate().unwrap();
+        assert_eq!(config.media.workflows.len(), 1);
+        assert!(config.object_storage.s3.is_some());
     }
 }

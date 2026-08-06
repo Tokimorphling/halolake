@@ -6,6 +6,7 @@
 |------|----------|------|
 | control-api | **9090** | 管理 UI、用户/渠道/代理、snapshot、用量回写 |
 | gateway | **8082** | OpenAI / Claude / Gemini 兼容入口 → 上游 |
+| tokiame-hub | **9091** | NAT 后 ComfyUI agent 的 WebSocket 会话（可选） |
 
 ---
 
@@ -145,6 +146,10 @@ cat data/halolake-credentials.txt
 | `HALOLAKE_INTERNAL_SECRET` / `HALOLAKE_INTERNAL_KEY` | 自动生成 | 网关读 internal key |
 | `HALOLAKE_CONTROL_CONFIG` | `/app/config/control-api.toml` | control 配置 |
 | `HALOLAKE_GATEWAY_CONFIG` | `/app/config/gateway.toml` | gateway 配置 |
+| `HALOLAKE_TOKIAME_HUB_CONFIG` | `/app/config/tokiame-hub.toml` | Tokiame hub 配置 |
+| `HALOLAKE_TOKIAME_HUB_ENABLED` | `1` | 设为 `0`/`false` 时不启动 hub |
+| `HALOLAKE_S3_ACCESS_KEY_ID` | 未设置 | 媒体私有 bucket 的 access key |
+| `HALOLAKE_S3_SECRET_ACCESS_KEY` | 未设置 | 媒体私有 bucket 的 secret key |
 | `RUST_LOG` | `info` | 日志级别；请求体预览需 `debug` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 设置后导出 OTLP。HTTP 填 **base**（本地 `http://…:4318` 或 Grafana `https://otlp-gateway-….grafana.net/otlp`）；SDK 会再拼 `/v1/traces|logs|metrics`。不要把完整 signal URL 写进 `with_endpoint` 语义里 |
 | `OTEL_SERVICE_NAME` | 进程名 | OTEL service name |
@@ -172,6 +177,7 @@ volumes:
 5. 客户端 API Base URL 指向 gateway：`http://&lt;host&gt;:8082`  
 6. 用 Token 调 `/v1/chat/completions` 等做一次冒烟  
 7. （可选）配置 OTEL endpoint  
+8. （可选）按 [TOKIAME_COMFYUI_CN.md](./TOKIAME_COMFYUI_CN.md) 接入 ComfyUI 与对象存储
 
 数据目录 `./data` 含 SQLite、凭据文件，以及
 `channel-deletion-backups/*.json` 渠道删除快照。删除快照使用原子写入，文件权限为
@@ -210,13 +216,18 @@ volumes:
                       │
                       │ internal (snapshot / usage / feedback)
                       ▼
-用户浏览器 ──:9090──► control-api (+ 嵌入 Web)
+用户浏览器 ──:9090──► control-api (+ 嵌入 Web / media API)
                       │
                       ▼
                    /data/*.db + credentials.txt
+
+NAT 后 agent ──WSS──► tokiame-hub :9091 ──internal──► control-api
+      │                                      │
+      └──► 本机 ComfyUI                       └──► 私有 S3-compatible bucket
 ```
 
-entrypoint 会启动两个进程，并把凭据文件里的 `internal_secret` 注入 gateway。
+entrypoint 会启动 control-api、gateway，并在启用时启动 tokiame-hub；凭据文件里的
+`internal_secret` 会同时注入 gateway 与 hub。
 
 ---
 
@@ -243,3 +254,4 @@ entrypoint 会启动两个进程，并把凭据文件里的 `internal_secret` �
 | `examples/docker/*.toml` | 镜像内默认配置（无弱密码种子用户） |
 | `.github/workflows/docker.yml` | GHCR 发布 |
 | [AUTH_IMPORT.md](./AUTH_IMPORT.md) | 凭证导入 |
+| [TOKIAME_COMFYUI_CN.md](./TOKIAME_COMFYUI_CN.md) | ComfyUI、Tokiame 与媒体对象存储 |

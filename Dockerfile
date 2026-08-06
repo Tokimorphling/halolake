@@ -1,9 +1,9 @@
-# Multi-stage: web dist + control-api + gateway (one-shot deploy).
+# Multi-stage: web dist + control-api + gateway + optional Tokiame hub/agent.
 #
 #   docker compose -f docker-compose.host.yml up --build
 #   docker compose -f docker-compose.pull.yml up -d   # after GHCR publish
 #
-# Ports: control-api 9090, gateway 8082
+# Ports: control-api 9090, gateway 8082, tokiame-hub 9091
 
 # --- Frontend ---
 FROM oven/bun:1 AS web
@@ -27,7 +27,11 @@ COPY examples examples
 COPY --from=web /web/default/dist web/new-api/default/dist
 
 ENV HALOLAKE_WEB_BUILD_ID=docker
-RUN cargo build --release -p halolake-control-api -p halolake-gateway-monoio
+RUN cargo build --release \
+    -p halolake-control-api \
+    -p halolake-gateway-monoio \
+    -p halolake-tokiame-hub \
+    -p halolake-tokiame-agent
 
 # --- Runtime ---
 FROM debian:bookworm-slim AS runtime
@@ -38,6 +42,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /src/target/release/halolake-control-api /usr/local/bin/
 COPY --from=builder /src/target/release/halolake-gateway-monoio /usr/local/bin/
+COPY --from=builder /src/target/release/halolake-tokiame-hub /usr/local/bin/
+COPY --from=builder /src/target/release/halolake-tokiame-agent /usr/local/bin/
 COPY examples/docker /app/config
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data
@@ -47,7 +53,7 @@ ENV RUST_LOG=info \
     HALOLAKE_GATEWAY_CONFIG=/app/config/gateway.toml
 
 VOLUME ["/data"]
-EXPOSE 9090 8082
+EXPOSE 9090 8082 9091
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:9090/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

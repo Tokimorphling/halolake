@@ -6,7 +6,7 @@
 #   docker compose up -d
 #   cat data/halolake-credentials.txt   # first-boot admin user/password
 #
-# UI http://localhost:9090  |  Gateway http://localhost:8082
+# UI http://localhost:9090  |  Gateway http://localhost:8082  |  Tokiame :9091
 #
 # Private GHCR package:
 #   echo $GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
@@ -19,12 +19,17 @@ services:
     ports:
       - "9090:9090"
       - "8082:8082"
+      - "9091:9091"
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       # Leave SESSION_SECRET unset → auto secrets + admin in /data/halolake-credentials.txt
       HALOLAKE_CREDENTIALS_FILE: /data/halolake-credentials.txt
       HALOLAKE_CONTROL_CONFIG: /app/config/control-api.toml
       HALOLAKE_GATEWAY_CONFIG: /app/config/gateway.toml
+      HALOLAKE_TOKIAME_HUB_CONFIG: /app/config/tokiame-hub.toml
+      HALOLAKE_TOKIAME_HUB_ENABLED: ${HALOLAKE_TOKIAME_HUB_ENABLED:-1}
+      HALOLAKE_S3_ACCESS_KEY_ID: ${HALOLAKE_S3_ACCESS_KEY_ID:-}
+      HALOLAKE_S3_SECRET_ACCESS_KEY: ${HALOLAKE_S3_SECRET_ACCESS_KEY:-}
       # Optional OTEL (set in .env; empty disables export):
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-}

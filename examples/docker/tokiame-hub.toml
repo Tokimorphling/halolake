@@ -1,0 +1,7 @@
+[server]
+listen = "0.0.0.0:9091"
+
+[control]
+base_url = "http://127.0.0.1:9090"
+# docker/entrypoint.sh injects HALOLAKE_INTERNAL_SECRET after control bootstraps it.
+internal_secret = ""

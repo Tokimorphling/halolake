@@ -11,16 +11,21 @@ halolake-api-contract = { workspace = true }
 halolake-control-plane = { workspace = true }
 halolake-control-storage = { workspace = true }
 halolake-domain = { workspace = true }
+halolake-media = { workspace = true }
+halolake-object-store = { workspace = true }
 halolake-router-core = { workspace = true }
 halolake-telemetry = { workspace = true }
+halolake-tokiame-protocol = { workspace = true }
 
 anyhow = { workspace = true }
+async-stream = { workspace = true }
 axum = { workspace = true }
 bcrypt = { workspace = true }
 clap = { workspace = true }
 certain-map = { workspace = true }
 data-encoding = { workspace = true }
 http = { workspace = true }
+ipnet = { workspace = true }
 futures-util = { workspace = true }
 hmac = { workspace = true }
 reqwest = { workspace = true }

@@ -10,6 +10,11 @@ pub const ROLE_ROOT_USER: i32 = 100;
 pub const CHANNEL_TYPE_OPENAI: i32 = 1;
 pub const CHANNEL_TYPE_ANTHROPIC: i32 = 14;
 pub const CHANNEL_TYPE_GEMINI: i32 = 24;
+/// ComfyUI workers connected through the Tokiame reverse tunnel.
+///
+/// This channel type is intentionally excluded from the HTTP gateway snapshot:
+/// media jobs are dispatched by `tokiame-hub`, not by the LLM data plane.
+pub const CHANNEL_TYPE_TOKIAME: i32 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UserRecord {
