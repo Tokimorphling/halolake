@@ -94,9 +94,15 @@ impl RelayService {
         &self,
         channel_identity: &str,
         uri: Uri,
-        req: Request<HttpBody>,
+        mut req: Request<HttpBody>,
         proxy: &ProxyRoute,
     ) -> Result<Response<HttpBody>> {
+        // Normalize framing before protocol selection. The pooled HTTP/1 path
+        // also applies this defensively below, but HTTPS may negotiate HTTP/2
+        // and previously skipped this step entirely. In particular, a fixed
+        // body needs a fresh Content-Length after JSON re-serialization and
+        // after channel header overrides have been applied.
+        prepare_upstream_request_headers(&mut req);
         let method = req.method().clone();
         let path = req.uri().to_string();
         let version = req.version();
@@ -358,7 +364,7 @@ pub(crate) async fn send_pooled_http1(
         .await
         .context("acquire pooled HTTP/1 connection")??;
     let reused = conn.is_reused();
-    prepare_hyper_request_headers(&mut req);
+    prepare_upstream_request_headers(&mut req);
     let req = req.map(HyperRequestBody::new);
     let response = match read_timeout {
         Some(read_timeout) => monoio::time::timeout(read_timeout, conn.send_request(req))
@@ -379,11 +385,12 @@ pub(crate) async fn send_pooled_http1(
     Ok((resp, can_reuse))
 }
 
-fn prepare_hyper_request_headers(req: &mut Request<HttpBody>) {
+fn prepare_upstream_request_headers(req: &mut Request<HttpBody>) {
     // Framing follows the actual body, never downstream or channel override
     // headers. Keeping stale CL/TE can truncate a request, poison H1 reuse, or
-    // create an ambiguous smuggling boundary. Hyper supplies chunked encoding
-    // automatically when a streaming body has no content length.
+    // create an ambiguous smuggling boundary. HTTP/1.1 clients can choose
+    // chunked encoding for a streaming body; HTTP/2 uses DATA frames and must
+    // never receive a stale transfer-encoding header.
     req.headers_mut().remove(header::CONTENT_LENGTH);
     req.headers_mut().remove(header::TRANSFER_ENCODING);
 
@@ -3639,14 +3646,19 @@ mod tests {
     }
 
     #[test]
-    fn hyper_request_framing_is_rebuilt_from_the_actual_body() {
+    fn upstream_request_framing_is_rebuilt_from_the_actual_body() {
+        let fixed_body = Bytes::from(vec![b'x'; 512 * 1024 + 123]);
+        let fixed_body_len = fixed_body.len();
         let mut fixed = Request::builder()
             .header(header::CONTENT_LENGTH, "999")
             .header(header::TRANSFER_ENCODING, "chunked")
-            .body(HttpBody::fixed_body(Some(Bytes::from_static(b"hello"))))
+            .body(HttpBody::fixed_body(Some(fixed_body)))
             .expect("fixed request");
-        prepare_hyper_request_headers(&mut fixed);
-        assert_eq!(fixed.headers().get(header::CONTENT_LENGTH).unwrap(), "5");
+        prepare_upstream_request_headers(&mut fixed);
+        assert_eq!(
+            fixed.headers().get(header::CONTENT_LENGTH).unwrap(),
+            fixed_body_len.to_string().as_str()
+        );
         assert!(!fixed.headers().contains_key(header::TRANSFER_ENCODING));
 
         let (payload, _sender) = stream_payload_pair::<Bytes, HttpError>();
@@ -3655,7 +3667,7 @@ mod tests {
             .header(header::TRANSFER_ENCODING, "identity")
             .body(HttpBody::H1(Payload::Stream(payload)))
             .expect("streaming request");
-        prepare_hyper_request_headers(&mut streaming);
+        prepare_upstream_request_headers(&mut streaming);
         assert!(!streaming.headers().contains_key(header::CONTENT_LENGTH));
         assert!(!streaming.headers().contains_key(header::TRANSFER_ENCODING));
     }

@@ -71,7 +71,7 @@ pub(crate) fn decompress_request_body(
     }
     // The framing headers describe the wire bytes we just consumed, not the
     // decoded bytes. The relay layer always re-serializes the body and
-    // `prepare_hyper_request_headers` recomputes `Content-Length`, so strip
+    // `prepare_upstream_request_headers` recomputes `Content-Length`, so strip
     // both to avoid an upstream framing mismatch. Remove them before decoding
     // so an unsupported/corrupt payload still cannot leak the stale framing
     // into an error response.
