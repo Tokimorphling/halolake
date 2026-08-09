@@ -13,18 +13,18 @@
 //! - Multipart files: same handler with form fields
 
 use super::{
-    codex_auth_import::{
-        self, CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage,
-        CodexAuthImportRequest, CodexAuthImportResult, CodexOAuthKey, codex_key_to_json,
-        collect_entry_results, find_existing_channel_id, merge_codex_oauth_key,
-        parse_flexible_codex_key,
-    },
     openai_oauth::{AuthMethod, expand_codex_import_blob},
     sub2api_data_import::{self, DataImportResult, Sub2apiDataImportRequest},
 };
 use crate::{
     channel_probe::{ChannelProbeService, FetchModelsRequest},
     channel_special::validate_xai_oauth_endpoint,
+    codex_auth as codex_auth_import,
+    codex_auth::{
+        CHANNEL_TYPE_CODEX, CodexAuthImportItem, CodexAuthImportMessage, CodexAuthImportRequest,
+        CodexAuthImportResult, CodexOAuthKey, codex_key_to_json, collect_entry_results,
+        find_existing_channel_id, merge_codex_oauth_key, parse_flexible_codex_key,
+    },
     proxy::ProxyStore,
     storage::ManagementStore,
 };

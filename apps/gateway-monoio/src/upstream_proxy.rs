@@ -513,10 +513,11 @@ pub(crate) async fn send_request_via_proxy(
         }
         ProxyKind::Https => {
             let connector = tls_connector()?;
+            let proxy_server_name = tls_server_name(&proxy.host)?;
             let proxy_tls = timeout_stage(
                 connect_timeout,
                 "TLS handshake with HTTPS proxy",
-                connector.connect(&proxy.host, stream),
+                connector.connect(proxy_server_name, stream),
             )
             .await?
             .with_context(|| format!("TLS handshake with HTTPS proxy {}", proxy.host))?;
@@ -631,10 +632,11 @@ where
 {
     if target_tls {
         let connector = tls_connector()?;
+        let target_server_name = tls_server_name(target_host)?;
         let tls_stream = timeout_stage(
             connect_timeout,
             "TLS handshake with upstream target",
-            connector.connect(target_host, stream),
+            connector.connect(target_server_name, stream),
         )
         .await?
         .with_context(|| format!("TLS handshake with upstream target {target_host}"))?;
@@ -644,9 +646,27 @@ where
     }
 }
 
-fn tls_connector() -> Result<monoio_native_tls::TlsConnector> {
-    let native = native_tls::TlsConnector::new().context("build native-tls connector")?;
-    Ok(monoio_native_tls::TlsConnector::from(native))
+thread_local! {
+    static TLS_CONNECTOR: monoio_rustls::TlsConnector = {
+        let provider = std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("AWS-LC exposes safe default TLS protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        monoio_rustls::TlsConnector::from(config)
+    };
+}
+
+fn tls_connector() -> Result<monoio_rustls::TlsConnector> {
+    Ok(TLS_CONNECTOR.with(Clone::clone))
+}
+
+fn tls_server_name(host: &str) -> Result<rustls::pki_types::ServerName<'static>> {
+    rustls::pki_types::ServerName::try_from(host.to_owned())
+        .map_err(|error| anyhow::anyhow!("invalid TLS server name {host}: {error}"))
 }
 
 async fn timeout_stage<F, T>(timeout: Option<Duration>, stage: &'static str, fut: F) -> Result<T>

@@ -2,18 +2,13 @@
 members = [
     "apps/control-api",
     "apps/gateway-monoio",
-    "apps/tokiame-agent",
-    "apps/tokiame-hub",
     "crates/api-contract",
     "crates/control-plane",
     "crates/control-storage",
     "crates/domain",
-    "crates/media",
-    "crates/object-store",
     "crates/protocol",
     "crates/router-core",
     "crates/telemetry",
-    "crates/tokiame-protocol",
 ]
 resolver = "2"
 
@@ -28,33 +23,19 @@ halolake-api-contract = { path = "crates/api-contract" }
 halolake-control-plane = { path = "crates/control-plane" }
 halolake-control-storage = { path = "crates/control-storage" }
 halolake-domain = { path = "crates/domain" }
-halolake-media = { path = "crates/media" }
-halolake-object-store = { path = "crates/object-store" }
 halolake-protocol = { path = "crates/protocol" }
 halolake-router-core = { path = "crates/router-core" }
 halolake-telemetry = { path = "crates/telemetry" }
-halolake-tokiame-protocol = { path = "crates/tokiame-protocol" }
 
 anyhow = "1"
 arc-swap = "1"
 async-stream = "0.3"
-# Keep the S3 SDK and Smithy runtime on the release set used by the generated
-# client. Mixing independently updated Smithy crates causes compile-time API
-# skew despite the individual semver ranges overlapping.
-aws-credential-types = "=1.2.11"
-aws-runtime = "=1.5.17"
-aws-sdk-s3 = "=1.119.0"
-aws-sigv4 = "=1.3.7"
-aws-smithy-async = "=1.2.7"
-aws-smithy-runtime = "=1.9.5"
-aws-smithy-runtime-api = "=1.9.3"
-aws-smithy-types = "=1.3.5"
-axum = { version = "0.8", features = ["multipart", "ws"] }
+axum = { version = "0.8", default-features = false }
 bcrypt = "0.19.2"
 bytes = "1"
 brotli = { version = "3", default-features = false, features = ["std"] }
 certain-map = "0.3.1"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", default-features = false, features = ["derive", "env", "error-context", "help", "std", "usage"] }
 data-encoding = "2"
 flate2 = "1"
 faststr = { version = "0.2", features = ["serde"] }
@@ -63,31 +44,34 @@ futures-channel = "0.3"
 hmac = "0.12"
 http = "1"
 ipnet = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "socks", "json", "multipart"] }
+reqwest = { version = "0.12", default-features = false }
 regex = "1"
 ruzstd = "0.9"
 monoio = { version = "0.2.4", features = ["sync"] }
 monoio-http = { version = "0.3.5", features = ["encoding"] }
-monoio-native-tls = "0.3.0"
+monoio-rustls = { version = "0.4.0", default-features = false, features = ["tls12"] }
 monoio-transports = { version = "0.5.3", features = ["hyper", "logging", "rustls-unsafe-io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 service-async = "0.2.3"
 sha1 = "0.10"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "mysql"] }
+sqlx = { version = "0.8", default-features = false }
 thiserror = "1"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["io"] }
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-toml = "0.8"
+tokio = { version = "1", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
+toml = { version = "0.8", default-features = false, features = ["display", "parse"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["v4", "fast-rng"] }
+uuid = { version = "1", features = ["v4"] }
 webauthn-rs = { version = "0.6.1-dev", default-features = false, features = ["conditional-ui", "danger-allow-state-serialisation"] }
+webpki-roots = "0.26"
 mimalloc = { version = "0.1", default-features = false }
 
-[profile.release-lto]
+[profile.dist]
 inherits = "release"
-lto = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

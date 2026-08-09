@@ -1,9 +1,10 @@
-# Multi-stage: web dist + control-api + gateway + optional Tokiame hub/agent.
+# syntax=docker/dockerfile:1.7
+# Multi-stage: web dist + control-api + gateway.
 #
 #   docker compose -f docker-compose.host.yml up --build
 #   docker compose -f docker-compose.pull.yml up -d   # after GHCR publish
 #
-# Ports: control-api 9090, gateway 8082, tokiame-hub 9091
+# Ports: control-api 9090, gateway 8082
 
 # --- Frontend ---
 FROM oven/bun:1 AS web
@@ -13,47 +14,85 @@ RUN bun install
 WORKDIR /web/default
 RUN bun run build
 
-# --- Rust (embeds default dist via apps/control-api/build.rs; classic not embedded) ---
-FROM rust:1-bookworm AS builder
+# --- Rust (the container serves the frontend from a separate runtime layer) ---
+FROM rust:1-bookworm AS rust-source
 WORKDIR /src
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
 COPY apps apps
 COPY crates crates
 COPY examples examples
-COPY --from=web /web/default/dist web/new-api/default/dist
 
-ENV HALOLAKE_WEB_BUILD_ID=docker
-RUN cargo build --release \
-    -p halolake-control-api \
-    -p halolake-gateway-monoio \
-    -p halolake-tokiame-hub \
-    -p halolake-tokiame-agent
+FROM rust-source AS control-builder
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --profile dist -p halolake-control-api \
+    --no-default-features \
+    --features core,admin-extras,compat-stubs,allocator-mimalloc,passkey \
+    && mkdir -p /artifacts \
+    && cp target/dist/halolake-control-api /artifacts/
 
-# --- Runtime ---
-FROM debian:bookworm-slim AS runtime
+FROM rust-source AS gateway-builder
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --profile dist -p halolake-gateway-monoio \
+    && mkdir -p /artifacts \
+    && cp target/dist/halolake-gateway-monoio /artifacts/
+
+# --- Shared runtime ---
+FROM debian:bookworm-slim AS runtime-base
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ENV RUST_LOG=info
+
+# Build one-service images with `docker build --target <name> ...`.
+FROM runtime-base AS control-api
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=control-builder /artifacts/halolake-control-api /usr/local/bin/
+COPY --from=web /web/default/dist /app/web/default
+COPY examples/docker/control-api.toml /app/config/control-api.toml
+RUN mkdir -p /data
+ENV HALOLAKE_CONTROL_CONFIG=/app/config/control-api.toml
+VOLUME ["/data"]
+EXPOSE 9090
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:9090/healthz || exit 1
+ENTRYPOINT ["halolake-control-api"]
+CMD ["--config", "/app/config/control-api.toml"]
+
+FROM runtime-base AS gateway
+COPY --from=gateway-builder /artifacts/halolake-gateway-monoio /usr/local/bin/
+COPY examples/docker/gateway.toml /app/config/gateway.toml
+ENV HALOLAKE_GATEWAY_CONFIG=/app/config/gateway.toml
+EXPOSE 8082
+ENTRYPOINT ["halolake-gateway-monoio"]
+CMD ["--config", "/app/config/gateway.toml"]
+
+# Default image runs control-api and gateway together.
+FROM runtime-base AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-COPY --from=builder /src/target/release/halolake-control-api /usr/local/bin/
-COPY --from=builder /src/target/release/halolake-gateway-monoio /usr/local/bin/
-COPY --from=builder /src/target/release/halolake-tokiame-hub /usr/local/bin/
-COPY --from=builder /src/target/release/halolake-tokiame-agent /usr/local/bin/
+COPY --from=control-builder /artifacts/halolake-control-api /usr/local/bin/
+COPY --from=gateway-builder /artifacts/halolake-gateway-monoio /usr/local/bin/
+COPY --from=web /web/default/dist /app/web/default
 COPY examples/docker /app/config
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data
 
-ENV RUST_LOG=info \
-    HALOLAKE_CONTROL_CONFIG=/app/config/control-api.toml \
+ENV HALOLAKE_CONTROL_CONFIG=/app/config/control-api.toml \
     HALOLAKE_GATEWAY_CONFIG=/app/config/gateway.toml
 
 VOLUME ["/data"]
-EXPOSE 9090 8082 9091
+EXPOSE 9090 8082
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:9090/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

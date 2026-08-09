@@ -3,8 +3,6 @@ set -eu
 
 CONTROL_CONFIG="${HALOLAKE_CONTROL_CONFIG:-/app/config/control-api.toml}"
 GATEWAY_CONFIG="${HALOLAKE_GATEWAY_CONFIG:-/app/config/gateway.toml}"
-TOKIAME_HUB_CONFIG="${HALOLAKE_TOKIAME_HUB_CONFIG:-/app/config/tokiame-hub.toml}"
-TOKIAME_HUB_ENABLED="${HALOLAKE_TOKIAME_HUB_ENABLED:-1}"
 CREDENTIALS_FILE="${HALOLAKE_CREDENTIALS_FILE:-/data/halolake-credentials.txt}"
 CONTROL_URL="${HALOLAKE_CONTROL_URL:-http://127.0.0.1:9090}"
 # How long to wait for control-api /healthz before starting gateway.
@@ -84,25 +82,10 @@ echo "starting gateway (${RUNTIME_GATEWAY_CONFIG}) ..."
 halolake-gateway-monoio --config "${RUNTIME_GATEWAY_CONFIG}" &
 GATEWAY_PID=$!
 
-HUB_PID=""
-start_hub() {
-  if [ "${TOKIAME_HUB_ENABLED}" = "0" ] || [ "${TOKIAME_HUB_ENABLED}" = "false" ]; then
-    return 0
-  fi
-  echo "starting tokiame-hub (${TOKIAME_HUB_CONFIG}) ..."
-  halolake-tokiame-hub --config "${TOKIAME_HUB_CONFIG}" &
-  HUB_PID=$!
-}
-start_hub
-
 term() {
   echo "shutting down..."
   kill "${CONTROL_PID}" "${GATEWAY_PID}" 2>/dev/null || true
   wait "${CONTROL_PID}" "${GATEWAY_PID}" 2>/dev/null || true
-  if [ -n "${HUB_PID}" ]; then
-    kill "${HUB_PID}" 2>/dev/null || true
-    wait "${HUB_PID}" 2>/dev/null || true
-  fi
 }
 trap term INT TERM
 
@@ -128,14 +111,6 @@ while kill -0 "${CONTROL_PID}" 2>/dev/null; do
     echo "starting gateway (${RUNTIME_GATEWAY_CONFIG}) ..."
     halolake-gateway-monoio --config "${RUNTIME_GATEWAY_CONFIG}" &
     GATEWAY_PID=$!
-  fi
-  if [ "${TOKIAME_HUB_ENABLED}" != "0" ] \
-    && [ "${TOKIAME_HUB_ENABLED}" != "false" ] \
-    && { [ -z "${HUB_PID}" ] || ! kill -0 "${HUB_PID}" 2>/dev/null; }; then
-    echo "tokiame-hub exited; restarting in 3s ..."
-    sleep 3
-    load_credentials
-    start_hub
   fi
   sleep 2
 done

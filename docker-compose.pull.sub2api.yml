@@ -31,16 +31,11 @@ services:
       # Only localhost — Caddy terminates TLS
       - "127.0.0.1:9090:9090"
       - "127.0.0.1:8082:8082"
-      - "127.0.0.1:9091:9091"
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       HALOLAKE_CREDENTIALS_FILE: /data/halolake-credentials.txt
       HALOLAKE_CONTROL_CONFIG: /app/config/control-api.toml
       HALOLAKE_GATEWAY_CONFIG: /app/config/gateway.toml
-      HALOLAKE_TOKIAME_HUB_CONFIG: /app/config/tokiame-hub.toml
-      HALOLAKE_TOKIAME_HUB_ENABLED: ${HALOLAKE_TOKIAME_HUB_ENABLED:-1}
-      HALOLAKE_S3_ACCESS_KEY_ID: ${HALOLAKE_S3_ACCESS_KEY_ID:-}
-      HALOLAKE_S3_SECRET_ACCESS_KEY: ${HALOLAKE_S3_SECRET_ACCESS_KEY:-}
       # Prefer SQL_DSN (wins over docker default sqlite when set)
       SQL_DSN: postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@${POSTGRES_HOST:-sub2api-postgres}:5432/${POSTGRES_DB:-halolake}
       # Optional OTEL (Grafana Cloud OTLP: protocol=http/protobuf + Authorization header)

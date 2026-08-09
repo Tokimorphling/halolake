@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "allocator-mimalloc")]
 use mimalloc::MiMalloc;
 
+#[cfg(feature = "allocator-mimalloc")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -21,8 +23,6 @@ fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let _telemetry = halolake_telemetry::init("halolake-gateway")?;
-
-    monoio_native_tls::init();
 
     let args = Args::parse();
     halolake_gateway_monoio::run_from_config_file(&args.config)

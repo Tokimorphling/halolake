@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "allocator-mimalloc")]
 use mimalloc::MiMalloc;
 
+#[cfg(feature = "allocator-mimalloc")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 

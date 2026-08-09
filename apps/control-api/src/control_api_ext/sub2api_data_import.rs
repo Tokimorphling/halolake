@@ -4,10 +4,8 @@
 //! (same as sub2api default `skip_default_group_bind`). Existing proxies are
 //! reused by fingerprint; accounts always create new channels.
 
-use super::codex_auth_import::{
-    CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key,
-};
 use crate::{
+    codex_auth::{CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key},
     proxy::{CreateProxyRequest, ListProxiesRequest, ProxyRecord, ProxyStore, UpdateProxyRequest},
     storage::ManagementStore,
 };

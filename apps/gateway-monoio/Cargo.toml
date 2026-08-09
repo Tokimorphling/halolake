@@ -29,8 +29,7 @@ futures-util = { workspace = true }
 http = { workspace = true }
 monoio = { workspace = true }
 monoio-http = { workspace = true }
-monoio-native-tls = { workspace = true }
-native-tls = "0.2"
+monoio-rustls = { workspace = true }
 monoio-transports = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
 ruzstd = { workspace = true }
@@ -42,7 +41,12 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
-mimalloc = { workspace = true }
+webpki-roots = { workspace = true }
+mimalloc = { workspace = true, optional = true }
+
+[features]
+default = ["allocator-mimalloc"]
+allocator-mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 zstd = "0.13"

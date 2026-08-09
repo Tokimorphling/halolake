@@ -15,11 +15,16 @@ fn main() -> io::Result<()> {
     let generated = out_dir.join("web_assets.rs");
 
     println!("cargo:rerun-if-env-changed=HALOLAKE_WEB_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBEDDED_WEB");
 
     // Only embed the default theme to keep the control-api binary small.
     // Classic remains optional on-disk via config [web].classic_dist if needed.
     let default_dist = workspace_dir.join("web/new-api/default/dist");
-    let default_assets = collect_assets(&default_dist)?;
+    let default_assets = if env::var_os("CARGO_FEATURE_EMBEDDED_WEB").is_some() {
+        collect_assets(&default_dist)?
+    } else {
+        Vec::new()
+    };
 
     let mut file = fs::File::create(generated)?;
     write_assets(&mut file, "DEFAULT_WEB_ASSETS", &default_assets)?;

@@ -1,5 +1,6 @@
+#[cfg(feature = "admin-extras")]
+use crate::channel_special::ChannelSpecialService;
 use crate::{
-    channel_special::ChannelSpecialService,
     proxy::ProxyStore,
     storage::{ManagementStore, OptionStore},
 };
@@ -15,6 +16,7 @@ use tracing::warn;
 pub(crate) struct ChannelFeedbackService {
     management: ManagementStore,
     options:    OptionStore,
+    #[cfg(feature = "admin-extras")]
     special:    ChannelSpecialService,
 }
 
@@ -24,10 +26,35 @@ impl ChannelFeedbackService {
         options: OptionStore,
         proxies: ProxyStore,
     ) -> Self {
+        #[cfg(not(feature = "admin-extras"))]
+        let _ = proxies;
         Self {
+            #[cfg(feature = "admin-extras")]
             special: ChannelSpecialService::new(management.clone(), proxies),
             management,
             options,
+        }
+    }
+
+    async fn refresh_imported_oauth_channel(&self, channel_id: u64) -> bool {
+        #[cfg(feature = "admin-extras")]
+        {
+            match self
+                .special
+                .refresh_imported_oauth_channel(channel_id)
+                .await
+            {
+                Ok(refreshed) => refreshed,
+                Err(_) => {
+                    warn!(channel_id, "failed to refresh imported OAuth channel");
+                    false
+                }
+            }
+        }
+        #[cfg(not(feature = "admin-extras"))]
+        {
+            let _ = channel_id;
+            false
         }
     }
 }
@@ -74,20 +101,7 @@ impl Service<ChannelFeedbackBatch> for ChannelFeedbackService {
                 let refreshed = if let Some(refreshed) = refresh_results.get(&numeric_id) {
                     *refreshed
                 } else {
-                    let refreshed = match self
-                        .special
-                        .refresh_imported_oauth_channel(numeric_id)
-                        .await
-                    {
-                        Ok(refreshed) => refreshed,
-                        Err(_) => {
-                            warn!(
-                                channel_id = numeric_id,
-                                "failed to refresh imported OAuth channel"
-                            );
-                            false
-                        }
-                    };
+                    let refreshed = self.refresh_imported_oauth_channel(numeric_id).await;
                     refresh_results.insert(numeric_id, refreshed);
                     if refreshed {
                         refreshed_credentials = refreshed_credentials.saturating_add(1);

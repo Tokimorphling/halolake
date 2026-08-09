@@ -13,5 +13,8 @@ halolake-router-core = { workspace = true }
 
 serde = { workspace = true }
 service-async = { workspace = true }
-sqlx = { workspace = true }
-tokio = { workspace = true }
+sqlx = { workspace = true, features = ["mysql", "postgres", "runtime-tokio-rustls", "sqlite"] }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

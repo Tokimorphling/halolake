@@ -1,4 +1,4 @@
-﻿# control-api 模块分层（core / admin-extras / compat-stubs）
+﻿# control-api 模块与发布特性分层
 
 目标：在不拆部署进程的前提下，把 `apps/control-api` 的职责边界标清楚，便于：
 
@@ -9,14 +9,30 @@
 对应 Cargo features（`apps/control-api/Cargo.toml`）：
 
 ```toml
-default = ["core", "admin-extras", "compat-stubs"]
+default = [
+  "core", "admin-extras", "compat-stubs",
+  "allocator-mimalloc", "embedded-web", "passkey",
+]
 core = []
-admin-extras = []
+admin-extras = ["axum/multipart"]
 compat-stubs = []
+allocator-mimalloc = ["dep:mimalloc"]
+embedded-web = []
+passkey = ["dep:webauthn-rs"]
 ```
 
-当前 **默认全开**，行为与改前一致。  
+当前默认启用 Halolake 仓库内保留的完整功能组合。
 `compat-stubs` 已在路由层 `cfg` 控制：关闭后不挂载 `compat.rs` 里的支付/OAuth/订阅/部署等壳路由。
+
+发布时可按部署职责裁剪：
+
+| feature | 主要成本 | 关闭后的行为 |
+|---------|----------|--------------|
+| `embedded-web` | 前端 dist 直接进入二进制 | 从 `[web].default_dist` 读取；Docker 正式镜像采用此方式 |
+| `passkey` | WebAuthn、证书解析和多套椭圆曲线实现 | 状态接口报告不可用；兼容路由返回“此构建未启用” |
+| `allocator-mimalloc` | mimalloc 原生库 | 使用系统 allocator |
+| `admin-extras` | multipart、凭据导入、探测与管理工具 | 不挂载对应管理路由 |
+| `compat-stubs` | new-api 兼容壳 | 不挂载占位路由 |
 
 ---
 
@@ -35,7 +51,7 @@ compat-stubs = []
 | 兑换码充值 | `/api/redemption/*`, `/api/user/topup*`（兑换路径） | **不含**第三方在线支付 |
 | 系统任务 / 实例 | `/api/system-task/*`, `/api/system-info/*` | 运维基础 |
 | Gateway 内部 | `/internal/gateway/snapshot|usage|channel-feedback` | 数据面契约 |
-| 静态 Web | SPA fallback + 内嵌 dist | 前端托管 |
+| 静态 Web | SPA fallback + 内嵌或外置 dist | 前端托管 |
 | 存储 | `storage::{Management,Option,Usage}Store` | memory/sqlite/mysql/pg |
 | 安全 | `security`, `session`, `http_auth` | 会话与 2FA/passkey |
 
@@ -92,8 +108,13 @@ compat-stubs = []
 关闭示例：
 
 ```bash
-cargo build -p halolake-control-api --no-default-features --features core,admin-extras
+make dist-control-lite
+# 等价：
+cargo build --profile dist -p halolake-control-api \
+  --no-default-features --features core,allocator-mimalloc
 ```
+
+完整的发布与体积检查方法见 [BINARY_SIZE_CN.md](./BINARY_SIZE_CN.md)。
 
 ---
 

@@ -1,9 +1,13 @@
 use crate::storage::OptionStore;
 use bcrypt::{DEFAULT_COST, hash, verify};
-use data_encoding::{BASE32_NOPAD, BASE64URL_NOPAD};
+use data_encoding::BASE32_NOPAD;
+#[cfg(feature = "passkey")]
+use data_encoding::BASE64URL_NOPAD;
 use halolake_control_plane::ManagementError;
 use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+#[cfg(feature = "passkey")]
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use service_async::Service;
 use sha1::Sha1;
 use sqlx::{
@@ -12,20 +16,26 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+#[cfg(feature = "passkey")]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     str::FromStr,
     sync::{Arc, RwLock},
-    time::Duration,
 };
 use uuid::Uuid;
+#[cfg(feature = "passkey")]
 use webauthn_rs::prelude::{
     DiscoverableAuthentication, DiscoverableKey, Passkey, PasskeyAuthentication,
     PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, Url, Webauthn,
     WebauthnBuilder,
 };
 
+#[cfg(feature = "passkey")]
 const PASSKEY_DISABLED_MESSAGE: &str = "管理员未启用 Passkey 登录";
+#[cfg(not(feature = "passkey"))]
+const PASSKEY_DISABLED_MESSAGE: &str = "此构建未启用 Passkey 支持";
+#[cfg(feature = "passkey")]
 const PASSKEY_NOT_BOUND_MESSAGE: &str = "该用户尚未绑定 Passkey";
 const BACKUP_CODE_LENGTH: usize = 8;
 const BACKUP_CODE_COUNT: usize = 4;
@@ -34,26 +44,42 @@ const LOCKOUT_DURATION_SECONDS: i64 = 300;
 const TOTP_PERIOD_SECONDS: i64 = 30;
 const TOTP_DIGITS: u32 = 6;
 const TOTP_WINDOW: i64 = 1;
+#[cfg(feature = "passkey")]
 const PASSKEY_SESSION_TTL_SECONDS: i64 = 120;
+#[cfg(feature = "passkey")]
 const PASSKEY_READY_TTL_SECONDS: i64 = 300;
+#[cfg(feature = "passkey")]
 const PASSKEY_REGISTRATION_SESSION: &str = "passkey_registration_session";
+#[cfg(feature = "passkey")]
 const PASSKEY_LOGIN_SESSION: &str = "passkey_login_session";
+#[cfg(feature = "passkey")]
 const PASSKEY_VERIFY_SESSION: &str = "passkey_verify_session";
+#[cfg(feature = "passkey")]
 const PASSKEY_READY_SESSION: &str = "secure_passkey_ready_at";
 
 type HmacSha1 = Hmac<Sha1>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SecurityService {
+    #[cfg(feature = "passkey")]
     options: OptionStore,
     store:   SecurityStore,
 }
 
 impl SecurityService {
     pub(crate) fn new(options: OptionStore, store: SecurityStore) -> Self {
-        Self { options, store }
+        #[cfg(feature = "passkey")]
+        {
+            Self { options, store }
+        }
+        #[cfg(not(feature = "passkey"))]
+        {
+            let _ = options;
+            Self { store }
+        }
     }
 
+    #[cfg(feature = "passkey")]
     fn options(&self) -> Result<BTreeMap<String, String>, SecurityError> {
         self.options.values().map_err(SecurityError::Management)
     }
@@ -166,6 +192,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_user(
         &self,
         user_id: u64,
@@ -180,6 +207,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_credential_id(
         &self,
         credential_id: &str,
@@ -194,6 +222,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
         match self {
             Self::Memory(store) => store.upsert_passkey(record),
@@ -205,6 +234,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
         match self {
             Self::Memory(store) => store.delete_passkey(user_id),
@@ -216,6 +246,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn save_passkey_session(
         &self,
         session: PasskeySessionRecord,
@@ -230,6 +261,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn pop_passkey_session(
         &self,
         session_id: &str,
@@ -245,6 +277,7 @@ impl SecurityStore {
         }
     }
 
+    #[cfg(feature = "passkey")]
     async fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
         match self {
             Self::Memory(store) => store.consume_passkey_ready(session_id),
@@ -455,6 +488,7 @@ struct BackupCodeRecord {
     created_at: i64,
 }
 
+#[cfg(feature = "passkey")]
 #[derive(Debug, Clone)]
 struct PasskeyRecord {
     id:            u64,
@@ -467,6 +501,7 @@ struct PasskeyRecord {
     updated_at:    i64,
 }
 
+#[cfg(feature = "passkey")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PasskeySessionRecord {
     session_id: String,
@@ -486,11 +521,15 @@ pub(crate) struct MemorySecurityStore {
 struct MemorySecurityData {
     next_two_fa_id:            u64,
     next_backup_code_id:       u64,
+    #[cfg(feature = "passkey")]
     next_passkey_id:           u64,
     two_fa:                    BTreeMap<u64, TwoFaRecord>,
     backup_codes:              Vec<BackupCodeRecord>,
+    #[cfg(feature = "passkey")]
     passkeys:                  BTreeMap<u64, PasskeyRecord>,
+    #[cfg(feature = "passkey")]
     passkeys_by_credential_id: BTreeMap<String, u64>,
+    #[cfg(feature = "passkey")]
     passkey_sessions:          BTreeMap<(String, &'static str), PasskeySessionRecord>,
 }
 
@@ -599,6 +638,7 @@ impl MemorySecurityStore {
             .map_err(|_| SecurityError::Management(ManagementError::Poisoned("security")))
     }
 
+    #[cfg(feature = "passkey")]
     fn get_passkey_by_user(&self, user_id: u64) -> Result<Option<PasskeyRecord>, SecurityError> {
         self.inner
             .read()
@@ -606,6 +646,7 @@ impl MemorySecurityStore {
             .map_err(|_| SecurityError::Management(ManagementError::Poisoned("security")))
     }
 
+    #[cfg(feature = "passkey")]
     fn get_passkey_by_credential_id(
         &self,
         credential_id: &str,
@@ -621,6 +662,7 @@ impl MemorySecurityStore {
             .map_err(|_| SecurityError::Management(ManagementError::Poisoned("security")))
     }
 
+    #[cfg(feature = "passkey")]
     fn upsert_passkey(&self, mut record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
         let mut data = self
             .inner
@@ -644,6 +686,7 @@ impl MemorySecurityStore {
         Ok(record)
     }
 
+    #[cfg(feature = "passkey")]
     fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
         let mut data = self
             .inner
@@ -656,6 +699,7 @@ impl MemorySecurityStore {
         Ok(true)
     }
 
+    #[cfg(feature = "passkey")]
     fn save_passkey_session(&self, session: PasskeySessionRecord) -> Result<(), SecurityError> {
         let mut data = self
             .inner
@@ -666,6 +710,7 @@ impl MemorySecurityStore {
         Ok(())
     }
 
+    #[cfg(feature = "passkey")]
     fn pop_passkey_session(
         &self,
         session_id: &str,
@@ -687,6 +732,7 @@ impl MemorySecurityStore {
         Ok(Some(session))
     }
 
+    #[cfg(feature = "passkey")]
     fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
         self.pop_passkey_session(session_id, PASSKEY_READY_SESSION)
             .map(|session| session.is_some())
@@ -930,6 +976,7 @@ impl SqliteSecurityStore {
         Ok(two_fa_stats_from_records(total_users, records))
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_user(
         &self,
         user_id: u64,
@@ -946,6 +993,7 @@ impl SqliteSecurityStore {
         row.map(|row| passkey_record_from_row(&row)).transpose()
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_credential_id(
         &self,
         credential_id: &str,
@@ -962,6 +1010,7 @@ impl SqliteSecurityStore {
         row.map(|row| passkey_record_from_row(&row)).transpose()
     }
 
+    #[cfg(feature = "passkey")]
     async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
         sqlx::query(
             r#"INSERT INTO passkey_credentials
@@ -991,6 +1040,7 @@ impl SqliteSecurityStore {
             })
     }
 
+    #[cfg(feature = "passkey")]
     async fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
         let result = sqlx::query("DELETE FROM passkey_credentials WHERE user_id = ?")
             .bind(user_id as i64)
@@ -1000,6 +1050,7 @@ impl SqliteSecurityStore {
         Ok(result.rows_affected() > 0)
     }
 
+    #[cfg(feature = "passkey")]
     async fn save_passkey_session(
         &self,
         session: PasskeySessionRecord,
@@ -1026,6 +1077,7 @@ impl SqliteSecurityStore {
         Ok(())
     }
 
+    #[cfg(feature = "passkey")]
     async fn pop_passkey_session(
         &self,
         session_id: &str,
@@ -1058,6 +1110,7 @@ impl SqliteSecurityStore {
         Ok(Some(session))
     }
 
+    #[cfg(feature = "passkey")]
     async fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
         self.pop_passkey_session(session_id, PASSKEY_READY_SESSION)
             .await
@@ -1300,6 +1353,7 @@ impl MySqlSecurityStore {
         Ok(two_fa_stats_from_records(total_users, records))
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_user(
         &self,
         user_id: u64,
@@ -1317,6 +1371,7 @@ impl MySqlSecurityStore {
             .transpose()
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_credential_id(
         &self,
         credential_id: &str,
@@ -1334,6 +1389,7 @@ impl MySqlSecurityStore {
             .transpose()
     }
 
+    #[cfg(feature = "passkey")]
     async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
         sqlx::query(
             r#"INSERT INTO passkey_credentials
@@ -1363,6 +1419,7 @@ impl MySqlSecurityStore {
             })
     }
 
+    #[cfg(feature = "passkey")]
     async fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
         let result = sqlx::query("DELETE FROM passkey_credentials WHERE user_id = ?")
             .bind(user_id as i64)
@@ -1372,6 +1429,7 @@ impl MySqlSecurityStore {
         Ok(result.rows_affected() > 0)
     }
 
+    #[cfg(feature = "passkey")]
     async fn save_passkey_session(
         &self,
         session: PasskeySessionRecord,
@@ -1398,6 +1456,7 @@ impl MySqlSecurityStore {
         Ok(())
     }
 
+    #[cfg(feature = "passkey")]
     async fn pop_passkey_session(
         &self,
         session_id: &str,
@@ -1430,6 +1489,7 @@ impl MySqlSecurityStore {
         Ok(Some(session))
     }
 
+    #[cfg(feature = "passkey")]
     async fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
         self.pop_passkey_session(session_id, PASSKEY_READY_SESSION)
             .await
@@ -1674,6 +1734,7 @@ impl PostgresSecurityStore {
         Ok(two_fa_stats_from_records(total_users, records))
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_user(
         &self,
         user_id: u64,
@@ -1690,6 +1751,7 @@ impl PostgresSecurityStore {
         row.map(|row| passkey_record_from_pg_row(&row)).transpose()
     }
 
+    #[cfg(feature = "passkey")]
     async fn get_passkey_by_credential_id(
         &self,
         credential_id: &str,
@@ -1706,6 +1768,7 @@ impl PostgresSecurityStore {
         row.map(|row| passkey_record_from_pg_row(&row)).transpose()
     }
 
+    #[cfg(feature = "passkey")]
     async fn upsert_passkey(&self, record: PasskeyRecord) -> Result<PasskeyRecord, SecurityError> {
         sqlx::query(
             r#"INSERT INTO passkey_credentials
@@ -1735,6 +1798,7 @@ impl PostgresSecurityStore {
             })
     }
 
+    #[cfg(feature = "passkey")]
     async fn delete_passkey(&self, user_id: u64) -> Result<bool, SecurityError> {
         let result = sqlx::query("DELETE FROM passkey_credentials WHERE user_id = $1")
             .bind(user_id as i64)
@@ -1744,6 +1808,7 @@ impl PostgresSecurityStore {
         Ok(result.rows_affected() > 0)
     }
 
+    #[cfg(feature = "passkey")]
     async fn save_passkey_session(
         &self,
         session: PasskeySessionRecord,
@@ -1770,6 +1835,7 @@ impl PostgresSecurityStore {
         Ok(())
     }
 
+    #[cfg(feature = "passkey")]
     async fn pop_passkey_session(
         &self,
         session_id: &str,
@@ -1802,6 +1868,7 @@ impl PostgresSecurityStore {
         Ok(Some(session))
     }
 
+    #[cfg(feature = "passkey")]
     async fn consume_passkey_ready(&self, session_id: &str) -> Result<bool, SecurityError> {
         self.pop_passkey_session(session_id, PASSKEY_READY_SESSION)
             .await
@@ -1956,7 +2023,10 @@ impl Service<UniversalVerifyRequest> for SecurityService {
             .get_two_fa(req.user_id)
             .await?
             .is_some_and(|two_fa| two_fa.is_enabled);
+        #[cfg(feature = "passkey")]
         let has_passkey = self.store.get_passkey_by_user(req.user_id).await?.is_some();
+        #[cfg(not(feature = "passkey"))]
+        let has_passkey = false;
         if !has_two_fa && !has_passkey {
             return Err(SecurityError::business("用户未启用2FA或Passkey"));
         }
@@ -1981,25 +2051,32 @@ impl Service<UniversalVerifyRequest> for SecurityService {
                 })
             }
             VerificationMethod::Passkey => {
-                if !has_passkey {
-                    return Err(SecurityError::business("用户未启用Passkey"));
+                #[cfg(not(feature = "passkey"))]
+                return Err(SecurityError::business(PASSKEY_DISABLED_MESSAGE));
+                #[cfg(feature = "passkey")]
+                {
+                    if !has_passkey {
+                        return Err(SecurityError::business("用户未启用Passkey"));
+                    }
+                    let Some(session_id) =
+                        req.session_id.filter(|session_id| !session_id.is_empty())
+                    else {
+                        return Err(SecurityError::business("Passkey 验证会话不存在或已过期"));
+                    };
+                    if !self.store.consume_passkey_ready(&session_id).await? {
+                        return Err(SecurityError::business("Passkey 验证会话不存在或已过期"));
+                    }
+                    Ok(VerificationStatus {
+                        verified:   true,
+                        expires_at: Some(now_unix().saturating_add(PASSKEY_READY_TTL_SECONDS)),
+                    })
                 }
-                let Some(session_id) = req.session_id.filter(|session_id| !session_id.is_empty())
-                else {
-                    return Err(SecurityError::business("Passkey 验证会话不存在或已过期"));
-                };
-                if !self.store.consume_passkey_ready(&session_id).await? {
-                    return Err(SecurityError::business("Passkey 验证会话不存在或已过期"));
-                }
-                Ok(VerificationStatus {
-                    verified:   true,
-                    expires_at: Some(now_unix().saturating_add(PASSKEY_READY_TTL_SECONDS)),
-                })
             }
         }
     }
 }
 
+#[cfg(feature = "passkey")]
 impl Service<GetPasskeyStatusRequest> for SecurityService {
     type Response = PasskeyStatus;
     type Error = SecurityError;
@@ -2018,6 +2095,20 @@ impl Service<GetPasskeyStatusRequest> for SecurityService {
     }
 }
 
+#[cfg(not(feature = "passkey"))]
+impl Service<GetPasskeyStatusRequest> for SecurityService {
+    type Response = PasskeyStatus;
+    type Error = SecurityError;
+
+    async fn call(&self, _req: GetPasskeyStatusRequest) -> Result<Self::Response, Self::Error> {
+        Ok(PasskeyStatus {
+            enabled:      false,
+            last_used_at: None,
+        })
+    }
+}
+
+#[cfg(feature = "passkey")]
 impl Service<PasskeyFlowRequest> for SecurityService {
     type Response = PasskeyFlowResponse;
     type Error = SecurityError;
@@ -2038,6 +2129,17 @@ impl Service<PasskeyFlowRequest> for SecurityService {
     }
 }
 
+#[cfg(not(feature = "passkey"))]
+impl Service<PasskeyFlowRequest> for SecurityService {
+    type Response = PasskeyFlowResponse;
+    type Error = SecurityError;
+
+    async fn call(&self, _req: PasskeyFlowRequest) -> Result<Self::Response, Self::Error> {
+        Err(SecurityError::business(PASSKEY_DISABLED_MESSAGE))
+    }
+}
+
+#[cfg(feature = "passkey")]
 impl Service<DeletePasskeyRequest> for SecurityService {
     type Response = ();
     type Error = SecurityError;
@@ -2050,6 +2152,17 @@ impl Service<DeletePasskeyRequest> for SecurityService {
     }
 }
 
+#[cfg(not(feature = "passkey"))]
+impl Service<DeletePasskeyRequest> for SecurityService {
+    type Response = ();
+    type Error = SecurityError;
+
+    async fn call(&self, _req: DeletePasskeyRequest) -> Result<Self::Response, Self::Error> {
+        Err(SecurityError::business(PASSKEY_DISABLED_MESSAGE))
+    }
+}
+
+#[cfg(feature = "passkey")]
 impl Service<AdminResetPasskeyRequest> for SecurityService {
     type Response = ();
     type Error = SecurityError;
@@ -2062,6 +2175,16 @@ impl Service<AdminResetPasskeyRequest> for SecurityService {
             return Err(SecurityError::business(PASSKEY_NOT_BOUND_MESSAGE));
         }
         Ok(())
+    }
+}
+
+#[cfg(not(feature = "passkey"))]
+impl Service<AdminResetPasskeyRequest> for SecurityService {
+    type Response = ();
+    type Error = SecurityError;
+
+    async fn call(&self, _req: AdminResetPasskeyRequest) -> Result<Self::Response, Self::Error> {
+        Err(SecurityError::business(PASSKEY_DISABLED_MESSAGE))
     }
 }
 
@@ -2090,6 +2213,7 @@ impl Service<AdminTwoFaStatsRequest> for SecurityService {
 }
 
 impl SecurityService {
+    #[cfg(feature = "passkey")]
     async fn passkey_register_begin(
         &self,
         req: PasskeyFlowRequest,
@@ -2123,6 +2247,7 @@ impl SecurityService {
         }))
     }
 
+    #[cfg(feature = "passkey")]
     async fn passkey_register_finish(
         &self,
         req: PasskeyFlowRequest,
@@ -2171,6 +2296,7 @@ impl SecurityService {
         Ok(PasskeyFlowResponse::Finished { user_id: None })
     }
 
+    #[cfg(feature = "passkey")]
     async fn passkey_login_begin(
         &self,
         req: PasskeyFlowRequest,
@@ -2187,6 +2313,7 @@ impl SecurityService {
         }))
     }
 
+    #[cfg(feature = "passkey")]
     async fn passkey_login_finish(
         &self,
         req: PasskeyFlowRequest,
@@ -2227,6 +2354,7 @@ impl SecurityService {
         })
     }
 
+    #[cfg(feature = "passkey")]
     async fn passkey_verify_begin(
         &self,
         req: PasskeyFlowRequest,
@@ -2252,6 +2380,7 @@ impl SecurityService {
         }))
     }
 
+    #[cfg(feature = "passkey")]
     async fn passkey_verify_finish(
         &self,
         req: PasskeyFlowRequest,
@@ -2380,11 +2509,18 @@ impl TwoFaRecord {
     }
 }
 
+#[cfg(feature = "passkey")]
 pub(crate) fn passkey_login_enabled(options: &BTreeMap<String, String>) -> bool {
     option_bool(options, "passkey.enabled", false)
         || option_bool(options, "PasskeyLoginEnabled", false)
 }
 
+#[cfg(not(feature = "passkey"))]
+pub(crate) fn passkey_login_enabled(_options: &BTreeMap<String, String>) -> bool {
+    false
+}
+
+#[cfg(feature = "passkey")]
 #[derive(Debug, Clone)]
 struct PasskeySettings {
     enabled:               bool,
@@ -2394,6 +2530,7 @@ struct PasskeySettings {
     allow_insecure_origin: bool,
 }
 
+#[cfg(feature = "passkey")]
 impl PasskeySettings {
     fn from_options(options: &BTreeMap<String, String>) -> Self {
         Self {
@@ -2406,6 +2543,7 @@ impl PasskeySettings {
     }
 }
 
+#[cfg(feature = "passkey")]
 fn build_webauthn(
     options: &BTreeMap<String, String>,
     request: &PasskeyRequestContext,
@@ -2431,6 +2569,7 @@ fn build_webauthn(
     builder.build().map_err(passkey_webauthn_error)
 }
 
+#[cfg(feature = "passkey")]
 fn resolve_passkey_origins(
     request: &PasskeyRequestContext,
     settings: &PasskeySettings,
@@ -2460,6 +2599,7 @@ fn resolve_passkey_origins(
     auto_passkey_origin(request, settings)
 }
 
+#[cfg(feature = "passkey")]
 fn auto_passkey_origin(
     request: &PasskeyRequestContext,
     settings: &PasskeySettings,
@@ -2482,6 +2622,7 @@ fn auto_passkey_origin(
     Ok(vec![format!("{scheme}://{host}")])
 }
 
+#[cfg(feature = "passkey")]
 fn resolve_passkey_rp_id(
     request: &PasskeyRequestContext,
     settings: &PasskeySettings,
@@ -2504,6 +2645,7 @@ fn resolve_passkey_rp_id(
         .ok_or_else(|| SecurityError::business("Passkey 未配置 Origin，无法推导 RPID"))
 }
 
+#[cfg(feature = "passkey")]
 fn detect_passkey_scheme(request: &PasskeyRequestContext) -> String {
     if let Some(proto) = request
         .forwarded_proto
@@ -2525,6 +2667,7 @@ fn detect_passkey_scheme(request: &PasskeyRequestContext) -> String {
     "http".to_string()
 }
 
+#[cfg(feature = "passkey")]
 fn host_without_port(host: &str) -> String {
     let host = host.trim();
     if let Some(stripped) = host.strip_prefix('[') {
@@ -2542,6 +2685,7 @@ fn host_without_port(host: &str) -> String {
     host.to_string()
 }
 
+#[cfg(feature = "passkey")]
 fn is_local_passkey_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host == "127.0.0.1"
@@ -2549,26 +2693,32 @@ fn is_local_passkey_host(host: &str) -> bool {
         || host.starts_with("127.")
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_config_error(err: impl std::fmt::Display) -> SecurityError {
     SecurityError::business(err.to_string())
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_webauthn_error(err: impl std::fmt::Debug) -> SecurityError {
     SecurityError::business(format!("Passkey 验证失败: {err:?}"))
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_user_uuid(user_id: u64) -> Uuid {
     Uuid::from_u128(user_id as u128)
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_credential_id(passkey: &Passkey) -> String {
     BASE64URL_NOPAD.encode(passkey.cred_id())
 }
 
+#[cfg(feature = "passkey")]
 fn raw_credential_id(raw_id: &[u8]) -> String {
     BASE64URL_NOPAD.encode(raw_id)
 }
 
+#[cfg(feature = "passkey")]
 fn parse_passkey_payload<T: DeserializeOwned>(
     payload: Option<serde_json::Value>,
 ) -> Result<T, SecurityError> {
@@ -2578,6 +2728,7 @@ fn parse_passkey_payload<T: DeserializeOwned>(
     serde_json::from_value(payload).map_err(|err| SecurityError::business(err.to_string()))
 }
 
+#[cfg(feature = "passkey")]
 fn encode_passkey_session<T: Serialize>(
     session_id: String,
     kind: &'static str,
@@ -2595,12 +2746,14 @@ fn encode_passkey_session<T: Serialize>(
     })
 }
 
+#[cfg(feature = "passkey")]
 fn decode_passkey_session<T: DeserializeOwned>(
     session: PasskeySessionRecord,
 ) -> Result<T, SecurityError> {
     serde_json::from_str(&session.payload).map_err(serde_security_error)
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_ready_session(session_id: String, user_id: u64) -> PasskeySessionRecord {
     let now = now_unix();
     PasskeySessionRecord {
@@ -2613,6 +2766,7 @@ fn passkey_ready_session(session_id: String, user_id: u64) -> PasskeySessionReco
     }
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_user_name(user: &PasskeyUser) -> String {
     let username = user.username.trim();
     if username.is_empty() {
@@ -2622,6 +2776,7 @@ fn passkey_user_name(user: &PasskeyUser) -> String {
     }
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_user_display_name(user: &PasskeyUser) -> String {
     let display_name = user.display_name.trim();
     if display_name.is_empty() {
@@ -2631,6 +2786,7 @@ fn passkey_user_display_name(user: &PasskeyUser) -> String {
     }
 }
 
+#[cfg(feature = "passkey")]
 fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> bool {
     options
         .get(key)
@@ -2638,6 +2794,7 @@ fn option_bool(options: &BTreeMap<String, String>, key: &str, default: bool) -> 
         .unwrap_or(default)
 }
 
+#[cfg(feature = "passkey")]
 fn option_string(options: &BTreeMap<String, String>, key: &str, default: &str) -> String {
     options
         .get(key)
@@ -2783,6 +2940,7 @@ fn sqlx_security_error(err: sqlx::Error) -> SecurityError {
     SecurityError::Management(ManagementError::Storage(err.to_string()))
 }
 
+#[cfg(feature = "passkey")]
 fn serde_security_error(err: serde_json::Error) -> SecurityError {
     SecurityError::Management(ManagementError::Storage(err.to_string()))
 }
@@ -2835,6 +2993,7 @@ fn optional_mysql_i64_col(row: &sqlx::mysql::MySqlRow, name: &str) -> Option<i64
     row.try_get::<Option<i64>, _>(name).ok().flatten()
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_record_from_mysql_row(
     row: &sqlx::mysql::MySqlRow,
 ) -> Result<PasskeyRecord, SecurityError> {
@@ -2855,6 +3014,7 @@ fn passkey_record_from_mysql_row(
     })
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_session_from_mysql_row(
     row: &sqlx::mysql::MySqlRow,
 ) -> Result<PasskeySessionRecord, SecurityError> {
@@ -2927,6 +3087,7 @@ fn pg_optional_i64_col(row: &sqlx::postgres::PgRow, name: &str) -> Option<i64> {
         .map(i64::from)
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyRecord, SecurityError> {
     let user_uuid = string_col(row, "user_uuid")?
         .parse::<Uuid>()
@@ -2945,6 +3106,7 @@ fn passkey_record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyRecor
     })
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_record_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<PasskeyRecord, SecurityError> {
     let user_uuid = pg_string_col(row, "user_uuid")?
         .parse::<Uuid>()
@@ -2963,6 +3125,7 @@ fn passkey_record_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<PasskeyReco
     })
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_session_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> Result<PasskeySessionRecord, SecurityError> {
@@ -2977,6 +3140,7 @@ fn passkey_session_from_row(
     })
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_session_from_pg_row(
     row: &sqlx::postgres::PgRow,
 ) -> Result<PasskeySessionRecord, SecurityError> {
@@ -2991,6 +3155,7 @@ fn passkey_session_from_pg_row(
     })
 }
 
+#[cfg(feature = "passkey")]
 fn passkey_session_kind_static(kind: &str) -> Result<&'static str, SecurityError> {
     match kind {
         PASSKEY_REGISTRATION_SESSION => Ok(PASSKEY_REGISTRATION_SESSION),
@@ -3148,6 +3313,7 @@ mod tests {
         assert_eq!(err.message(), PASSKEY_DISABLED_MESSAGE);
     }
 
+    #[cfg(feature = "passkey")]
     #[test]
     fn passkey_enabled_accepts_new_and_legacy_option_keys() {
         assert!(!passkey_login_enabled(&BTreeMap::new()));

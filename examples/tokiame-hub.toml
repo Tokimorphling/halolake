@@ -1,8 +1,0 @@
-[server]
-listen = "0.0.0.0:9091"
-
-[control]
-base_url = "http://127.0.0.1:9090"
-# Prefer HALOLAKE_INTERNAL_SECRET; it overrides this value.
-internal_secret = ""
-

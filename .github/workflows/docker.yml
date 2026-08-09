@@ -112,9 +112,10 @@ jobs:
               # gateway should also be up after control is healthy
               if curl -fsS -o /dev/null -w "%{http_code}" "http://127.0.0.1:18082/" | grep -Eq '^[0-9]{3}$'; then
                 echo "gateway port responding"
+                docker rm -f hl-smoke
+                exit 0
               fi
-              docker rm -f hl-smoke
-              exit 0
+              echo "gateway is not responding yet"
             fi
             sleep 2
           done

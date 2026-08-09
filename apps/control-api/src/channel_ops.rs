@@ -1451,7 +1451,7 @@ fn channel_base_url(channel: &ChannelRecord) -> String {
         .map(str::to_string)
         .unwrap_or_else(|| {
             if channel.channel_type == CHANNEL_TYPE_CODEX
-                && crate::control_api_ext::parse_flexible_codex_key(&channel.key).is_ok()
+                && crate::codex_auth::parse_flexible_codex_key(&channel.key).is_ok()
             {
                 "https://chatgpt.com/backend-api/codex".to_string()
             } else {
@@ -1638,7 +1638,7 @@ fn channel_test_credential(
         });
     }
 
-    let key = crate::control_api_ext::parse_flexible_codex_key(&channel.key)?;
+    let key = crate::codex_auth::parse_flexible_codex_key(&channel.key)?;
     let api_key = key
         .access_token
         .map(|token| token.trim().to_string())

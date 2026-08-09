@@ -1005,7 +1005,7 @@ fn key_preview(key: &str) -> String {
 }
 
 fn parse_codex_key(raw: &str) -> Result<CodexOAuthKey, ManagementError> {
-    let flexible = crate::control_api_ext::parse_flexible_codex_key(raw)?;
+    let flexible = crate::codex_auth::parse_flexible_codex_key(raw)?;
     Ok(CodexOAuthKey {
         id_token:      flexible.id_token,
         access_token:  flexible.access_token,
