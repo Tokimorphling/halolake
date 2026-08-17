@@ -7,6 +7,7 @@ pub(crate) enum OpenAiImageRouteKind {
     LegacyEdits,
 }
 
+#[derive(Clone)]
 pub(crate) struct ParsedOpenAiImageRequest {
     pub(crate) kind:    OpenAiImageRouteKind,
     pub(crate) model:   String,
@@ -14,6 +15,7 @@ pub(crate) struct ParsedOpenAiImageRequest {
     pub(crate) payload: OpenAiImagePayload,
 }
 
+#[derive(Clone)]
 pub(crate) enum OpenAiImagePayload {
     Json {
         request: openai::ImageRequest,

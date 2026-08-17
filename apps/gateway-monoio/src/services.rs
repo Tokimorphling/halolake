@@ -8,6 +8,21 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 
+const MAX_UPSTREAM_ATTEMPTS: u8 = 3;
+const DEFAULT_PRECONSUMED_TOKENS: u64 = 500;
+
+fn should_retry_upstream(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    ) || status == StatusCode::UNAUTHORIZED
+        || status == StatusCode::FORBIDDEN
+}
+
 #[derive(Clone)]
 pub(crate) struct ChatGatewayService {
     router:           AuthRouteService,
@@ -84,7 +99,7 @@ impl ChatGatewayService {
 
 impl<CX> Service<(GatewayRequest, CX)> for ChatGatewayService
 where
-    CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: Clone + ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
     <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
     <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
         ParamRef<RequestAuth>
@@ -106,8 +121,8 @@ where
                 ));
             }
         };
-        let token = match self.router.extract_token(&req.headers) {
-            Some(token) => token,
+        let tokens = match self.router.extract_tokens(&req.headers) {
+            Some(tokens) => tokens,
             None => {
                 return Ok(json_error(
                     StatusCode::UNAUTHORIZED,
@@ -116,36 +131,82 @@ where
                 ));
             }
         };
-        let route = match self
-            .router
-            .call(RouteLookup {
-                token,
-                requested_model: openai_req.model.clone(),
-                path: req.path.clone(),
-                headers: req.headers.clone(),
-                body: req.body.clone(),
-                peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
-            })
-            .await
-        {
+        let lookup = RouteLookup {
+            tokens,
+            requested_model: openai_req.model.clone(),
+            path: req.path.clone(),
+            headers: req.headers.clone(),
+            body: req.body.clone(),
+            peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
+        };
+        let mut route = match self.router.call(lookup.clone()).await {
             Ok(route) => route,
             Err(err) => return Ok(route_error_response(err)),
         };
-
+        let reserve_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let reserved_quota = match reserve_request_quota(
+            &self.usage,
+            &usage_event_parts(&reserve_cx, openai_req.is_stream()),
+            &req.body,
+        )
+        .await
+        {
+            Ok(reserved) => reserved,
+            Err(response) => return Ok(response),
+        };
+        let started = Instant::now();
+        let mut final_response = None;
+        let mut failed_channels = Vec::new();
+        for attempt in 0..MAX_UPSTREAM_ATTEMPTS {
+            let attempt_cx = cx
+                .clone()
+                .param_set(route.auth.clone())
+                .param_set(route.route.clone());
+            let attempt_usage = usage_event_parts(&attempt_cx, openai_req.is_stream());
+            let response = self
+                .relay
+                .call(OpenAiChatRelayRequest {
+                    request:            openai_req.clone(),
+                    raw_body:           req.body.clone(),
+                    downstream_headers: req.headers.clone(),
+                    cx:                 attempt_cx,
+                })
+                .await?;
+            if attempt + 1 < MAX_UPSTREAM_ATTEMPTS
+                && !route
+                    .affinity
+                    .as_ref()
+                    .is_some_and(|affinity| affinity.skip_retry_on_failure)
+                && should_retry_upstream(response.status())
+            {
+                let previous = route.route.channel_id.to_string();
+                failed_channels.push(previous);
+                if let Ok(next) = self
+                    .router
+                    .retry_route(&lookup, u64::from(attempt + 1), &failed_channels)
+                    .await
+                {
+                    report_channel_feedback(&self.channel_feedback, &attempt_usage, &response);
+                    drop(response);
+                    route = next;
+                    continue;
+                }
+            }
+            final_response = Some(response);
+            break;
+        }
+        let resp = final_response.expect("upstream attempt loop always produces a response");
+        let final_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let mut usage = usage_event_parts(&final_cx, openai_req.is_stream());
+        usage.pre_consumed_quota = reserved_quota;
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
-        let cx = cx.param_set(route.auth).param_set(route.route);
-        let usage = usage_event_parts(&cx, openai_req.is_stream());
-        let started = Instant::now();
-        let resp = self
-            .relay
-            .call(OpenAiChatRelayRequest {
-                request: openai_req,
-                raw_body: req.body,
-                downstream_headers: req.headers,
-                cx,
-            })
-            .await?;
         self.router
             .record_affinity(affinity.as_ref(), &affinity_channel_id, resp.status());
         Ok(finalize_response_usage(
@@ -187,7 +248,7 @@ impl ImageGatewayService {
 
 impl<CX> Service<(GatewayRequest, CX)> for ImageGatewayService
 where
-    CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: Clone + ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
     <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
     <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
         ParamRef<RequestAuth>
@@ -203,8 +264,8 @@ where
             Ok(parsed) => parsed,
             Err(resp) => return Ok(resp),
         };
-        let token = match self.router.extract_token(&req.headers) {
-            Some(token) => token,
+        let tokens = match self.router.extract_tokens(&req.headers) {
+            Some(tokens) => tokens,
             None => {
                 return Ok(json_error(
                     StatusCode::UNAUTHORIZED,
@@ -213,39 +274,85 @@ where
                 ));
             }
         };
-        let route = match self
-            .router
-            .call(RouteLookup {
-                token,
-                requested_model: parsed.model.clone(),
-                path: req.path.clone(),
-                headers: req.headers.clone(),
-                body: req.body.clone(),
-                peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
-            })
-            .await
-        {
+        let lookup = RouteLookup {
+            tokens,
+            requested_model: parsed.model.clone(),
+            path: req.path.clone(),
+            headers: req.headers.clone(),
+            body: req.body.clone(),
+            peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
+        };
+        let mut route = match self.router.call(lookup.clone()).await {
             Ok(route) => route,
             Err(err) => return Ok(route_error_response(err)),
         };
-
+        let reserve_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let reserved_quota = match reserve_request_quota(
+            &self.usage,
+            &usage_event_parts(&reserve_cx, parsed.stream),
+            &req.body,
+        )
+        .await
+        {
+            Ok(reserved) => reserved,
+            Err(response) => return Ok(response),
+        };
+        let started = Instant::now();
+        let mut final_response = None;
+        let mut failed_channels = Vec::new();
+        for attempt in 0..MAX_UPSTREAM_ATTEMPTS {
+            let attempt_cx = cx
+                .clone()
+                .param_set(route.auth.clone())
+                .param_set(route.route.clone());
+            let attempt_usage = usage_event_parts(&attempt_cx, parsed.stream);
+            let response = self
+                .relay
+                .call(OpenAiImageRelayRequest {
+                    kind:               parsed.kind,
+                    stream:             parsed.stream,
+                    payload:            parsed.payload.clone(),
+                    body:               req.body.clone(),
+                    downstream_headers: req.headers.clone(),
+                    path:               req.path.clone(),
+                    cx:                 attempt_cx,
+                })
+                .await?;
+            if attempt + 1 < MAX_UPSTREAM_ATTEMPTS
+                && !route
+                    .affinity
+                    .as_ref()
+                    .is_some_and(|affinity| affinity.skip_retry_on_failure)
+                && should_retry_upstream(response.status())
+            {
+                let previous = route.route.channel_id.to_string();
+                failed_channels.push(previous);
+                if let Ok(next) = self
+                    .router
+                    .retry_route(&lookup, u64::from(attempt + 1), &failed_channels)
+                    .await
+                {
+                    report_channel_feedback(&self.channel_feedback, &attempt_usage, &response);
+                    drop(response);
+                    route = next;
+                    continue;
+                }
+            }
+            final_response = Some(response);
+            break;
+        }
+        let resp = final_response.expect("upstream attempt loop always produces a response");
+        let final_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let mut usage = usage_event_parts(&final_cx, parsed.stream);
+        usage.pre_consumed_quota = reserved_quota;
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
-        let cx = cx.param_set(route.auth).param_set(route.route);
-        let usage = usage_event_parts(&cx, parsed.stream);
-        let started = Instant::now();
-        let resp = self
-            .relay
-            .call(OpenAiImageRelayRequest {
-                kind: parsed.kind,
-                stream: parsed.stream,
-                payload: parsed.payload,
-                body: req.body,
-                downstream_headers: req.headers,
-                path: req.path,
-                cx,
-            })
-            .await?;
         self.router
             .record_affinity(affinity.as_ref(), &affinity_channel_id, resp.status());
         Ok(finalize_response_usage(
@@ -287,7 +394,7 @@ impl ClaudeMessagesGatewayService {
 
 impl<CX> Service<(GatewayRequest, CX)> for ClaudeMessagesGatewayService
 where
-    CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: Clone + ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
     <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
     <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
         ParamRef<RequestAuth>
@@ -320,8 +427,8 @@ where
                 "Claude messages body must contain a string model field",
             ));
         };
-        let token = match self.router.extract_token(&req.headers) {
-            Some(token) => token,
+        let tokens = match self.router.extract_tokens(&req.headers) {
+            Some(tokens) => tokens,
             None => {
                 return Ok(json_error(
                     StatusCode::UNAUTHORIZED,
@@ -330,40 +437,86 @@ where
                 ));
             }
         };
-        let route = match self
-            .router
-            .call(RouteLookup {
-                token,
-                requested_model: model,
-                path: req.path.clone(),
-                headers: req.headers.clone(),
-                body: req.body.clone(),
-                peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
-            })
-            .await
-        {
+        let lookup = RouteLookup {
+            tokens,
+            requested_model: model,
+            path: req.path.clone(),
+            headers: req.headers.clone(),
+            body: req.body.clone(),
+            peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
+        };
+        let mut route = match self.router.call(lookup.clone()).await {
             Ok(route) => route,
             Err(err) => return Ok(route_error_response(err)),
         };
+        let is_stream = value
+            .get("stream")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let reserve_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let reserved_quota = match reserve_request_quota(
+            &self.usage,
+            &usage_event_parts(&reserve_cx, is_stream),
+            &req.body,
+        )
+        .await
+        {
+            Ok(reserved) => reserved,
+            Err(response) => return Ok(response),
+        };
+        let started = Instant::now();
+        let mut final_response = None;
+        let mut failed_channels = Vec::new();
+        for attempt in 0..MAX_UPSTREAM_ATTEMPTS {
+            let attempt_cx = cx
+                .clone()
+                .param_set(route.auth.clone())
+                .param_set(route.route.clone());
+            let attempt_usage = usage_event_parts(&attempt_cx, is_stream);
+            let response = self
+                .relay
+                .call(ClaudeMessagesRelayRequest {
+                    value:              value.clone(),
+                    path:               req.path.clone(),
+                    downstream_headers: req.headers.clone(),
+                    cx:                 attempt_cx,
+                })
+                .await?;
+            if attempt + 1 < MAX_UPSTREAM_ATTEMPTS
+                && !route
+                    .affinity
+                    .as_ref()
+                    .is_some_and(|affinity| affinity.skip_retry_on_failure)
+                && should_retry_upstream(response.status())
+            {
+                let previous = route.route.channel_id.to_string();
+                failed_channels.push(previous);
+                if let Ok(next) = self
+                    .router
+                    .retry_route(&lookup, u64::from(attempt + 1), &failed_channels)
+                    .await
+                {
+                    report_channel_feedback(&self.channel_feedback, &attempt_usage, &response);
+                    drop(response);
+                    route = next;
+                    continue;
+                }
+            }
+            final_response = Some(response);
+            break;
+        }
+        let resp = final_response.expect("upstream attempt loop always produces a response");
+        let final_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let mut usage = usage_event_parts(&final_cx, is_stream);
+        usage.pre_consumed_quota = reserved_quota;
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
-        let cx = cx.param_set(route.auth).param_set(route.route);
-        let usage = usage_event_parts(
-            &cx,
-            value
-                .get("stream")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false),
-        );
-        let started = Instant::now();
-        let resp = self
-            .relay
-            .call(ClaudeMessagesRelayRequest {
-                value,
-                downstream_headers: req.headers,
-                cx,
-            })
-            .await?;
         self.router
             .record_affinity(affinity.as_ref(), &affinity_channel_id, resp.status());
         Ok(finalize_response_usage(
@@ -424,8 +577,8 @@ where
                 "Gemini route not found",
             ));
         };
-        let token = match self.router.extract_token(&req.headers) {
-            Some(token) => token,
+        let tokens = match self.router.extract_tokens(&req.headers) {
+            Some(tokens) => tokens,
             None => {
                 return Ok(json_error(
                     StatusCode::UNAUTHORIZED,
@@ -437,7 +590,7 @@ where
         let route = match self
             .router
             .call(RouteLookup {
-                token,
+                tokens,
                 requested_model,
                 path: req.path.clone(),
                 headers: req.headers.clone(),
@@ -453,7 +606,12 @@ where
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
         let cx = cx.param_set(route.auth).param_set(route.route);
-        let usage = usage_event_parts(&cx, stream);
+        let mut usage = usage_event_parts(&cx, stream);
+        let reserved_quota = match reserve_request_quota(&self.usage, &usage, &req.body).await {
+            Ok(reserved) => reserved,
+            Err(response) => return Ok(response),
+        };
+        usage.pre_consumed_quota = reserved_quota;
         let started = Instant::now();
         let resp = self
             .relay
@@ -506,7 +664,7 @@ impl RawOpenAiGatewayService {
 
 impl<CX> Service<(GatewayRequest, CX)> for RawOpenAiGatewayService
 where
-    CX: ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
+    CX: Clone + ParamSet<RequestAuth> + ParamRef<RequestId> + ParamRef<PeerAddr>,
     <CX as ParamSet<RequestAuth>>::Transformed: ParamSet<Rc<RouteContext>>,
     <<CX as ParamSet<RequestAuth>>::Transformed as ParamSet<Rc<RouteContext>>>::Transformed:
         ParamRef<RequestAuth>
@@ -518,7 +676,7 @@ where
     type Error = Infallible;
 
     async fn call(&self, (req, cx): (GatewayRequest, CX)) -> Result<Self::Response, Self::Error> {
-        let mut value: JsonValue = match serde_json::from_slice(&req.body) {
+        let value: JsonValue = match serde_json::from_slice(&req.body) {
             Ok(req) => req,
             Err(err) => {
                 return Ok(json_error(
@@ -539,8 +697,8 @@ where
                 "request body must contain a string model field",
             ));
         };
-        let token = match self.router.extract_token(&req.headers) {
-            Some(token) => token,
+        let tokens = match self.router.extract_tokens(&req.headers) {
+            Some(tokens) => tokens,
             None => {
                 return Ok(json_error(
                     StatusCode::UNAUTHORIZED,
@@ -549,61 +707,106 @@ where
                 ));
             }
         };
-        let route = match self
-            .router
-            .call(RouteLookup {
-                token,
-                requested_model: model,
-                path: req.path.clone(),
-                headers: req.headers.clone(),
-                body: req.body.clone(),
-                peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
-            })
-            .await
-        {
+        let lookup = RouteLookup {
+            tokens,
+            requested_model: model,
+            path: req.path.clone(),
+            headers: req.headers.clone(),
+            body: req.body.clone(),
+            peer_ip: ParamRef::<PeerAddr>::param_ref(&cx).0.ip(),
+        };
+        let mut route = match self.router.call(lookup.clone()).await {
             Ok(route) => route,
             Err(err) => return Ok(route_error_response(err)),
         };
-        let affinity = route.affinity.clone();
-        let affinity_channel_id = route.route.channel_id.clone();
-        value["model"] = JsonValue::String(route.route.upstream_model.to_string());
         // new-api ForceStreamOption targets OpenAI chat/completions (and legacy
         // completions). Responses API carries usage in `response.completed` instead.
         let path_for_stream = req.path.split('?').next().unwrap_or(req.path.as_str());
-        if path_for_stream.ends_with("/chat/completions")
-            || path_for_stream.ends_with("/completions")
+        let is_stream = value
+            .get("stream")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let reserve_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let reserved_quota = match reserve_request_quota(
+            &self.usage,
+            &usage_event_parts(&reserve_cx, is_stream),
+            &req.body,
+        )
+        .await
         {
-            ensure_openai_stream_include_usage(&mut value);
-        }
-        let body = match serde_json::to_vec(&value) {
-            Ok(body) => Bytes::from(body),
-            Err(err) => {
-                return Ok(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request_error",
-                    &format!("failed to rewrite request model: {err}"),
-                ));
-            }
+            Ok(reserved) => reserved,
+            Err(response) => return Ok(response),
         };
-
-        let cx = cx.param_set(route.auth).param_set(route.route);
-        let usage = usage_event_parts(
-            &cx,
-            value
-                .get("stream")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false),
-        );
         let started = Instant::now();
-        let resp = self
-            .relay
-            .call(OpenAiPassthroughRelayRequest {
-                path: req.path,
-                body,
-                downstream_headers: req.headers,
-                cx,
-            })
-            .await?;
+        let mut final_response = None;
+        let mut failed_channels = Vec::new();
+        for attempt in 0..MAX_UPSTREAM_ATTEMPTS {
+            let mut attempt_value = value.clone();
+            attempt_value["model"] = JsonValue::String(route.route.upstream_model.to_string());
+            if path_for_stream.ends_with("/chat/completions")
+                || path_for_stream.ends_with("/completions")
+            {
+                ensure_openai_stream_include_usage(&mut attempt_value);
+            }
+            let body = match serde_json::to_vec(&attempt_value) {
+                Ok(body) => Bytes::from(body),
+                Err(err) => {
+                    return Ok(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request_error",
+                        &format!("failed to rewrite request model: {err}"),
+                    ));
+                }
+            };
+            let attempt_cx = cx
+                .clone()
+                .param_set(route.auth.clone())
+                .param_set(route.route.clone());
+            let attempt_usage = usage_event_parts(&attempt_cx, is_stream);
+            let response = self
+                .relay
+                .call(OpenAiPassthroughRelayRequest {
+                    path: req.path.clone(),
+                    body,
+                    downstream_headers: req.headers.clone(),
+                    cx: attempt_cx,
+                })
+                .await?;
+            if attempt + 1 < MAX_UPSTREAM_ATTEMPTS
+                && !route
+                    .affinity
+                    .as_ref()
+                    .is_some_and(|affinity| affinity.skip_retry_on_failure)
+                && should_retry_upstream(response.status())
+            {
+                let previous = route.route.channel_id.to_string();
+                failed_channels.push(previous);
+                if let Ok(next) = self
+                    .router
+                    .retry_route(&lookup, u64::from(attempt + 1), &failed_channels)
+                    .await
+                {
+                    report_channel_feedback(&self.channel_feedback, &attempt_usage, &response);
+                    drop(response);
+                    route = next;
+                    continue;
+                }
+            }
+            final_response = Some(response);
+            break;
+        }
+        let resp = final_response.expect("upstream attempt loop always produces a response");
+        let final_cx = cx
+            .clone()
+            .param_set(route.auth.clone())
+            .param_set(route.route.clone());
+        let mut usage = usage_event_parts(&final_cx, is_stream);
+        usage.pre_consumed_quota = reserved_quota;
+        let affinity = route.affinity.clone();
+        let affinity_channel_id = route.route.channel_id.clone();
         self.router
             .record_affinity(affinity.as_ref(), &affinity_channel_id, resp.status());
         Ok(finalize_response_usage(
@@ -621,84 +824,156 @@ impl Service<RouteLookup> for AuthRouteService {
     type Error = RouteError;
 
     async fn call(&self, lookup: RouteLookup) -> Result<Self::Response, Self::Error> {
+        let key_seed = self.next_key.get();
+        self.next_key.set(key_seed.wrapping_add(1));
+        self.select_route(&lookup, key_seed, true, &[])
+    }
+}
+
+impl AuthRouteService {
+    fn select_route(
+        &self,
+        lookup: &RouteLookup,
+        key_seed: u64,
+        with_affinity: bool,
+        excluded_channel_ids: &[&str],
+    ) -> Result<RouteParts, RouteError> {
         let state = self.snapshots.load();
         let snapshot = &state.snapshot;
         // The affinity cache is owned by the SnapshotStore, not the snapshot, so
         // it survives snapshot swaps.
         let affinity_cache = self.snapshots.affinity_cache();
-        let auth = snapshot.authenticate(&lookup.token)?;
-        snapshot.authorize_ip(&auth, lookup.peer_ip)?;
-        let key_seed = self.next_key.get();
-        self.next_key.set(key_seed.wrapping_add(1));
         let user_agent = lookup
             .headers
             .get(header::USER_AGENT)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        let affinity = snapshot.resolve_affinity(
-            ChannelAffinityRequest {
-                requested_model: &lookup.requested_model,
-                path: &lookup.path,
-                user_agent,
-                using_group: auth.token.group(),
-                body: &lookup.body,
-            },
-            affinity_cache,
-            |name| {
-                lookup
-                    .headers
-                    .get(name)
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            },
-        );
-        let (route, affinity_hit) = snapshot.route_with_affinity_seed(
-            &auth,
-            &lookup.requested_model,
-            affinity.as_ref(),
-            affinity_cache,
-            key_seed,
-        )?;
-        if affinity_hit {
-            debug!(
-                channel_id = %route.channel.id,
-                requested_model = %lookup.requested_model,
-                "channel affinity hit"
-            );
+        let mut last_error = RouteError::Unauthorized;
+        for token in &lookup.tokens {
+            let auth = match snapshot.authenticate(token) {
+                Ok(auth) => auth,
+                Err(err) => {
+                    last_error = err;
+                    continue;
+                }
+            };
+            if let Err(err) = snapshot.authorize_ip(&auth, lookup.peer_ip) {
+                last_error = err;
+                continue;
+            }
+            let affinity = if with_affinity {
+                snapshot.resolve_affinity(
+                    ChannelAffinityRequest {
+                        requested_model: &lookup.requested_model,
+                        path: &lookup.path,
+                        user_agent,
+                        using_group: auth.token.group(),
+                        body: &lookup.body,
+                    },
+                    affinity_cache,
+                    |name| {
+                        lookup
+                            .headers
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                    },
+                )
+            } else {
+                None
+            };
+            let (route, affinity_hit) = match affinity.as_ref() {
+                Some(affinity) => match snapshot.route_with_affinity_seed(
+                    &auth,
+                    &lookup.requested_model,
+                    Some(affinity),
+                    affinity_cache,
+                    key_seed,
+                ) {
+                    Ok(route) => route,
+                    Err(err) => {
+                        last_error = err;
+                        continue;
+                    }
+                },
+                None => {
+                    let selected = if excluded_channel_ids.is_empty() {
+                        snapshot.route_with_seed(&auth, &lookup.requested_model, key_seed)
+                    } else {
+                        snapshot.route_with_seed_excluding(
+                            &auth,
+                            &lookup.requested_model,
+                            key_seed,
+                            excluded_channel_ids,
+                        )
+                    };
+                    match selected {
+                        Ok(route) => (route, false),
+                        Err(err) => {
+                            last_error = err;
+                            continue;
+                        }
+                    }
+                }
+            };
+            if affinity_hit {
+                debug!(
+                    channel_id = %route.channel.id,
+                    requested_model = %lookup.requested_model,
+                    "channel affinity hit"
+                );
+            }
+            let (api_key, api_key_index) = route.channel.select_api_key_with_index(key_seed);
+            let api_key_fingerprint = selected_api_key_fingerprint(api_key);
+            return Ok(RouteParts {
+                auth:     RequestAuth {
+                    user_id:  route.user_id.to_string(),
+                    token_id: auth.token.id().to_string(),
+                },
+                route:    Rc::new(RouteContext {
+                    channel_id: route.channel.id.clone().into(),
+                    management_channel_id: route.channel.management_id,
+                    provider: route.channel.provider,
+                    base_url: route.channel.base_url.clone().into(),
+                    api_key: api_key.to_string().into(),
+                    api_key_fingerprint: api_key_fingerprint.into(),
+                    api_key_index,
+                    using_group: route.using_group.to_string().into(),
+                    requested_model: route.requested_model.to_string().into(),
+                    upstream_model: route.upstream_model.to_string().into(),
+                    proxy: ProxyRoute::from_snapshot(
+                        route.channel.proxy.clone(),
+                        route.channel.proxy_required,
+                    ),
+                    header_override: route.channel.header_override.clone(),
+                    upstream_endpoint_type: route.channel.upstream_endpoint_type.clone().into(),
+                }),
+                affinity: affinity.map(route_affinity_context),
+            });
         }
-        let (api_key, api_key_index) = route.channel.select_api_key_with_index(key_seed);
-        let api_key_fingerprint = selected_api_key_fingerprint(api_key);
-        Ok(RouteParts {
-            auth:     RequestAuth {
-                user_id:  route.user_id.to_string(),
-                token_id: auth.token.id().to_string(),
-            },
-            route:    Rc::new(RouteContext {
-                channel_id: route.channel.id.clone().into(),
-                management_channel_id: route.channel.management_id,
-                provider: route.channel.provider,
-                base_url: route.channel.base_url.clone().into(),
-                api_key: api_key.to_string().into(),
-                api_key_fingerprint: api_key_fingerprint.into(),
-                api_key_index,
-                using_group: route.using_group.to_string().into(),
-                requested_model: route.requested_model.to_string().into(),
-                upstream_model: route.upstream_model.to_string().into(),
-                proxy: ProxyRoute::from_snapshot(
-                    route.channel.proxy.clone(),
-                    route.channel.proxy_required,
-                ),
-                header_override: route.channel.header_override.clone(),
-                upstream_endpoint_type: route.channel.upstream_endpoint_type.clone().into(),
-            }),
-            affinity: affinity.map(route_affinity_context),
-        })
+        Err(last_error)
     }
-}
 
-impl AuthRouteService {
+    /// Select a fresh route after an upstream failure. Affinity is bypassed so
+    /// a pinned, unhealthy channel cannot trap retries. Incrementing the seed
+    /// also rotates multi-key channels when they are the only candidate.
+    async fn retry_route(
+        &self,
+        lookup: &RouteLookup,
+        attempt: u64,
+        excluded_channels: &[String],
+    ) -> Result<RouteParts, RouteError> {
+        let base_seed = self.next_key.get().wrapping_add(attempt.saturating_sub(1));
+        let excluded_refs = excluded_channels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        self.select_route(lookup, base_seed, false, &excluded_refs)
+            .or_else(|_| self.select_route(lookup, base_seed, false, &[]))
+    }
+
     fn record_affinity(
         &self,
         affinity: Option<&RouteAffinityContext>,
@@ -715,10 +990,11 @@ impl AuthRouteService {
         state.snapshot.record_affinity(
             self.snapshots.affinity_cache(),
             &ChannelAffinityCandidate {
-                cache_key:         affinity.cache_key.clone(),
-                ttl_seconds:       affinity.ttl_seconds,
-                cached_channel_id: None,
-                rule_name:         affinity.rule_name.clone(),
+                cache_key:             affinity.cache_key.clone(),
+                ttl_seconds:           affinity.ttl_seconds,
+                cached_channel_id:     None,
+                rule_name:             affinity.rule_name.clone(),
+                skip_retry_on_failure: affinity.skip_retry_on_failure,
             },
             channel_id,
         );
@@ -727,9 +1003,10 @@ impl AuthRouteService {
 
 fn route_affinity_context(candidate: ChannelAffinityCandidate) -> RouteAffinityContext {
     RouteAffinityContext {
-        cache_key:   candidate.cache_key,
-        ttl_seconds: candidate.ttl_seconds,
-        rule_name:   candidate.rule_name,
+        cache_key:             candidate.cache_key,
+        ttl_seconds:           candidate.ttl_seconds,
+        rule_name:             candidate.rule_name,
+        skip_retry_on_failure: candidate.skip_retry_on_failure,
     }
 }
 
@@ -754,6 +1031,7 @@ struct UsageEventParts {
     is_stream:           bool,
     ip:                  String,
     upstream_request_id: String,
+    pre_consumed_quota:  Option<i64>,
 }
 
 fn usage_event_parts<CX>(cx: &CX, is_stream: bool) -> UsageEventParts
@@ -780,7 +1058,78 @@ where
         is_stream,
         ip: peer.0.ip().to_string(),
         upstream_request_id: String::new(),
+        pre_consumed_quota: None,
     }
+}
+
+async fn reserve_request_quota(
+    reporter: &UsageReporter,
+    parts: &UsageEventParts,
+    body: &[u8],
+) -> Result<Option<i64>, Response<GatewayBody>> {
+    let (prompt_tokens, completion_tokens) = estimate_request_tokens(body);
+    let event = UsageEvent {
+        request_id:            parts.request_id.clone(),
+        user_id:               parts.user_id.clone(),
+        token_id:              parts.token_id.clone(),
+        channel_id:            String::new(),
+        group:                 parts.using_group.clone(),
+        model:                 parts.requested_model.clone(),
+        upstream_model:        parts.upstream_model.clone(),
+        prompt_tokens:         Some(prompt_tokens),
+        completion_tokens:     Some(completion_tokens),
+        total_tokens:          Some(prompt_tokens.saturating_add(completion_tokens)),
+        cache_read_tokens:     None,
+        cache_creation_tokens: None,
+        image_tokens:          None,
+        audio_tokens:          None,
+        quota:                 None,
+        pre_consumed_quota:    None,
+        status:                UsageStatus::Success,
+        latency_ms:            0,
+        first_response_ms:     None,
+        is_stream:             parts.is_stream,
+        ip:                    parts.ip.clone(),
+        upstream_request_id:   String::new(),
+        created_at_unix_ms:    now_unix_ms_i64(),
+    };
+    match reporter.preconsume(event).await {
+        Ok(reserved) => Ok(reserved),
+        Err(UsageError::InsufficientQuota) => Err(json_error(
+            StatusCode::PAYMENT_REQUIRED,
+            "insufficient_quota",
+            "quota is insufficient for this request",
+        )),
+        Err(err) => {
+            warn!(?err, "quota reservation unavailable; rejecting request");
+            Err(json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quota_unavailable",
+                "quota service is unavailable",
+            ))
+        }
+    }
+}
+
+fn estimate_request_tokens(body: &[u8]) -> (u64, u64) {
+    // Match new-api's admission behavior: when the client does not provide an
+    // output cap, reserve at least its default pre-consume token floor instead
+    // of admitting a potentially long generation on only a tiny JSON body.
+    let input = (body.len() as u64 / 4)
+        .max(1)
+        .max(DEFAULT_PRECONSUMED_TOKENS);
+    let value = serde_json::from_slice::<JsonValue>(body).ok();
+    let output = value
+        .as_ref()
+        .and_then(|value| {
+            ["max_tokens", "max_completion_tokens", "max_output_tokens"]
+                .into_iter()
+                .filter_map(|key| value.get(key).and_then(JsonValue::as_u64))
+                .max()
+        })
+        .unwrap_or(0)
+        .min(1_000_000);
+    (input.min(10_000_000), output)
 }
 
 fn finalize_response_usage(
@@ -903,6 +1252,7 @@ fn report_usage_event(
         image_tokens: usage.and_then(|usage| usage.image_tokens),
         audio_tokens: usage.and_then(|usage| usage.audio_tokens),
         quota: None,
+        pre_consumed_quota: parts.pre_consumed_quota,
         status,
         latency_ms,
         first_response_ms,
@@ -987,6 +1337,7 @@ fn wrap_streaming_usage_body(
             image_tokens: usage.and_then(|usage| usage.image_tokens),
             audio_tokens: usage.and_then(|usage| usage.audio_tokens),
             quota: None,
+            pre_consumed_quota: parts.pre_consumed_quota,
             status,
             latency_ms,
             first_response_ms,
@@ -1083,27 +1434,70 @@ fn upstream_request_id_from_headers(headers: &HeaderMap) -> String {
 }
 
 impl AuthRouteService {
-    fn extract_token(&self, headers: &HeaderMap) -> Option<String> {
-        if self.auth.accept_bearer
-            && let Some(token) = bearer_token(headers)
-        {
-            return Some(token);
-        }
-        if self.auth.accept_x_api_key {
-            return headers
-                .get("x-api-key")
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-                .filter(|token| !token.is_empty())
-                .map(str::to_string);
-        }
-        None
+    fn extract_tokens(&self, headers: &HeaderMap) -> Option<Vec<String>> {
+        gateway_token_candidates(&self.auth, headers)
     }
+}
+
+fn gateway_token_candidates(auth: &AuthConfig, headers: &HeaderMap) -> Option<Vec<String>> {
+    let mut tokens = Vec::with_capacity(2);
+    if auth.accept_bearer
+        && let Some(token) = bearer_token(headers)
+    {
+        tokens.push(token);
+    }
+    if auth.accept_x_api_key {
+        if let Some(token) = headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+        {
+            if !tokens.iter().any(|candidate| candidate == &token) {
+                tokens.push(token);
+            }
+        }
+    }
+    (!tokens.is_empty()).then_some(tokens)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_auth_keeps_all_distinct_enabled_candidates() {
+        let auth = AuthConfig {
+            accept_bearer:    true,
+            accept_x_api_key: true,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer stale".parse().unwrap());
+        headers.insert("x-api-key", "valid".parse().unwrap());
+        assert_eq!(
+            gateway_token_candidates(&auth, &headers),
+            Some(vec!["stale".to_string(), "valid".to_string()])
+        );
+
+        headers.insert("x-api-key", "stale".parse().unwrap());
+        assert_eq!(
+            gateway_token_candidates(&auth, &headers),
+            Some(vec!["stale".to_string()])
+        );
+    }
+
+    #[test]
+    fn quota_estimate_uses_new_api_floor_and_explicit_output_limit() {
+        assert_eq!(
+            estimate_request_tokens(br#"{"model":"gpt","messages":[]}"#),
+            (DEFAULT_PRECONSUMED_TOKENS, 0)
+        );
+        assert_eq!(
+            estimate_request_tokens(br#"{"max_tokens":2048,"max_output_tokens":1024}"#),
+            (DEFAULT_PRECONSUMED_TOKENS, 2048)
+        );
+    }
 
     #[test]
     fn sse_usage_collector_extracts_openai_usage() {
@@ -1202,6 +1596,7 @@ mod tests {
             is_stream:           false,
             ip:                  "127.0.0.1".to_string(),
             upstream_request_id: String::new(),
+            pre_consumed_quota:  None,
         };
         let event =
             channel_feedback_event(&parts, &ChannelFeedbackMeta::transport("connection failed"));

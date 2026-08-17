@@ -6,7 +6,7 @@ use faststr::FastStr;
 use halolake_api_contract::{JsonValue, claude, gemini, openai};
 use halolake_control_plane::{
     ChannelFeedbackAck, ChannelFeedbackBatch, ChannelFeedbackError, ChannelFeedbackEvent,
-    ChannelFeedbackReason,
+    ChannelFeedbackReason, UsageError,
 };
 use halolake_domain::{UsageEvent, UsageStatus};
 use halolake_protocol::{
@@ -37,7 +37,7 @@ use monoio_http::{
 };
 use monoio_transports::{
     connectors::{Connector, TcpConnector, TcpTlsAddr, TlsConnector, TlsStream},
-    http::{HttpConnection, HttpConnector},
+    http::HttpConnector,
 };
 use serde::{Deserialize, Serialize};
 use service_async::Service;

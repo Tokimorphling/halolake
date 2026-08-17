@@ -147,6 +147,34 @@ impl MemoryUsageEventSink {
         }
         Ok(())
     }
+
+    /// Remove events whose management settlement did not commit. The usage
+    /// API inserts events before calling the management plane; without this
+    /// rollback a transient management error would make the request id look
+    /// successfully processed on the next retry.
+    pub fn discard_request_ids(&self, request_ids: &[String]) -> Result<usize, UsageError> {
+        if request_ids.is_empty() {
+            return Ok(0);
+        }
+        let ids = request_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| UsageError::Poisoned("usage_events"))?;
+        let before = state.events.len();
+        state
+            .events
+            .retain(|event| !ids.contains(event.request_id.as_str()));
+        state.request_ids = state
+            .events
+            .iter()
+            .map(|event| event.request_id.clone())
+            .collect();
+        Ok(before.saturating_sub(state.events.len()))
+    }
 }
 
 impl Service<UsageEventBatch> for MemoryUsageEventSink {

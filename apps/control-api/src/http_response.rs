@@ -106,6 +106,7 @@ pub(crate) fn management_error(err: ManagementError) -> Response {
             StatusCode::CONFLICT
         }
         ManagementError::PermissionDenied => StatusCode::FORBIDDEN,
+        ManagementError::InsufficientQuota => StatusCode::PAYMENT_REQUIRED,
         ManagementError::UnsupportedChannelType(_) => StatusCode::BAD_REQUEST,
         ManagementError::Poisoned(_)
         | ManagementError::Snapshot(_)
@@ -127,6 +128,7 @@ pub(crate) fn usage_error(err: UsageError) -> Response {
         UsageError::Unavailable | UsageError::Poisoned(_) | UsageError::Storage(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
+        UsageError::InsufficientQuota => StatusCode::PAYMENT_REQUIRED,
         UsageError::Transport(_) | UsageError::InvalidResponse(_) => StatusCode::BAD_GATEWAY,
     };
     api_error_status(status, &err.to_string())

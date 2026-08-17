@@ -146,6 +146,13 @@ frontend。实现方式保持双平面架构：
   `UsageEventBatch` 到 control-api；当前上报 request/channel/token/model、
   HTTP 状态、延迟、stream 标记、peer IP、upstream request id，以及响应中的
   usage token。
+  - 配置 `usage_url` 后，gateway 会在调用上游前同步请求 quota reserve；默认把
+    `/internal/gateway/usage` 自动派生为 `/internal/gateway/quota/reserve`，也可用
+    `control.quota_reserve_url` 显式覆盖。预扣服务不可用时请求以 503 失败关闭，
+    余额不足时返回 402，不会先调用上游。
+  - 预扣使用 new-api 风格的保守 token floor；最终 usage 只结算“实际费用 - 已预扣”
+    的差额。上游失败会回滚整笔预扣，成功但上游未返回 usage 时保留预扣，避免
+    请求因缺少 usage 元数据变成免费调用。
   - OpenAI `usage.prompt_tokens/completion_tokens/total_tokens`
   - OpenAI Responses 风格 `usage.input_tokens/output_tokens`
   - Claude `usage.input_tokens/output_tokens/cache_creation_input_tokens/cache_read_input_tokens`

@@ -12,6 +12,8 @@ Halolake can turn **third-party credential dumps** into control-plane channels (
 | **CLIProxyAPI auth files** | One or more `*.json` with `"type":"codex"\|"claude"\|"gemini"\|"xai"…` | Channels (Codex=57, Claude=14, Gemini=24, xAI=48) |
 | **Codex / Sub2API session** | Nested `tokens.*`, flat OAuth JSON, raw access token / multi-line mix | Codex channels (type 57) |
 
+The importer also accepts Sub2API accounts whose `platform` is `grok` or `xai`. OAuth accounts become xAI/Grok channels with the CLI chat-proxy default; `apikey`, `api_key`, and `upstream` accounts use the official xAI API default. Refresh, team, subscription, and entitlement fields are retained in channel settings.
+
 **Groups are not auto-bound** from Sub2API (same idea as Sub2API’s `skip_default_group_bind`). You can pass a default `group` for new channels; rebind in the UI as needed.
 
 **Proxies** from Sub2API exports are matched by fingerprint (`protocol|host|port|user|pass`); existing proxies are **reused**, not duplicated. Accounts always create **new** channels (unless Codex identity matches and `update_existing` is true).
@@ -49,7 +51,7 @@ Content-Type: application/json
 | `format` | `auto` (default), `cliproxy`, `codex-session`, `sub2api-data` |
 | `content` | One blob (file text or paste) |
 | `contents` + `filenames` | Batch API upload without multipart |
-| `update_existing` | For Codex identity match: update key on existing type-57 channel |
+| `update_existing` | Update identity-matched Codex sessions and CLIProxy Codex/Claude/xAI channels; `false` skips the match |
 | `data` | Optional structured Sub2API payload instead of string `content` |
 
 **Response** (business envelope `{ success, data }`):
@@ -183,15 +185,20 @@ or `access_token` if present.
   "token_endpoint": "https://auth.x.ai/oauth2/token",
   "headers": {
     "X-XAI-Token-Auth": "xai-grok-cli",
-    "User-Agent": "grok-shell/0.2.93 (linux; x86_64)"
+    "x-grok-client-version": "0.2.120",
+    "User-Agent": "xai-grok-workspace/0.2.120",
+    "x-grok-client-identifier": "grok-shell",
+    "x-authenticateresponse": "authenticate-response"
   }
 }
 ```
 
 Notes:
 - Runtime key is `access_token` (Bearer). Optional `api_key` is accepted as a fallback field name.
-- OAuth defaults to Grok CLI chat-proxy base (`https://cli-chat-proxy.grok.com`); set `using_api: true` or omit oauth markers for official `https://api.x.ai`.
-- Trailing `/v1` on `base_url` is stripped so gateway path joining stays correct.
+- OAuth defaults to Grok CLI chat-proxy base (`https://cli-chat-proxy.grok.com/v1`); set `using_api: true` or use a non-OAuth/API-key auth kind for the official `https://api.x.ai/v1` endpoint.
+- `base_url` may be a provider root or a complete operation URL. The importer removes `/responses`, `/responses/compact`, and similar operation suffixes, preserves xAI/Codex `/v1`, and preserves custom host path prefixes.
+- CLIProxy-style OAuth with `using_api: false` rewrites the official `https://api.x.ai/v1` default to the CLI chat-proxy. Set `using_api: true` when the official API is intentional. This differs from Sub2API's runtime, where an explicitly stored OAuth `base_url` is treated as a manual endpoint; include `using_api: true` when importing such a Sub2API account into Halolake.
+- The five CLI identity headers shown above are injected automatically for the official CLI chat-proxy. File-provided `headers` are optional and override those defaults case-insensitively.
 - `refresh_token` / identity metadata are stored in channel `setting` for later refresh work.
 - Re-import with the same email/sub updates the existing xAI channel when `update_existing` is true.
 
@@ -252,6 +259,49 @@ Account mapping:
 | openai + apikey / upstream | type **1** OpenAI |
 | anthropic / claude | type **14** |
 | gemini / google | type **24** |
+| grok / xai + oauth | type **48** xAI/Grok (CLI chat-proxy default) |
+| grok / xai + apikey / upstream | type **48** xAI/Grok (official API default) |
+
+For Sub2API accounts, `credentials.base_url` takes precedence over `extra.base_url`. The value is validated as an absolute `http`/`https` URL and normalized per provider:
+
+| Provider | Stored channel base | Relay operation appended |
+|----------|---------------------|--------------------------|
+| OpenAI / Anthropic | host and custom prefix (a trailing `/v1` is removed) | `/v1/chat/completions` or `/v1/messages` |
+| Codex | host/prefix including `/v1` | `/responses` |
+| xAI / Grok | host/prefix including `/v1` | `/responses` (and `/responses/compact` where applicable) |
+
+An imported operation URL such as `https://relay.example/xai/v1/responses` therefore becomes `https://relay.example/xai/v1`, avoiding duplicated paths. Query strings and userinfo in imported base URLs are rejected. Grok OAuth imports retain `refresh_token`, `team_id`, `subscription_tier`, and related metadata; custom `headers` override the default CLI identity headers case-insensitively.
+
+**Sub2API Grok account examples:**
+
+```json
+{
+  "name": "grok-oauth",
+  "platform": "grok",
+  "type": "oauth",
+  "credentials": {
+    "access_token": "xai-access-token",
+    "refresh_token": "xai-refresh-token",
+    "team_id": "team-123",
+    "subscription_tier": "pro",
+    "base_url": "https://cli-chat-proxy.grok.com/v1"
+  }
+}
+```
+
+```json
+{
+  "name": "grok-api",
+  "platform": "xai",
+  "type": "apikey",
+  "credentials": {
+    "api_key": "xai-api-key",
+    "base_url": "https://relay.example/xai/v1/responses"
+  }
+}
+```
+
+The second example is stored as `https://relay.example/xai/v1` and the xAI Responses operation is appended by the gateway.
 
 ---
 
@@ -279,8 +329,9 @@ Single file uses JSON API; multi-file or forced CLIProxy mode uses multipart upl
 
 ## Identity & safety
 
-- Codex channels dedupe on identity keys derived from account/user/email/token fingerprint (aligned with Sub2API import).  
-- `update_existing: true` (default) refreshes credentials on match; `false` skips.  
+- Codex channels dedupe on identity keys derived from account/user/email/token fingerprint (aligned with Sub2API import).
+- CLIProxy Claude/xAI re-import also uses provider-specific token, auth-file, account, refresh-token, and email identities; ambiguous matches are not updated.
+- `update_existing: true` (default) refreshes credentials on a conclusive match; `false` skips.
 - Batch import marks in-batch duplicates as skipped.  
 - Secrets land in channel `key` (masked on list APIs); treat export files as **highly sensitive**.  
 - After a successful create/update, control-api republishes the gateway snapshot.
@@ -291,10 +342,12 @@ Single file uses JSON API; multi-file or forced CLIProxy mode uses multipart upl
 
 | Piece | Location |
 |-------|----------|
-| Unified import | `apps/control-api/src/auth_import.rs` |
-| Codex session parse | `apps/control-api/src/codex_auth_import.rs` |
-| Sub2API data | `apps/control-api/src/sub2api_data_import.rs` |
-| HTTP | `import_auth_json` / `import_auth_multipart` in `api_channel.rs` |
+| Unified import | `apps/control-api/src/control_api_ext/auth_import.rs` |
+| Codex session parse | `apps/control-api/src/control_api_ext/codex_auth_import.rs` |
+| Sub2API data | `apps/control-api/src/control_api_ext/sub2api_data_import.rs` |
+| Base URL normalization | `apps/control-api/src/control_api_ext/upstream_url.rs` |
+| xAI defaults / CLI headers | `apps/control-api/src/control_api_ext/xai_import.rs` |
+| HTTP | `import_auth_json` / `import_auth_multipart` in `control_api_ext/http.rs` |
 | Routes | `/api/channel/import/auth`, `/api/channel/import/auth/upload` |
 | UI | `web/new-api/default/src/features/channels/components/dialogs/import-data-dialog.tsx` |
 | References | `ref/sub2api`, `ref/CLIProxyAPI` |

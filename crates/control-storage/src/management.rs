@@ -6,13 +6,13 @@ use halolake_control_plane::{
     DeleteTokenRequest, DeleteUserRequest, GetChannelRequest, GetTokenRequest, GetUserRequest,
     ListChannelsRequest, ListTokensRequest, ListUsersRequest, LoginUserRequest, ManageUserRequest,
     ManagementData, ManagementError, MemoryManagementStore, PatchChannelBalanceRequest,
-    PatchChannelModelStateRequest, PatchChannelProbeMetricsRequest,
-    PublishManagementSnapshotRequest, RegisterUserRequest, RegisteredUser, RevealChannelKeyRequest,
-    RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey, RotateChannelCredentialRequest,
-    SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageRequest,
-    SnapshotPublished, SnapshotPublisher, UpdateChannelRequest, UpdateChannelsByTagRequest,
-    UpdateTokenRequest, UpdateUserAccessTokenRequest, UpdateUserRequest, UsageSettlement,
-    ValidateUserAccessTokenRequest,
+    PatchChannelModelStateRequest, PatchChannelProbeMetricsRequest, PreConsumeQuotaRequest,
+    PublishManagementSnapshotRequest, QuotaReservation, RegisterUserRequest, RegisteredUser,
+    RevealChannelKeyRequest, RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey,
+    RotateChannelCredentialRequest, SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest,
+    SettleUsageRequest, SnapshotPublished, SnapshotPublisher, UpdateChannelRequest,
+    UpdateChannelsByTagRequest, UpdateTokenRequest, UpdateUserAccessTokenRequest,
+    UpdateUserRequest, UsageSettlement, ValidateUserAccessTokenRequest,
 };
 use halolake_domain::{ChannelRecord, PageResult, TokenRecord, UserRecord};
 use halolake_router_core::ModelMapping;
@@ -298,6 +298,20 @@ impl Service<SettleUsageRequest> for ManagementStore {
     }
 }
 
+impl Service<PreConsumeQuotaRequest> for ManagementStore {
+    type Response = QuotaReservation;
+    type Error = ManagementError;
+
+    async fn call(&self, req: PreConsumeQuotaRequest) -> Result<Self::Response, Self::Error> {
+        match self {
+            Self::Memory(store) => store.call(req).await,
+            Self::Sqlite(store) => store.call(req).await,
+            Self::MySql(store) => store.call(req).await,
+            Self::Postgres(store) => store.call(req).await,
+        }
+    }
+}
+
 impl Service<SettleUsageRequest> for SqliteManagementStore {
     type Response = UsageSettlement;
     type Error = ManagementError;
@@ -310,6 +324,23 @@ impl Service<SettleUsageRequest> for SqliteManagementStore {
     }
 }
 
+impl Service<PreConsumeQuotaRequest> for SqliteManagementStore {
+    type Response = QuotaReservation;
+    type Error = ManagementError;
+
+    async fn call(&self, req: PreConsumeQuotaRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        let request_id = req.event.request_id.clone();
+        let plan = self.memory.plan_preconsume_quota(req)?;
+        persist_usage_settlement_sqlite(&self.pool, plan.settlement()).await?;
+        let settlement = self.memory.apply_planned_usage_settlement(plan)?;
+        Ok(QuotaReservation {
+            request_id,
+            quota: settlement.quota,
+        })
+    }
+}
+
 impl Service<SettleUsageRequest> for MySqlManagementStore {
     type Response = UsageSettlement;
     type Error = ManagementError;
@@ -319,6 +350,23 @@ impl Service<SettleUsageRequest> for MySqlManagementStore {
         let plan = self.memory.plan_usage_settlement(req)?;
         persist_usage_settlement_mysql(&self.pool, plan.settlement()).await?;
         self.memory.apply_planned_usage_settlement(plan)
+    }
+}
+
+impl Service<PreConsumeQuotaRequest> for MySqlManagementStore {
+    type Response = QuotaReservation;
+    type Error = ManagementError;
+
+    async fn call(&self, req: PreConsumeQuotaRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        let request_id = req.event.request_id.clone();
+        let plan = self.memory.plan_preconsume_quota(req)?;
+        persist_usage_settlement_mysql(&self.pool, plan.settlement()).await?;
+        let settlement = self.memory.apply_planned_usage_settlement(plan)?;
+        Ok(QuotaReservation {
+            request_id,
+            quota: settlement.quota,
+        })
     }
 }
 
@@ -338,6 +386,23 @@ impl Service<SettleUsageRequest> for PostgresManagementStore {
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+impl Service<PreConsumeQuotaRequest> for PostgresManagementStore {
+    type Response = QuotaReservation;
+    type Error = ManagementError;
+
+    async fn call(&self, req: PreConsumeQuotaRequest) -> Result<Self::Response, Self::Error> {
+        let _guard = self.write_lock.lock().await;
+        let request_id = req.event.request_id.clone();
+        let plan = self.memory.plan_preconsume_quota(req)?;
+        persist_usage_settlement_pg(&self.pool, plan.settlement(), plan.base_version()).await?;
+        let settlement = self.memory.apply_planned_usage_settlement(plan)?;
+        Ok(QuotaReservation {
+            request_id,
+            quota: settlement.quota,
+        })
     }
 }
 
@@ -2511,6 +2576,7 @@ mod tests {
                     image_tokens:          None,
                     audio_tokens:          None,
                     quota:                 None,
+                    pre_consumed_quota:    None,
                     status:                UsageStatus::Success,
                     latency_ms:            1,
                     first_response_ms:     None,
@@ -2691,6 +2757,7 @@ mod tests {
             image_tokens:          None,
             audio_tokens:          None,
             quota:                 None,
+            pre_consumed_quota:    None,
             status:                UsageStatus::Success,
             latency_ms:            1,
             first_response_ms:     None,

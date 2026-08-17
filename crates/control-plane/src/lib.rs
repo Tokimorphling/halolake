@@ -19,14 +19,15 @@ pub use management::{
     GetTokenRequest, GetUserRequest, ListChannelsRequest, ListTokensRequest, ListUsersRequest,
     LoginUserRequest, ManageUserRequest, ManagementData, ManagementError, MemoryManagementStore,
     PatchChannelBalanceRequest, PatchChannelModelStateRequest, PatchChannelProbeMetricsRequest,
-    PlannedUsageSettlement, PublishManagementSnapshotRequest, RegisterUserRequest, RegisteredUser,
-    RevealChannelKeyRequest, RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey,
-    RotateChannelCredentialRequest, SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest,
-    SettleUsageRequest, SettledChannelState, SettledTokenState, SettledUserState,
-    UpdateChannelRequest, UpdateChannelsByTagRequest, UpdateTokenRequest,
-    UpdateUserAccessTokenRequest, UpdateUserRequest, UsageEventQuota, UsagePricing,
-    UsageSettlement, ValidateUserAccessTokenRequest, auto_disable_channel_in_place,
-    ensure_user_password_hashed, hash_user_password,
+    PlannedUsageSettlement, PreConsumeQuotaRequest, PublishManagementSnapshotRequest,
+    QuotaReservation, RegisterUserRequest, RegisteredUser, RevealChannelKeyRequest,
+    RevealTokenKeyRequest, RevealedChannelKey, RevealedTokenKey, RotateChannelCredentialRequest,
+    SearchChannelsRequest, SearchTokensRequest, SearchUsersRequest, SettleUsageRequest,
+    SettledChannelState, SettledTokenState, SettledUserState, UpdateChannelRequest,
+    UpdateChannelsByTagRequest, UpdateTokenRequest, UpdateUserAccessTokenRequest,
+    UpdateUserRequest, UsageEventQuota, UsagePricing, UsageSettlement,
+    ValidateUserAccessTokenRequest, auto_disable_channel_in_place, ensure_user_password_hashed,
+    hash_user_password,
 };
 pub use memory::{MemorySnapshotBus, MemoryUsageEventSink};
 pub use snapshot::{

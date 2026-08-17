@@ -131,6 +131,18 @@ impl UsageStore {
             Self::Postgres(store) => store.apply_quotas(quotas).await,
         }
     }
+
+    /// Roll back usage rows inserted before a management settlement that did
+    /// not commit. This is intentionally separate from `apply_quotas`: once
+    /// management has succeeded, the usage row must remain for idempotency.
+    pub async fn discard_unsettled(&self, request_ids: &[String]) -> Result<usize, UsageError> {
+        match self {
+            Self::Memory(store) => store.discard_request_ids(request_ids),
+            Self::Sqlite(store) => store.discard_unsettled(request_ids).await,
+            Self::MySql(store) => store.discard_unsettled(request_ids).await,
+            Self::Postgres(store) => store.discard_unsettled(request_ids).await,
+        }
+    }
 }
 
 impl Service<DeleteUsageBeforeRequest> for UsageStore {
@@ -280,6 +292,27 @@ impl SqliteUsageStore {
         }
         tx.commit().await.map_err(usage_storage_err)?;
         self.memory.apply_quotas(quotas)
+    }
+
+    async fn discard_unsettled(&self, request_ids: &[String]) -> Result<usize, UsageError> {
+        if request_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
+        let mut deleted = 0usize;
+        for request_id in request_ids {
+            deleted = deleted.saturating_add(
+                sqlx::query("DELETE FROM usage_events WHERE request_id = ?")
+                    .bind(request_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(usage_storage_err)?
+                    .rows_affected() as usize,
+            );
+        }
+        tx.commit().await.map_err(usage_storage_err)?;
+        self.memory.discard_request_ids(request_ids)?;
+        Ok(deleted)
     }
 }
 
@@ -463,6 +496,7 @@ async fn load_usage_events(pool: &SqlitePool) -> Result<Vec<UsageEvent>, UsageEr
             image_tokens:          usage_opt_u64_col(&row, "image_tokens")?,
             audio_tokens:          usage_opt_u64_col(&row, "audio_tokens")?,
             quota:                 usage_opt_i64_col(&row, "quota")?,
+            pre_consumed_quota:    None,
             status:                usage_status_from_str(&usage_string_col(&row, "status")?),
             latency_ms:            usage_u64_col(&row, "latency_ms")?,
             // Live gateway events carry FRT in memory; not yet a DB column.
@@ -506,6 +540,7 @@ async fn load_usage_events_mysql(pool: &MySqlPool) -> Result<Vec<UsageEvent>, Us
             image_tokens:          usage_opt_u64_col_mysql(&row, "image_tokens")?,
             audio_tokens:          usage_opt_u64_col_mysql(&row, "audio_tokens")?,
             quota:                 usage_opt_i64_col_mysql(&row, "quota")?,
+            pre_consumed_quota:    None,
             status:                usage_status_from_str(&usage_string_col_mysql(&row, "status")?),
             latency_ms:            usage_u64_col_mysql(&row, "latency_ms")?,
             first_response_ms:     None,
@@ -615,6 +650,27 @@ impl MySqlUsageStore {
         tx.commit().await.map_err(usage_storage_err)?;
         self.memory.apply_quotas(quotas)
     }
+
+    async fn discard_unsettled(&self, request_ids: &[String]) -> Result<usize, UsageError> {
+        if request_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
+        let mut deleted = 0usize;
+        for request_id in request_ids {
+            deleted = deleted.saturating_add(
+                sqlx::query("DELETE FROM usage_events WHERE request_id = ?")
+                    .bind(request_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(usage_storage_err)?
+                    .rows_affected() as usize,
+            );
+        }
+        tx.commit().await.map_err(usage_storage_err)?;
+        self.memory.discard_request_ids(request_ids)?;
+        Ok(deleted)
+    }
 }
 
 impl Service<UsageEventBatch> for MySqlUsageStore {
@@ -710,6 +766,27 @@ impl PostgresUsageStore {
         }
         tx.commit().await.map_err(usage_storage_err)?;
         self.memory.apply_quotas(quotas)
+    }
+
+    async fn discard_unsettled(&self, request_ids: &[String]) -> Result<usize, UsageError> {
+        if request_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await.map_err(usage_storage_err)?;
+        let mut deleted = 0usize;
+        for request_id in request_ids {
+            deleted = deleted.saturating_add(
+                sqlx::query("DELETE FROM usage_events WHERE request_id = $1")
+                    .bind(request_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(usage_storage_err)?
+                    .rows_affected() as usize,
+            );
+        }
+        tx.commit().await.map_err(usage_storage_err)?;
+        self.memory.discard_request_ids(request_ids)?;
+        Ok(deleted)
     }
 }
 
@@ -836,6 +913,7 @@ async fn load_usage_events_pg(pool: &PgPool) -> Result<Vec<UsageEvent>, UsageErr
                 .map_err(usage_storage_err)?
                 .map(|v| v.max(0) as u64),
             quota:                 row.try_get("quota").map_err(usage_storage_err)?,
+            pre_consumed_quota:    None,
             status:                usage_status_from_str(
                 &row.try_get::<String, _>("status")
                     .map_err(usage_storage_err)?,
@@ -997,6 +1075,7 @@ mod tests {
             image_tokens:          None,
             audio_tokens:          None,
             quota:                 None,
+            pre_consumed_quota:    None,
             status:                UsageStatus::Success,
             latency_ms:            20,
             first_response_ms:     None,

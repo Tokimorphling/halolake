@@ -41,10 +41,13 @@ ref/sub2api/         # Go：ExportData / ImportCodexSession
 
 ```text
 apps/control-api/src/
-  auth_import.rs           # 格式检测 + CLIProxy 分发 + xai 默认头
-  codex_auth_import.rs     # Codex OAuth key 归一化 / 身份指纹
-  sub2api_data_import.rs   # sub2api-data proxies + accounts
-  api_channel.rs           # HTTP 路由（admin-extras cfg）
+  control_api_ext/
+    auth_import.rs         # 格式检测 + CLIProxy 分发
+    codex_auth_import.rs   # Codex OAuth key 归一化 / 身份指纹
+    sub2api_data_import.rs # sub2api-data proxies + accounts
+    upstream_url.rs        # provider-specific base_url 校验 / 归一化
+    xai_import.rs          # xAI base/models/CLI 身份头常量
+    http.rs                # HTTP 路由（admin-extras cfg）
   channel_special.rs       # Codex refresh/usage（导入后运行时）
 
 crates/control-plane/src/management.rs
@@ -121,7 +124,7 @@ apps/gateway-monoio/src/
 | `access_token` / `api_key` | `channel.key`（Bearer） |
 | `refresh_token` | `setting.refresh_token`（**不进 key**，供日后 refresh） |
 | `email` / `sub` | setting + 重导匹配 |
-| `base_url` | 去尾 `/v1` 后写入 `channel.base_url` |
+| `base_url` | 校验并移除 operation path；xAI/Codex 保留 `/v1`，标准 OpenAI/Claude 去除 relay 自带的 `/v1` |
 | `token_endpoint` | setting |
 | `headers` | 合并进 `header_override`（覆盖默认） |
 | `disabled` | status=2 手动禁用 |
@@ -130,8 +133,10 @@ apps/gateway-monoio/src/
 
 | 条件 | base |
 |------|------|
-| `using_api=true` 或非 oauth | `https://api.x.ai` |
-| oauth 且未指定 | `https://cli-chat-proxy.grok.com` |
+| `using_api=true` 或非 oauth | `https://api.x.ai/v1` |
+| oauth 且未指定（`using_api=false`） | `https://cli-chat-proxy.grok.com/v1` |
+
+> `using_api` 显式控制 CLIProxy 风格的官方 API / CLI chat-proxy 选择。没有该字段时，OAuth 默认 `false`，API key/upstream 默认 `true`。导入器只把 `/responses`、`/responses/compact` 等 operation URL 裁成 base；xAI/Codex 的 `/v1` 是 base 的一部分，不能删除。自定义 host 和 path 前缀会原样保留（仅去掉 operation path 与末尾 `/`）。
 
 ### 3.2 Sub2API 备份（`sub2api-data`）
 
@@ -152,8 +157,11 @@ apps/gateway-monoio/src/
 | openai | apikey / upstream | **1** OpenAI |
 | anthropic / claude | * | **14** |
 | gemini / google | * | **24** |
+| grok / xai | oauth | **48** xAI/Grok（CLI chat-proxy 默认） |
+| grok / xai | apikey / upstream | **48** xAI/Grok（官方 API 默认） |
 
-`credentials` map：Codex 走 `parse_flexible_codex_key`；其它平台取常见 key 字段写入 `channel.key`。  
+`credentials` map：Codex 走 `parse_flexible_codex_key`；其它平台取常见 key 字段写入 `channel.key`。`base_url` 优先取 `credentials.base_url`，再取 `extra.base_url`，并按 provider 规则归一化。Grok/xAI OAuth 还保留 `refresh_token`、`team_id`、`subscription_tier`、`entitlement_status` 等刷新/配额元数据；`using_api` 可显式覆盖默认选择。
+
 `proxy_key` → 导入后 `channel.proxy_id`。
 
 ### 3.3 Codex / Sub2API session（非 CLIProxy 文件）
@@ -188,15 +196,18 @@ Halolake 导入侧：`build_xai_header_override`：
 
 | Header | 值 | 常量位置 |
 |--------|-----|----------|
-| `X-XAI-Token-Auth` | `xai-grok-cli` | `auth_import.rs` |
-| `x-grok-client-version` | `0.2.93` | **与 CLIProxy `xaiClientVersionValue` 同步** |
+| `X-XAI-Token-Auth` | `xai-grok-cli` | `xai_import.rs` |
+| `x-grok-client-version` | `0.2.120` | `xai_import.rs`；**与 CLIProxy `xaiClientVersionValue` 同步** |
+| `User-Agent` | `xai-grok-workspace/0.2.120` | `xai_import.rs` |
+| `x-grok-client-identifier` | `grok-shell` | `xai_import.rs` |
+| `x-authenticateresponse` | `authenticate-response` | `xai_import.rs` |
 
 规则：
 
-1. `!using_api` 且 base 为 `cli-chat-proxy.grok.com` → 注入上表  
-2. 文件内 `headers` **后写覆盖**默认（同 CLIProxy custom headers 顺序）  
-3. 写入 `channel.header_override` JSON map（字符串值）  
-4. Snapshot → gateway `apply_channel_header_override` **最后**应用  
+1. `!using_api` 且 base 为 `cli-chat-proxy.grok.com/v1` → 注入上表；官方 API 或自定义 relay 不注入 CLI 身份头。
+2. 文件内 `headers` **后写覆盖**默认，键名比较不区分大小写（同 CLIProxy custom headers 顺序）
+3. 写入 `channel.header_override` JSON map（字符串值）
+4. Snapshot → gateway `apply_channel_header_override` **最后**应用
 
 占位符（gateway）：`{api_key}`、`{client_header:Name}`。  
 `*` / `re:` 透传规则：**尚未实现**（parse 时跳过）。
@@ -211,7 +222,7 @@ Halolake 导入侧：`build_xai_header_override`：
 
 ### 4.3 重导与自动禁用
 
-- `update_existing=true`：Codex / xAI 按身份更新  
+- `update_existing=true`：Codex / Claude / xAI 按身份更新
 - xAI 重导：`status=3`（自动禁用）→ 恢复 `1`；手动 `2` 不动  
 - 自动禁用策略：`channel_feedback.rs`（对齐 new-api：**不因纯 Transport 禁用**）
 
@@ -305,9 +316,9 @@ cargo test -p halolake-control-api transport_alone_does_not_disable -- --nocaptu
 
 ### 8.1 CLIProxy 调高 Grok CLI 版本
 
-1. Diff：`ref/CLIProxyAPI/.../xai_executor.go` 中 `xaiClientVersionValue`  
-2. 改：`apps/control-api/src/auth_import.rs` 的 `XAI_CLIENT_VERSION_VALUE`  
-3. 测：`cargo test -p halolake-control-api xai_cli_headers`  
+1. Diff：`ref/CLIProxyAPI/.../xai_executor.go` 中 `xaiClientVersionValue`
+2. 改：`apps/control-api/src/control_api_ext/xai_import.rs` 的 `XAI_CLIENT_VERSION_VALUE`
+3. 测：`cargo test -p halolake-control-api xai_cli_headers`
 4. 已有渠道：重导 auth 或手改 `header_override`
 
 ### 8.2 Sub2API 备份增加 proxy 字段

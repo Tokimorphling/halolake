@@ -3,7 +3,9 @@ use crate::{
     gateway::{
         ClaudeVersion, ConnectTimeout, GeminiApiVersion, PassAnthropicBeta, UpstreamReadTimeout,
     },
-    upstream_proxy::{ProxyTransportRequest, ProxyTransportService, parse_proxy_endpoint},
+    upstream_proxy::{
+        ProxyTransportRequest, ProxyTransportService, parse_proxy_endpoint, send_direct_https1,
+    },
 };
 use monoio_transports::{
     connectors::pollio::PollIo,
@@ -59,7 +61,6 @@ pub(crate) struct RelayService {
     read_timeout:        Option<Duration>,
     dns:                 LocalDnsResolver,
     http:                Rc<StreamingHttpUpstream>,
-    https:               HttpsUpstream,
     proxy_transport:     ProxyTransportService,
 }
 
@@ -74,9 +75,6 @@ impl RelayService {
             + Param<ProxyTransportService>,
     {
         let read_timeout = <C as Param<UpstreamReadTimeout>>::param(params).0;
-        let mut https = HttpsUpstream::default();
-        https.set_read_timeout(read_timeout);
-
         Self {
             claude_version: <C as Param<ClaudeVersion>>::param(params).0,
             pass_anthropic_beta: <C as Param<PassAnthropicBeta>>::param(params).0,
@@ -85,7 +83,6 @@ impl RelayService {
             read_timeout,
             dns: LocalDnsResolver::default(),
             http: Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
-            https,
             proxy_transport: <C as Param<ProxyTransportService>>::param(params),
         }
     }
@@ -138,39 +135,21 @@ impl RelayService {
         }
 
         if uri.scheme() == Some(&http::uri::Scheme::HTTPS) {
-            let key: TcpTlsAddr = uri.try_into().context("invalid https upstream uri")?;
-            debug!(%host, ?port, "acquiring https upstream connection");
-            let connect = self.https.connect(key);
-            let mut conn = timeout_opt(self.connect_timeout, connect)
+            debug!(%host, ?port, protocol = "http/1.1", "acquiring streaming https upstream connection");
+            let target_port = port.unwrap_or(443);
+            let address = timeout_opt(self.connect_timeout, self.dns.resolve(&host, target_port))
                 .await
-                .with_context(|| format!("acquire https upstream connection {host}:{port:?}"))??;
-            match &conn {
-                HttpConnection::Http1(conn) => {
-                    debug!(
-                        %host,
-                        ?port,
-                        protocol = "http/1.1",
-                        http1_reused = conn.is_reused(),
-                        "https upstream connection acquired"
-                    );
-                }
-                HttpConnection::Http2(_) => {
-                    debug!(
-                        %host,
-                        ?port,
-                        protocol = "h2",
-                        "https upstream connection acquired"
-                    );
-                }
-            }
-            let (resp, can_reuse) = conn.send_request(req).await;
-            let resp = resp.with_context(|| format!("send https upstream request {host}{path}"))?;
+                .context("https upstream DNS timeout")??;
+            let resp =
+                send_direct_https1(address, &host, req, self.connect_timeout, self.read_timeout)
+                    .await
+                    .with_context(|| format!("send https upstream request {host}{path}"))?;
             debug!(
                 %host,
                 %path,
                 status = %resp.status(),
                 response_version = ?resp.version(),
-                can_reuse,
+                can_reuse = false,
                 "https upstream responded"
             );
             Ok(decompress_upstream_response(resp).await)
@@ -292,13 +271,14 @@ impl RelayService {
 
     async fn fetch_image_url(&self, url: &str) -> Result<(Option<String>, Bytes), anyhow::Error> {
         let mut uri: Uri = url.parse().context("invalid image URL")?;
-        let scheme = uri.scheme_str().unwrap_or("http");
-        if !matches!(scheme, "http" | "https") {
-            anyhow::bail!("unsupported image URL scheme: {scheme}");
-        }
         // Follow a small number of absolute redirects (CDNs commonly redirect
         // to a signed object-storage URL).
         for _ in 0..IMAGE_FETCH_MAX_REDIRECTS {
+            let scheme = uri.scheme_str().unwrap_or("http");
+            if !matches!(scheme, "http" | "https") {
+                anyhow::bail!("unsupported image URL scheme: {scheme}");
+            }
+            let resolved_address = self.ensure_public_image_target(&uri).await?;
             let request = Request::builder()
                 .method(Method::GET)
                 .uri(path_and_query(&uri, "/"))
@@ -307,8 +287,11 @@ impl RelayService {
                 .header(header::ACCEPT, "image/*")
                 .body(HttpBody::default())
                 .context("build image URL request")?;
+            // Reuse the address that passed the private/reserved-IP check.
+            // Resolving the hostname again here would re-open a DNS rebinding
+            // window between validation and the actual socket connect.
             let response = self
-                .send_upstream("image-url-fetch", uri.clone(), request, &ProxyRoute::Direct)
+                .send_direct_resolved(uri.clone(), resolved_address, request)
                 .await
                 .context("fetch image URL")?;
             if response.status().is_redirection() {
@@ -319,7 +302,11 @@ impl RelayService {
                 else {
                     anyhow::bail!("image URL redirect missing Location");
                 };
-                uri = location.parse().context("invalid image URL redirect")?;
+                let redirected: Uri = location.parse().context("invalid image URL redirect")?;
+                if redirected.scheme().is_none() || redirected.host().is_none() {
+                    anyhow::bail!("image URL redirect must be an absolute URL");
+                }
+                uri = redirected;
                 continue;
             }
             if !response.status().is_success() {
@@ -345,6 +332,94 @@ impl RelayService {
             return Ok((content_type, Bytes::from(collected)));
         }
         anyhow::bail!("image URL exceeded redirect limit")
+    }
+
+    async fn send_direct_resolved(
+        &self,
+        uri: Uri,
+        address: SocketAddr,
+        mut req: Request<HttpBody>,
+    ) -> Result<Response<HttpBody>> {
+        prepare_upstream_request_headers(&mut req);
+        let host = uri.host().context("image URL missing host")?;
+        if uri.scheme_str() == Some("https") {
+            let response =
+                send_direct_https1(address, host, req, self.connect_timeout, self.read_timeout)
+                    .await?;
+            Ok(decompress_upstream_response(response).await)
+        } else {
+            let (response, _) = send_pooled_http1(
+                &self.http,
+                address,
+                req,
+                self.connect_timeout,
+                self.read_timeout,
+            )
+            .await?;
+            Ok(decompress_upstream_response(response).await)
+        }
+    }
+
+    async fn ensure_public_image_target(&self, uri: &Uri) -> Result<SocketAddr, anyhow::Error> {
+        let host = uri.host().context("image URL missing host")?;
+        if host.eq_ignore_ascii_case("localhost")
+            || host.ends_with(".localhost")
+            || host.ends_with(".local")
+        {
+            anyhow::bail!("image URL points to a local hostname");
+        }
+        let port = uri
+            .port_u16()
+            .unwrap_or(if uri.scheme_str() == Some("https") {
+                443
+            } else {
+                80
+            });
+        let address = self
+            .dns
+            .resolve(host, port)
+            .await
+            .context("resolve image URL host")?;
+        if is_private_or_reserved_ip(address.ip()) {
+            anyhow::bail!("image URL resolves to a private or reserved address");
+        }
+        Ok(address)
+    }
+}
+
+fn is_private_or_reserved_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            octets[0] == 0
+                || ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || octets[0] == 100 && (64..=127).contains(&octets[1]) // CGNAT
+                || octets[0] == 192 && octets[1] == 0 && octets[2] == 0
+                || octets[0] == 192 && octets[1] == 0 && octets[2] == 2
+                || octets[0] == 198 && (18..=19).contains(&octets[1])
+                || octets[0] == 198 && octets[1] == 51 && octets[2] == 100
+                || octets[0] == 203 && octets[1] == 0 && octets[2] == 113
+                || octets[0] >= 240
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_private_or_reserved_ip(IpAddr::V4(mapped));
+            }
+            let segments = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_unique_local()
+                || (segments[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || (segments[0] & 0xffc0) == 0xfec0 // deprecated site-local fec0::/10
+                || segments[0] == 0x100 && segments[1..4] == [0, 0, 0] // discard-only 100::/64
+                || segments[0] == 0x2001 && segments[1] == 0x0db8 // documentation 2001:db8::/32
+        }
     }
 }
 
@@ -421,21 +496,17 @@ where
     let (payload, mut sender) = stream_payload_pair::<Bytes, HttpError>();
     monoio::spawn(async move {
         let terminal_error = loop {
-            // Always enforce a default 30s idle timeout even when
-            // `read_timeout` is `None`. Without this, a downstream client
-            // disconnect mid-SSE leaves the producer task parked on
-            // `body.next_data()` until the upstream closes — holding a
-            // pooled H1 connection for the entire (potentially 60s+) LLM
-            // stream. The 30s ceiling bounds orphaned-stream resource cost.
-            let effective_timeout = read_timeout.unwrap_or(Duration::from_secs(30));
-            let next = match monoio::time::timeout(effective_timeout, body.next_data()).await {
-                Ok(next) => next,
-                Err(_) => {
-                    break Some(HttpError::IOError(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "upstream response body idle timeout",
-                    )));
-                }
+            let next = match read_timeout {
+                Some(timeout) => match monoio::time::timeout(timeout, body.next_data()).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        break Some(HttpError::IOError(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "upstream response body idle timeout",
+                        )));
+                    }
+                },
+                None => body.next_data().await,
             };
 
             match next {
@@ -604,6 +675,7 @@ where
 
 pub(crate) struct ClaudeMessagesRelayRequest<CX> {
     pub(crate) value:              JsonValue,
+    pub(crate) path:               String,
     pub(crate) downstream_headers: HeaderMap,
     pub(crate) cx:                 CX,
 }
@@ -646,7 +718,7 @@ where
                     }
                 };
                 let upstream = match self
-                    .send_claude_body(&route, &req.downstream_headers, body, "/v1/messages")
+                    .send_claude_body(&route, &req.downstream_headers, body, &req.path)
                     .await
                 {
                     Ok(resp) => resp,
@@ -1209,7 +1281,19 @@ where
         } else {
             OpenAiResponseTarget::Passthrough
         };
-        self.openai_passthrough(&route, prepared, &req.downstream_headers, target)
+        // xAI OAuth compact is served by the official API, while the normal
+        // OAuth traffic uses cli-chat-proxy. Keep this switch scoped to the
+        // compact operation and drop chat-proxy identity headers there.
+        let compact_route;
+        let route = if prepared.path == "/responses/compact"
+            && normalize_upstream_endpoint_type(&route.upstream_endpoint_type) == "xai-response"
+        {
+            compact_route = xai_compact_route(&route);
+            &compact_route
+        } else {
+            &route
+        };
+        self.openai_passthrough(route, prepared, &req.downstream_headers, target)
             .await
     }
 }
@@ -2087,8 +2171,13 @@ fn prepare_openai_text_upstream(
                     std::collections::BTreeMap::new(),
                 )
             };
+            let path = if mode == "xai-response" && client_path.ends_with("/responses/compact") {
+                "/responses/compact"
+            } else {
+                "/responses"
+            };
             Ok(PreparedOpenAiText {
-                path: "/responses".to_string(),
+                path: path.to_string(),
                 body,
                 protocol: OpenAiTextProtocol::Responses,
                 tool_name_reverse,
@@ -2196,6 +2285,29 @@ fn normalize_upstream_endpoint_type(raw: &str) -> String {
         "codex" | "chatgpt-codex" | "chatgpt_codex" => "codex".to_string(),
         other => other.to_string(),
     }
+}
+
+fn xai_compact_route(route: &RouteContext) -> RouteContext {
+    let mut compact = route.clone();
+    if !compact
+        .base_url
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case("https://cli-chat-proxy.grok.com/v1")
+    {
+        return compact;
+    }
+    compact.base_url = FastStr::from_string("https://api.x.ai/v1".to_string());
+    compact.header_override.retain(|name, _| {
+        !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "x-xai-token-auth"
+                | "x-grok-client-version"
+                | "x-grok-client-identifier"
+                | "x-authenticateresponse"
+                | "user-agent"
+        )
+    });
+    compact
 }
 
 fn uses_codex_identity(endpoint_type: &str) -> bool {
@@ -3398,11 +3510,14 @@ fn downstream_or_fallback_header(
 }
 
 fn claude_upstream_path(path: &str, oauth: bool) -> &str {
-    if oauth && path == "/v1/messages" {
-        "/v1/messages?beta=true"
-    } else {
-        path
+    if oauth {
+        match path {
+            "/v1/messages" => return "/v1/messages?beta=true",
+            "/v1/messages/count_tokens" => return "/v1/messages/count_tokens?beta=true",
+            _ => {}
+        }
     }
+    path
 }
 
 /// Apply channel `header_override` last so it wins over default/auth headers.
@@ -3722,7 +3837,6 @@ mod tests {
             read_timeout:        Some(Duration::from_millis(500)),
             dns:                 LocalDnsResolver::default(),
             http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
-            https:               HttpsUpstream::default(),
             proxy_transport:     ProxyTransportService::new(
                 Some(Duration::from_millis(500)),
                 Some(Duration::from_millis(500)),
@@ -3851,7 +3965,6 @@ mod tests {
             read_timeout:        Some(Duration::from_millis(500)),
             dns:                 LocalDnsResolver::default(),
             http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
-            https:               HttpsUpstream::default(),
             proxy_transport:     ProxyTransportService::new(
                 Some(Duration::from_millis(500)),
                 Some(Duration::from_millis(500)),
@@ -3950,6 +4063,14 @@ mod tests {
             "/v1/messages?beta=true"
         );
         assert_eq!(claude_upstream_path("/v1/messages", false), "/v1/messages");
+        assert_eq!(
+            claude_upstream_path("/v1/messages/count_tokens", true),
+            "/v1/messages/count_tokens?beta=true"
+        );
+        assert_eq!(
+            claude_upstream_path("/v1/messages/count_tokens", false),
+            "/v1/messages/count_tokens"
+        );
     }
 
     #[test]
@@ -4062,6 +4183,47 @@ mod tests {
         );
         assert_eq!(rewritten["model"], "grok-4");
         assert_eq!(rewritten["input"][0]["content"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn xai_compact_preserves_compact_path_and_uses_official_route() {
+        let raw = br#"{"model":"requested-model","input":"hello"}"#;
+        let prepared =
+            prepare_openai_text_upstream("/v1/responses/compact", raw, "grok-4", "xai-response")
+                .expect("xAI compact request should prepare");
+        assert_eq!(prepared.path, "/responses/compact");
+
+        let mut route = test_route_context("https://cli-chat-proxy.grok.com/v1".to_string());
+        route.upstream_endpoint_type = FastStr::new("xai-response");
+        route.header_override = std::collections::BTreeMap::from([
+            ("X-XAI-Token-Auth".to_string(), "xai-grok-cli".to_string()),
+            ("x-grok-client-version".to_string(), "0.2.120".to_string()),
+            (
+                "User-Agent".to_string(),
+                "xai-grok-workspace/0.2.120".to_string(),
+            ),
+            ("X-Custom".to_string(), "keep".to_string()),
+        ]);
+        let compact = xai_compact_route(&route);
+        assert_eq!(compact.base_url.as_str(), "https://api.x.ai/v1");
+        assert!(!compact.header_override.contains_key("X-XAI-Token-Auth"));
+        assert!(
+            !compact
+                .header_override
+                .contains_key("x-grok-client-version")
+        );
+        assert!(!compact.header_override.contains_key("User-Agent"));
+        assert_eq!(
+            compact.header_override.get("X-Custom").map(String::as_str),
+            Some("keep")
+        );
+
+        let custom = test_route_context("https://relay.example/custom/v1".to_string());
+        let unchanged = xai_compact_route(&custom);
+        assert_eq!(
+            unchanged.base_url.as_str(),
+            "https://relay.example/custom/v1"
+        );
     }
 
     #[test]
@@ -4324,7 +4486,6 @@ mod tests {
             read_timeout:        Some(Duration::from_secs(2)),
             dns:                 LocalDnsResolver::default(),
             http:                Rc::new(HyperH1Connector::new(PollIo(TcpConnector::default()))),
-            https:               HttpsUpstream::default(),
             proxy_transport:     ProxyTransportService::new(
                 Some(Duration::from_secs(2)),
                 Some(Duration::from_secs(2)),
@@ -4941,37 +5102,9 @@ data: {"type":"message_stop"}
     }
 
     #[monoio::test_all(enable_timer = true)]
-    async fn resolves_url_images_to_inline_base64() {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind image upstream");
-        let address = listener.local_addr().expect("image upstream address");
-        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\nnot-a-real-png-but-image-content";
-
-        let server = monoio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept image connection");
-            let head = read_http_head(&mut stream).await;
-            assert!(head.starts_with(b"GET /cat.png HTTP/1.1\r\n"));
-            stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
-                        png_bytes.len()
-                    )
-                    .as_bytes()
-                    .to_vec(),
-                )
-                .await
-                .0
-                .expect("write image response head");
-            stream
-                .write_all(png_bytes.to_vec())
-                .await
-                .0
-                .expect("write image body");
-        });
-
+    async fn rejects_private_url_images_before_connecting() {
         let relay = test_relay_service();
-        let image_url = format!("http://{address}/cat.png");
+        let image_url = "http://127.0.0.1:9/cat.png".to_string();
         let mut request = claude::MessagesRequest {
             model:          "claude-sonnet-4".to_string(),
             max_tokens:     1024,
@@ -4990,7 +5123,7 @@ data: {"type":"message_stop"}
                             source_type: "url".to_string(),
                             media_type:  None,
                             data:        None,
-                            url:         Some(image_url),
+                            url:         Some(image_url.clone()),
                         },
                         cache_control: None,
                     },
@@ -5007,19 +5140,44 @@ data: {"type":"message_stop"}
             output_config:  None,
         };
         relay.resolve_claude_url_images(&mut request).await;
-        server.await;
 
         let claude::ContentBlock::Image { source, .. } = &request.messages[0].content[1] else {
             panic!("image block should still be present");
         };
-        assert_eq!(source.source_type, "base64");
-        assert_eq!(source.media_type.as_deref(), Some("image/png"));
-        assert!(source.url.is_none());
-        let data = source.data.as_deref().expect("base64 image data");
-        assert_eq!(
-            data_encoding::BASE64.decode(data.as_bytes()).unwrap(),
-            png_bytes
-        );
+        assert_eq!(source.source_type, "url");
+        assert_eq!(source.url.as_deref(), Some(image_url.as_str()));
+    }
+
+    #[test]
+    fn image_url_ip_policy_blocks_private_reserved_and_mapped_addresses() {
+        for value in [
+            "0.1.2.3",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "240.0.0.1",
+            "::1",
+            "::ffff:127.0.0.1",
+            "fc00::1",
+            "fe80::1",
+            "fec0::1",
+            "100::1",
+            "2001:db8::1",
+        ] {
+            assert!(
+                is_private_or_reserved_ip(value.parse().unwrap()),
+                "{value} must not be fetched"
+            );
+        }
+        assert!(!is_private_or_reserved_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_private_or_reserved_ip(
+            "2606:4700:4700::1111".parse().unwrap()
+        ));
     }
 
     #[test]

@@ -32,6 +32,8 @@ pub struct UsageAck {
 pub enum UsageError {
     #[error("usage event sink is unavailable")]
     Unavailable,
+    #[error("insufficient quota")]
+    InsufficientQuota,
     #[error("usage event sink lock is poisoned: {0}")]
     Poisoned(&'static str),
     #[error("usage event storage error: {0}")]

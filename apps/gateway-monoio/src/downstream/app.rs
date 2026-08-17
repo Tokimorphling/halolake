@@ -107,7 +107,7 @@ impl Gateway {
                         Err(resp) => resp,
                     }
                 }
-                (&Method::POST, "/v1/messages") => {
+                (&Method::POST, "/v1/messages") | (&Method::POST, "/v1/messages/count_tokens") => {
                     let cx = base_cx.param_set(DownstreamProtocol::ClaudeMessages);
                     match self.collect_request(req).await {
                         Ok(request) => self
@@ -200,10 +200,22 @@ impl Gateway {
         .await
         {
             Ok((headers, result)) => match result {
-                Ok(body) => (headers, body),
-                Err(err) => {
+                Ok(body) if body.len() <= self.request_body_limit_bytes => (headers, body),
+                Ok(_) => {
                     return Err(json_error(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "invalid_request_error",
+                        "decompressed request body exceeds configured limit",
+                    ));
+                }
+                Err(err) => {
+                    let status = if matches!(err, crate::DecompressError::TooLarge) {
+                        StatusCode::PAYLOAD_TOO_LARGE
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    };
+                    return Err(json_error(
+                        status,
                         "invalid_request_error",
                         &err.to_string(),
                     ));

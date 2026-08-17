@@ -23,9 +23,10 @@ use axum::{
 use certain_map::ParamSet;
 use halolake_control_plane::{
     BootstrapRootUserRequest, ChannelFeedbackBatch, ControlActor, ControlContext, ControlRequestId,
-    ManagementError, SettleUsageRequest, SnapshotRequest, SnapshotResponse, UsageEventBatch,
+    ManagementError, PreConsumeQuotaRequest, SettleUsageRequest, SnapshotRequest, SnapshotResponse,
+    UsageEventBatch,
 };
-use halolake_domain::ROLE_ROOT_USER;
+use halolake_domain::{ROLE_ROOT_USER, UsageEvent};
 use serde::Deserialize;
 use serde_json::json;
 use service_async::Service;
@@ -119,6 +120,11 @@ pub(crate) async fn gateway_usage(
                     .values()
                     .map(|options| usage_pricing_from_options(&options))
                     .unwrap_or_default();
+                let request_ids = recorded
+                    .accepted_events
+                    .iter()
+                    .map(|event| event.request_id.clone())
+                    .collect::<Vec<_>>();
                 match state
                     .management
                     .call(SettleUsageRequest {
@@ -148,12 +154,62 @@ pub(crate) async fn gateway_usage(
                             return management_error(err);
                         }
                     }
-                    Err(err) => return management_error(err),
+                    Err(err) => {
+                        // `record_batch` is intentionally ahead of management
+                        // settlement. If management did not commit, remove
+                        // only this batch so a gateway retry is not swallowed
+                        // by usage request-id deduplication. Never do this
+                        // after a successful management call: quota updates
+                        // are then already authoritative.
+                        if let Err(discard_err) =
+                            state.usage_events.discard_unsettled(&request_ids).await
+                        {
+                            warn!(
+                                ?discard_err,
+                                request_count = request_ids.len(),
+                                "failed to roll back unsettled usage rows"
+                            );
+                        }
+                        return management_error(err);
+                    }
                 }
             }
             api_success(recorded.ack)
         }
         Err(err) => usage_error(err),
+    }
+}
+
+/// Synchronous quota admission used by the monoio gateway. The request is
+/// deliberately an ordinary `UsageEvent`: the gateway supplies a conservative
+/// token estimate and the control plane applies the same pricing rules as the
+/// eventual usage settlement.
+pub(crate) async fn gateway_quota_reserve(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(event): Json<UsageEvent>,
+) -> Response {
+    let _cx = ControlContext::new()
+        .param_set(ControlRequestId(Uuid::new_v4().simple().to_string()))
+        .param_set(ControlActor::System);
+    if !state.authorized(&headers) {
+        return api_error_status(StatusCode::UNAUTHORIZED, "invalid internal key");
+    }
+    let pricing = state
+        .options
+        .values()
+        .map(|options| usage_pricing_from_options(&options))
+        .unwrap_or_default();
+    match state
+        .management
+        .call(PreConsumeQuotaRequest { event, pricing })
+        .await
+    {
+        Ok(reservation) => api_success(reservation),
+        Err(ManagementError::InsufficientQuota) => {
+            api_error_status(StatusCode::PAYMENT_REQUIRED, "insufficient quota")
+        }
+        Err(err) => management_error(err),
     }
 }
 

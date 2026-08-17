@@ -2,8 +2,10 @@ use super::*;
 use crate::relay::{StreamingHttpUpstream, send_pooled_http1};
 use halolake_api_contract::ApiResponse;
 use halolake_control_plane::{
-    SnapshotError, SnapshotRequest, SnapshotResponse, UsageAck, UsageError, UsageEventBatch,
+    QuotaReservation, SnapshotError, SnapshotRequest, SnapshotResponse, UsageAck, UsageError,
+    UsageEventBatch,
 };
+use halolake_domain::UsageEvent;
 use monoio_transports::{connectors::pollio::PollIo, http::hyper::HyperH1Connector};
 
 const INTERNAL_KEY_HEADER: &str = "x-halolake-internal-key";
@@ -154,13 +156,14 @@ fn snapshot_transport(err: anyhow::Error) -> SnapshotError {
 
 #[derive(Clone)]
 pub(crate) struct MonoioHttpUsageSink {
-    usage_url:       Arc<str>,
-    internal_key:    Option<Arc<str>>,
-    connect_timeout: Option<Duration>,
-    read_timeout:    Option<Duration>,
-    dns:             LocalDnsResolver,
-    http:            Rc<StreamingHttpUpstream>,
-    https:           HttpsUpstream,
+    usage_url:         Arc<str>,
+    quota_reserve_url: Option<Arc<str>>,
+    internal_key:      Option<Arc<str>>,
+    connect_timeout:   Option<Duration>,
+    read_timeout:      Option<Duration>,
+    dns:               LocalDnsResolver,
+    http:              Rc<StreamingHttpUpstream>,
+    https:             HttpsUpstream,
 }
 
 impl MonoioHttpUsageSink {
@@ -181,6 +184,11 @@ impl MonoioHttpUsageSink {
 
         Ok(Some(Self {
             usage_url: Arc::from(usage_url.as_str()),
+            quota_reserve_url: config
+                .quota_reserve_url
+                .as_deref()
+                .map(Arc::<str>::from)
+                .or_else(|| derive_quota_reserve_url(usage_url).map(Arc::<str>::from)),
             internal_key: config.internal_key.as_deref().map(Arc::<str>::from),
             connect_timeout: config.connect_timeout_ms.map(Duration::from_millis),
             read_timeout,
@@ -218,6 +226,64 @@ impl MonoioHttpUsageSink {
             .context("send http control usage request")
         }
     }
+
+    async fn reserve(&self, event: UsageEvent) -> Result<QuotaReservation, UsageError> {
+        let Some(url) = &self.quota_reserve_url else {
+            return Err(UsageError::Unavailable);
+        };
+        let uri: Uri = url
+            .parse()
+            .map_err(|err| UsageError::Transport(format!("invalid quota reserve url: {err}")))?;
+        let body = serde_json::to_vec(&event)
+            .map(Bytes::from)
+            .map_err(|err| UsageError::InvalidResponse(err.to_string()))?;
+        let path = uri
+            .path_and_query()
+            .map_or(uri.path(), |path_and_query| path_and_query.as_str())
+            .to_string();
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri(path.as_str())
+            .header(header::HOST, authority(&uri).map_err(usage_transport)?)
+            .header(header::ACCEPT, "application/json")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(internal_key) = &self.internal_key {
+            builder = builder.header(INTERNAL_KEY_HEADER, internal_key.as_ref());
+        }
+        let request = builder
+            .body(HttpBody::fixed_body(Some(body)))
+            .map_err(|err| UsageError::Transport(err.to_string()))?;
+        let mut response = self.send(uri, request).await.map_err(usage_transport)?;
+        let status = response.status();
+        let payload = response
+            .body_mut()
+            .to_ready()
+            .await
+            .map_err(|err| UsageError::Transport(err.to_string()))?
+            .unwrap_or_default();
+        let envelope: ApiResponse<QuotaReservation> = serde_json::from_slice(&payload)
+            .map_err(|err| UsageError::InvalidResponse(err.to_string()))?;
+        if status == StatusCode::PAYMENT_REQUIRED {
+            return Err(UsageError::InsufficientQuota);
+        }
+        if !status.is_success() || !envelope.success {
+            return Err(UsageError::Transport(if envelope.message.is_empty() {
+                format!("quota reserve endpoint returned {status}")
+            } else {
+                envelope.message
+            }));
+        }
+        envelope
+            .data
+            .ok_or_else(|| UsageError::InvalidResponse("missing quota reservation".into()))
+    }
+}
+
+fn derive_quota_reserve_url(usage_url: &str) -> Option<String> {
+    let trimmed = usage_url.trim_end_matches('/');
+    trimmed
+        .strip_suffix("/usage")
+        .map(|prefix| format!("{prefix}/quota/reserve"))
 }
 
 impl Service<UsageEventBatch> for MonoioHttpUsageSink {
@@ -545,6 +611,14 @@ impl UsageReporter {
                 run_usage_report_queue(sink, queue, batch_size, flush_interval).await;
             });
         }
+    }
+
+    pub(crate) async fn preconsume(&self, event: UsageEvent) -> Result<Option<i64>, UsageError> {
+        let Some(sink) = self.sink.as_ref() else {
+            return Ok(None);
+        };
+        let reservation = sink.reserve(event).await?;
+        Ok(Some(reservation.quota))
     }
 
     pub(crate) fn is_enabled(&self) -> bool {

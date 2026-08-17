@@ -7,6 +7,8 @@ mod auth_import;
 mod http;
 mod openai_oauth;
 mod sub2api_data_import;
+mod upstream_url;
+mod xai_import;
 
 #[allow(unused_imports)]
 pub(crate) use crate::codex_auth::parse_flexible_codex_key;

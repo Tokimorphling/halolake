@@ -353,6 +353,11 @@ pub struct UsageEvent {
     pub audio_tokens:          Option<u64>,
     #[serde(default)]
     pub quota:                 Option<i64>,
+    /// Quota reserved synchronously before the upstream request. The control
+    /// plane settles the final event as `actual - pre_consumed` so failed
+    /// requests refund the reservation.
+    #[serde(default)]
+    pub pre_consumed_quota:    Option<i64>,
     pub status:                UsageStatus,
     pub latency_ms:            u64,
     /// Time-to-first-response in milliseconds (new-api log `other.frt`).

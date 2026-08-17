@@ -116,6 +116,10 @@ pub struct ControlPlaneConfig {
     pub snapshot_url:              Option<String>,
     #[serde(default)]
     pub usage_url:                 Option<String>,
+    /// Synchronous quota admission endpoint. When omitted, a `/usage` URL is
+    /// mapped to `/quota/reserve` automatically.
+    #[serde(default)]
+    pub quota_reserve_url:         Option<String>,
     #[serde(default)]
     pub channel_feedback_url:      Option<String>,
     #[serde(default)]
@@ -149,6 +153,7 @@ impl Default for ControlPlaneConfig {
         Self {
             snapshot_url:              None,
             usage_url:                 None,
+            quota_reserve_url:         None,
             channel_feedback_url:      None,
             system_instance_url:       None,
             internal_key:              None,

@@ -319,10 +319,11 @@ pub struct ChannelAffinityKeySource {
 
 #[derive(Debug, Clone)]
 pub struct ChannelAffinityCandidate {
-    pub cache_key:         String,
-    pub ttl_seconds:       u64,
-    pub cached_channel_id: Option<String>,
-    pub rule_name:         String,
+    pub cache_key:             String,
+    pub ttl_seconds:           u64,
+    pub cached_channel_id:     Option<String>,
+    pub rule_name:             String,
+    pub skip_retry_on_failure: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -842,6 +843,27 @@ impl IndexedSnapshot {
         self.route_weighted(auth, requested_model, seed)
     }
 
+    /// Route while excluding channels that already failed this request. The
+    /// exclusion is applied per group before the weighted slot is calculated,
+    /// so a high-weight unhealthy channel cannot consume every retry slot.
+    /// Callers can fall back to [`Self::route_with_seed`] when no alternate
+    /// channel exists (which still permits API-key rotation on that channel).
+    pub fn route_with_seed_excluding<'a>(
+        &'a self,
+        auth: &AuthContext<'a>,
+        requested_model: &'a str,
+        seed: u64,
+        excluded_channel_ids: &[&str],
+    ) -> Result<RouteDecision<'a>, RouteError> {
+        if excluded_channel_ids.is_empty() {
+            return self.route_with_seed(auth, requested_model, seed);
+        }
+        if !auth.token.allows_model(requested_model) {
+            return Err(RouteError::ModelForbidden);
+        }
+        self.route_weighted_excluding(auth, requested_model, seed, excluded_channel_ids)
+    }
+
     pub fn route_with_affinity_seed<'a>(
         &'a self,
         auth: &AuthContext<'a>,
@@ -946,6 +968,7 @@ impl IndexedSnapshot {
                 ttl_seconds,
                 cached_channel_id,
                 rule_name: rule.name.clone(),
+                skip_retry_on_failure: rule.skip_retry_on_failure,
             });
         }
         None
@@ -978,6 +1001,16 @@ impl IndexedSnapshot {
         requested_model: &'a str,
         seed: u64,
     ) -> Result<RouteDecision<'a>, RouteError> {
+        self.route_weighted_excluding(auth, requested_model, seed, &[])
+    }
+
+    fn route_weighted_excluding<'a>(
+        &'a self,
+        auth: &AuthContext<'a>,
+        requested_model: &'a str,
+        seed: u64,
+        excluded_channel_ids: &[&str],
+    ) -> Result<RouteDecision<'a>, RouteError> {
         let mappings = self
             .mappings
             .get(requested_model)
@@ -991,19 +1024,40 @@ impl IndexedSnapshot {
             if group.total_weight == 0 {
                 continue;
             }
-            let slot = seed % group.total_weight;
-            let candidate_index = group
-                .candidates
-                .partition_point(|candidate| candidate.cumulative_weight <= slot);
-            let candidate = &group.candidates[candidate_index];
-            let mapping = &mappings.mappings[candidate.mapping_index];
-            return Ok(RouteDecision {
-                user_id: auth.token.user_id(),
-                channel: &self.channels[candidate.channel_index],
-                using_group,
-                requested_model,
-                upstream_model: &mapping.upstream_model,
-            });
+            let total_weight = if excluded_channel_ids.is_empty() {
+                group.total_weight
+            } else {
+                route_group_available_weight(group, &self.channels, excluded_channel_ids)
+            };
+            if total_weight == 0 {
+                continue;
+            }
+            let slot = seed % total_weight;
+            let mut cumulative = 0u64;
+            let mut previous_cumulative = 0u64;
+            for candidate in &group.candidates {
+                let weight = candidate
+                    .cumulative_weight
+                    .saturating_sub(previous_cumulative);
+                previous_cumulative = candidate.cumulative_weight;
+                if excluded_channel_ids
+                    .iter()
+                    .any(|id| *id == self.channels[candidate.channel_index].id.as_str())
+                {
+                    continue;
+                }
+                cumulative = cumulative.saturating_add(weight);
+                if slot < cumulative {
+                    let mapping = &mappings.mappings[candidate.mapping_index];
+                    return Ok(RouteDecision {
+                        user_id: auth.token.user_id(),
+                        channel: &self.channels[candidate.channel_index],
+                        using_group,
+                        requested_model,
+                        upstream_model: &mapping.upstream_model,
+                    });
+                }
+            }
         }
         Err(
             if auth.token.route_groups.is_empty() || !mappings.has_channel {
@@ -1041,6 +1095,28 @@ impl IndexedSnapshot {
             upstream_model: &mappings.mappings[candidate.mapping_index].upstream_model,
         })
     }
+}
+
+fn route_group_available_weight(
+    group: &IndexedRouteGroup,
+    channels: &[ChannelConfig],
+    excluded_channel_ids: &[&str],
+) -> u64 {
+    let mut total = 0u64;
+    let mut previous_cumulative = 0u64;
+    for candidate in &group.candidates {
+        let weight = candidate
+            .cumulative_weight
+            .saturating_sub(previous_cumulative);
+        previous_cumulative = candidate.cumulative_weight;
+        if !excluded_channel_ids
+            .iter()
+            .any(|id| *id == channels[candidate.channel_index].id.as_str())
+        {
+            total = total.saturating_add(weight);
+        }
+    }
+    total
 }
 
 impl TryFrom<GatewaySnapshot> for IndexedSnapshot {
@@ -1539,6 +1615,21 @@ mod tests {
                 .id,
             "channel-a"
         );
+        for seed in 0..6 {
+            assert_eq!(
+                indexed
+                    .route_with_seed_excluding(&auth, "gpt-4o", seed, &["channel-a"])
+                    .expect("alternate route")
+                    .channel
+                    .id,
+                "channel-b"
+            );
+        }
+        assert!(
+            indexed
+                .route_with_seed_excluding(&auth, "gpt-4o", 0, &["channel-a", "channel-b"],)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1706,10 +1797,11 @@ mod tests {
         let auth = indexed.authenticate("token-a").expect("auth");
         let cache = ChannelAffinityCache::new();
         let affinity = ChannelAffinityCandidate {
-            cache_key:         "duplicate-mapping".to_string(),
-            ttl_seconds:       60,
-            cached_channel_id: Some("channel-a".to_string()),
-            rule_name:         String::new(),
+            cache_key:             "duplicate-mapping".to_string(),
+            ttl_seconds:           60,
+            cached_channel_id:     Some("channel-a".to_string()),
+            rule_name:             String::new(),
+            skip_retry_on_failure: false,
         };
         let (route, affinity_hit) = indexed
             .route_with_affinity_seed(&auth, "gpt-4o", Some(&affinity), &cache, 1)
@@ -2281,10 +2373,11 @@ mod tests {
         for index in 0..256 {
             cache.record(
                 &ChannelAffinityCandidate {
-                    cache_key:         format!("session-{index}"),
-                    ttl_seconds:       60,
-                    cached_channel_id: None,
-                    rule_name:         "test".to_string(),
+                    cache_key:             format!("session-{index}"),
+                    ttl_seconds:           60,
+                    cached_channel_id:     None,
+                    rule_name:             "test".to_string(),
+                    skip_retry_on_failure: false,
                 },
                 &format!("channel-{index}"),
                 32,

@@ -614,6 +614,10 @@ impl ControlApi {
             .route("/internal/gateway/snapshot", get(gateway_snapshot))
             .route("/internal/gateway/usage", post(gateway_usage))
             .route(
+                "/internal/gateway/quota/reserve",
+                post(gateway_quota_reserve),
+            )
+            .route(
                 "/internal/gateway/channel-feedback",
                 post(gateway_channel_feedback),
             )

@@ -557,6 +557,35 @@ pub(crate) async fn send_request_via_proxy(
     }
 }
 
+/// Send a direct HTTPS request using the streaming HTTP/1 codec. The caller
+/// supplies the already-resolved address so security-sensitive fetches can
+/// validate DNS results and then connect to that exact address.
+pub(crate) async fn send_direct_https1(
+    address: SocketAddr,
+    target_host: &str,
+    req: Request<HttpBody>,
+    connect_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+) -> Result<Response<HttpBody>> {
+    let connector = TcpConnector::default();
+    let stream = timeout_stage(
+        connect_timeout,
+        "connect direct HTTPS upstream",
+        connector.connect(address),
+    )
+    .await??;
+    let connector = tls_connector()?;
+    let server_name = tls_server_name(target_host)?;
+    let tls_stream = timeout_stage(
+        connect_timeout,
+        "TLS handshake with direct upstream",
+        connector.connect(server_name, stream),
+    )
+    .await?
+    .with_context(|| format!("TLS handshake with direct upstream {target_host}"))?;
+    proxy_send_request(tls_stream, req, read_timeout).await
+}
+
 async fn connect_proxy_tcp(
     proxy: &ProxyEndpoint,
     connect_timeout: Option<Duration>,
@@ -815,17 +844,17 @@ async fn next_body_data<B>(
 where
     B: MonoioBody<Data = Bytes, Error = HttpError>,
 {
-    // Always enforce a default 30s idle timeout even when `read_timeout` is
-    // `None`. Without this, a downstream client disconnect mid-SSE leaves the
-    // producer task parked on `next_data` until the upstream closes — holding
-    // the proxy connection for the entire LLM stream.
-    let duration = read_timeout.unwrap_or(Duration::from_secs(30));
-    match monoio::time::timeout(duration, MonoioBody::next_data(body)).await {
-        Ok(item) => item,
-        Err(_) => Some(Err(HttpError::from(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("proxy upstream body idle timeout after {duration:?}"),
-        )))),
+    match read_timeout {
+        Some(duration) => {
+            match monoio::time::timeout(duration, MonoioBody::next_data(body)).await {
+                Ok(item) => item,
+                Err(_) => Some(Err(HttpError::from(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("proxy upstream body idle timeout after {duration:?}"),
+                )))),
+            }
+        }
+        None => MonoioBody::next_data(body).await,
     }
 }
 

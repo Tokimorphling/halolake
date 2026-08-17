@@ -1474,6 +1474,7 @@ mod tests {
             image_tokens: None,
             audio_tokens: None,
             quota: Some(2),
+            pre_consumed_quota: None,
             status: UsageStatus::Success,
             latency_ms: 10,
             first_response_ms: None,

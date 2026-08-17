@@ -108,12 +108,22 @@ pub(crate) async fn import_codex_auth(
         .filter(|m| !m.is_empty())
         .unwrap_or("gpt-5.1,gpt-5,o3,o4-mini")
         .to_string();
-    let base_url = req
+    let requested_base_url = req
         .base_url
         .as_deref()
         .map(str::trim)
         .filter(|u| !u.is_empty())
         .map(str::to_string);
+    let base_url = match super::upstream_url::normalize_import_base_url(
+        requested_base_url.as_deref(),
+        "codex",
+        None,
+    ) {
+        Ok(base_url) => base_url,
+        Err(_) => {
+            return management_error(ManagementError::InvalidRequest("invalid imported base_url"));
+        }
+    };
     let name_base = req.name.trim();
 
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -223,6 +233,9 @@ pub(crate) async fn import_codex_auth(
                 channel.channel_type = CHANNEL_TYPE_CODEX;
                 if !account_name.is_empty() {
                     channel.name = account_name.clone();
+                }
+                if requested_base_url.is_some() {
+                    channel.base_url = base_url.clone();
                 }
                 if let Some(pid) = req.proxy_id {
                     channel.proxy_id = Some(pid);

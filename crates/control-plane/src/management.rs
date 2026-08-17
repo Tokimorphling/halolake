@@ -336,6 +336,8 @@ pub enum ManagementError {
     PasswordHash(String),
     #[error("permission denied")]
     PermissionDenied,
+    #[error("insufficient quota")]
+    InsufficientQuota,
     #[error("storage error: {0}")]
     Storage(String),
     #[error("unsupported channel type: {0}")]
@@ -443,6 +445,19 @@ pub struct AdjustUserQuotaRequest {
 pub struct SettleUsageRequest {
     pub events:  Vec<UsageEvent>,
     pub pricing: UsagePricing,
+}
+
+/// Atomically reserve quota before an upstream request is sent.
+#[derive(Debug, Clone)]
+pub struct PreConsumeQuotaRequest {
+    pub event:   UsageEvent,
+    pub pricing: UsagePricing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QuotaReservation {
+    pub request_id: String,
+    pub quota:      i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -891,6 +906,17 @@ impl MemoryManagementStore {
             .read()
             .map_err(|_| ManagementError::Poisoned("management"))?;
         Ok(plan_usage_settlement(&state.data, &state.identity, req))
+    }
+
+    pub fn plan_preconsume_quota(
+        &self,
+        req: PreConsumeQuotaRequest,
+    ) -> Result<PlannedUsageSettlement, ManagementError> {
+        let state = self
+            .inner
+            .read()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        plan_preconsume_quota(&state.data, &state.identity, req)
     }
 
     /// Atomically publishes a previously persisted sparse usage plan.
@@ -1420,13 +1446,7 @@ fn plan_usage_settlement(
 ) -> PlannedUsageSettlement {
     let base_version = data.version;
     if req.events.is_empty() {
-        return PlannedUsageSettlement {
-            settlement: UsageSettlement::default(),
-            base_version,
-            user_indices: Vec::new(),
-            token_indices: Vec::new(),
-            channel_indices: Vec::new(),
-        };
+        return empty_usage_plan(base_version);
     }
 
     let SettleUsageRequest { events, pricing } = req;
@@ -1479,15 +1499,32 @@ fn plan_usage_settlement(
         let token = token_idx.and_then(|index| data.tokens.get(index));
         let user = data.users.get(user_idx);
         let channel = channel_idx.and_then(|index| data.channels.get(index));
-        let quota = usage_event_quota(&event, &pricing, token, user, channel);
-        if quota <= 0 {
+        let reserved_quota = event.pre_consumed_quota.unwrap_or(0).max(0);
+        let calculated_quota = usage_event_quota(&event, &pricing, token, user, channel);
+        // Some OpenAI-compatible upstreams omit usage completely. A successful
+        // response must not turn into a free request merely because accounting
+        // metadata is absent; retain the admission reservation in that case.
+        // Explicit quota/tokens still settle normally, and every failure keeps
+        // `actual_quota == 0` so the reservation is fully refunded.
+        let actual_quota = if calculated_quota == 0
+            && reserved_quota > 0
+            && event.status == UsageStatus::Success
+            && event.quota.is_none()
+            && event.observed_tokens() == 0
+        {
+            reserved_quota
+        } else {
+            calculated_quota
+        };
+        let delta_quota = actual_quota.saturating_sub(reserved_quota);
+        if actual_quota <= 0 && reserved_quota == 0 {
             settlement.skipped = settlement.skipped.saturating_add(1);
             continue;
         }
 
         settlement.event_quotas.push(UsageEventQuota {
             request_id: event.request_id.clone(),
-            quota,
+            quota:      actual_quota,
         });
 
         let user = &data.users[user_idx];
@@ -1496,22 +1533,28 @@ fn plan_usage_settlement(
             quota:      user.quota,
             used_quota: user.used_quota,
         });
-        user_state.quota = user_state.quota.saturating_sub(quota);
-        user_state.used_quota = user_state.used_quota.saturating_add(quota);
+        user_state.quota = user_state.quota.saturating_sub(delta_quota);
+        user_state.used_quota = user_state.used_quota.saturating_add(delta_quota);
 
         if let Some(index) = token_idx {
             let token = &data.tokens[index];
             let token_state = token_states
                 .get_mut(&index)
                 .expect("token post-state initialized above");
-            token_state.remain_quota = token_state.remain_quota.saturating_sub(quota);
-            token_state.used_quota = token_state.used_quota.saturating_add(quota);
+            token_state.remain_quota = token_state.remain_quota.saturating_sub(delta_quota);
+            token_state.used_quota = token_state.used_quota.saturating_add(delta_quota);
             if !token.unlimited_quota
                 && token_state.remain_quota <= 0
                 && token_state.status != TOKEN_STATUS_EXHAUSTED
             {
                 token_state.status = TOKEN_STATUS_EXHAUSTED;
                 settlement.tokens_exhausted = settlement.tokens_exhausted.saturating_add(1);
+            } else if reserved_quota > 0
+                && delta_quota < 0
+                && token_state.remain_quota > 0
+                && token_state.status == TOKEN_STATUS_EXHAUSTED
+            {
+                token_state.status = STATUS_ENABLED;
             }
         }
 
@@ -1521,11 +1564,14 @@ fn plan_usage_settlement(
                 id:         channel.id,
                 used_quota: channel.used_quota,
             });
-            channel_state.used_quota = channel_state.used_quota.saturating_add(quota);
+            // Reservations intentionally omit a channel id because routing
+            // may fail over before the final event. Charge the actual event
+            // quota to the channel selected for the successful/failing try.
+            channel_state.used_quota = channel_state.used_quota.saturating_add(actual_quota);
         }
 
         settlement.settled = settlement.settled.saturating_add(1);
-        settlement.quota = settlement.quota.saturating_add(quota);
+        settlement.quota = settlement.quota.saturating_add(actual_quota);
     }
 
     let mut users = user_states.into_iter().collect::<Vec<_>>();
@@ -1549,6 +1595,70 @@ fn plan_usage_settlement(
         token_indices,
         channel_indices,
     }
+}
+
+fn empty_usage_plan(base_version: u64) -> PlannedUsageSettlement {
+    PlannedUsageSettlement {
+        settlement: UsageSettlement::default(),
+        base_version,
+        user_indices: Vec::new(),
+        token_indices: Vec::new(),
+        channel_indices: Vec::new(),
+    }
+}
+
+fn plan_preconsume_quota(
+    data: &ManagementData,
+    identity: &ManagementIdentityIndexes,
+    req: PreConsumeQuotaRequest,
+) -> Result<PlannedUsageSettlement, ManagementError> {
+    let PreConsumeQuotaRequest { mut event, pricing } = req;
+    event.status = UsageStatus::Success;
+    event.pre_consumed_quota = None;
+    let token_idx = parse_usage_entity_id(&event.token_id)
+        .and_then(|id| identity.tokens_by_id.get(&id).copied())
+        .or_else(|| {
+            identity
+                .tokens_by_snapshot
+                .get(event.token_id.as_str())
+                .copied()
+        });
+    let user_id = token_idx
+        .map(|idx| data.tokens[idx].user_id)
+        .or_else(|| parse_usage_entity_id(&event.user_id));
+    let user_idx = user_id
+        .and_then(|id| identity.users_by_id.get(&id).copied())
+        .ok_or(ManagementError::NotFound)?;
+    let token = token_idx.and_then(|idx| data.tokens.get(idx));
+    let user = data.users.get(user_idx);
+    let channel_idx = match parse_usage_entity_id(&event.channel_id) {
+        Some(id) => identity.channels_by_id.get(&id).copied(),
+        None => identity
+            .channels_by_snapshot
+            .get(event.channel_id.as_str())
+            .copied(),
+    };
+    let channel = channel_idx.and_then(|idx| data.channels.get(idx));
+    let quota = usage_event_quota(&event, &pricing, token, user, channel);
+    if quota <= 0 {
+        return Ok(empty_usage_plan(data.version));
+    }
+    if user.is_some_and(|user| user.quota < quota) {
+        return Err(ManagementError::InsufficientQuota);
+    }
+    if token.is_some_and(|token| !token.unlimited_quota && token.remain_quota < quota) {
+        return Err(ManagementError::InsufficientQuota);
+    }
+    let plan = plan_usage_settlement(data, identity, SettleUsageRequest {
+        events: vec![event],
+        pricing,
+    });
+    if plan.settlement.settled == 0 {
+        return Err(ManagementError::InvalidRequest(
+            "quota reservation was skipped",
+        ));
+    }
+    Ok(plan)
 }
 
 fn apply_usage_plan(
@@ -1629,6 +1739,23 @@ impl Service<SettleUsageRequest> for MemoryManagementStore {
             .map_err(|_| ManagementError::Poisoned("management"))?;
         let plan = plan_usage_settlement(&state.data, &state.identity, req);
         apply_usage_plan(&mut state.data, plan)
+    }
+}
+
+impl Service<PreConsumeQuotaRequest> for MemoryManagementStore {
+    type Response = QuotaReservation;
+    type Error = ManagementError;
+
+    async fn call(&self, req: PreConsumeQuotaRequest) -> Result<Self::Response, Self::Error> {
+        let mut state = self
+            .inner
+            .write()
+            .map_err(|_| ManagementError::Poisoned("management"))?;
+        let request_id = req.event.request_id.clone();
+        let plan = plan_preconsume_quota(&state.data, &state.identity, req)?;
+        let quota = plan.settlement.quota;
+        apply_usage_plan(&mut state.data, plan)?;
+        Ok(QuotaReservation { request_id, quota })
     }
 }
 
@@ -3489,6 +3616,9 @@ fn usage_event_quota(
     if event.status != UsageStatus::Success {
         return 0;
     }
+    if let Some(quota) = event.quota {
+        return quota.max(0);
+    }
     let total_tokens = event.observed_tokens();
     if total_tokens == 0 {
         return 0;
@@ -3742,6 +3872,7 @@ mod tests {
             image_tokens:          None,
             audio_tokens:          None,
             quota:                 None,
+            pre_consumed_quota:    None,
             status:                UsageStatus::Success,
             latency_ms:            1,
             first_response_ms:     None,
@@ -3884,6 +4015,7 @@ mod tests {
                         image_tokens:          None,
                         audio_tokens:          None,
                         quota:                 None,
+                        pre_consumed_quota:    None,
                         status:                UsageStatus::Success,
                         latency_ms:            123,
                         first_response_ms:     None,
@@ -3964,6 +4096,7 @@ mod tests {
                         image_tokens:          None,
                         audio_tokens:          None,
                         quota:                 None,
+                        pre_consumed_quota:    None,
                         status:                UsageStatus::Success,
                         latency_ms:            1,
                         first_response_ms:     None,
@@ -3980,6 +4113,226 @@ mod tests {
             assert_eq!(settlement.tokens_exhausted, 1);
             let data = store.current_data().expect("data should be readable");
             assert_eq!(data.tokens[0].status, TOKEN_STATUS_EXHAUSTED);
+        });
+    }
+
+    #[test]
+    fn preconsume_then_settle_only_applies_actual_delta() {
+        block_on(async {
+            let mut data = ManagementData::new(
+                1,
+                vec![user(1, "root", ROLE_ROOT_USER)],
+                vec![token(1, 1, "dev-token")],
+                Vec::new(),
+                Vec::new(),
+            );
+            data.users[0].quota = 1_000;
+            data.tokens[0].remain_quota = 1_000;
+            let store = MemoryManagementStore::new(data);
+
+            let mut reservation_event = usage_event("req-reserve", "1", "");
+            reservation_event.quota = Some(100);
+            let reservation = store
+                .call(PreConsumeQuotaRequest {
+                    event:   reservation_event,
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("reservation should succeed");
+            assert_eq!(reservation.quota, 100);
+
+            let after_reserve = store.current_data().expect("read reservation state");
+            assert_eq!(after_reserve.users[0].quota, 900);
+            assert_eq!(after_reserve.users[0].used_quota, 100);
+            assert_eq!(after_reserve.tokens[0].remain_quota, 900);
+            assert_eq!(after_reserve.tokens[0].used_quota, 100);
+
+            let mut final_event = usage_event("req-reserve", "1", "");
+            final_event.quota = Some(40);
+            final_event.pre_consumed_quota = Some(reservation.quota);
+            let settlement = store
+                .call(SettleUsageRequest {
+                    events:  vec![final_event],
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("settlement should succeed");
+            assert_eq!(settlement.quota, 40);
+
+            let after_settle = store.current_data().expect("read settled state");
+            assert_eq!(after_settle.users[0].quota, 960);
+            assert_eq!(after_settle.users[0].used_quota, 40);
+            assert_eq!(after_settle.tokens[0].remain_quota, 960);
+            assert_eq!(after_settle.tokens[0].used_quota, 40);
+        });
+    }
+
+    #[test]
+    fn failed_request_refunds_preconsumed_quota() {
+        block_on(async {
+            let mut data = ManagementData::new(
+                1,
+                vec![user(1, "root", ROLE_ROOT_USER)],
+                vec![token(1, 1, "dev-token")],
+                Vec::new(),
+                Vec::new(),
+            );
+            data.users[0].quota = 500;
+            data.tokens[0].remain_quota = 500;
+            let store = MemoryManagementStore::new(data);
+
+            let mut reservation_event = usage_event("req-failed", "1", "");
+            reservation_event.quota = Some(125);
+            let reservation = store
+                .call(PreConsumeQuotaRequest {
+                    event:   reservation_event,
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("reservation should succeed");
+
+            let mut failed_event = usage_event("req-failed", "1", "");
+            failed_event.status = UsageStatus::UpstreamError;
+            failed_event.prompt_tokens = None;
+            failed_event.total_tokens = None;
+            failed_event.quota = None;
+            failed_event.pre_consumed_quota = Some(reservation.quota);
+            let settlement = store
+                .call(SettleUsageRequest {
+                    events:  vec![failed_event],
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("failed request should settle a refund");
+            assert_eq!(settlement.quota, 0);
+
+            let after_settle = store.current_data().expect("read refunded state");
+            assert_eq!(after_settle.users[0].quota, 500);
+            assert_eq!(after_settle.users[0].used_quota, 0);
+            assert_eq!(after_settle.tokens[0].remain_quota, 500);
+            assert_eq!(after_settle.tokens[0].used_quota, 0);
+        });
+    }
+
+    #[test]
+    fn successful_request_without_usage_keeps_preconsumed_quota() {
+        block_on(async {
+            let mut data = ManagementData::new(
+                1,
+                vec![user(1, "root", ROLE_ROOT_USER)],
+                vec![token(1, 1, "dev-token")],
+                Vec::new(),
+                Vec::new(),
+            );
+            data.users[0].quota = 500;
+            data.tokens[0].remain_quota = 500;
+            let store = MemoryManagementStore::new(data);
+
+            let mut reservation_event = usage_event("req-no-usage", "1", "");
+            reservation_event.quota = Some(125);
+            let reservation = store
+                .call(PreConsumeQuotaRequest {
+                    event:   reservation_event,
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("reservation should succeed");
+
+            let mut final_event = usage_event("req-no-usage", "1", "");
+            final_event.prompt_tokens = None;
+            final_event.total_tokens = None;
+            final_event.quota = None;
+            final_event.pre_consumed_quota = Some(reservation.quota);
+            let settlement = store
+                .call(SettleUsageRequest {
+                    events:  vec![final_event],
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("successful request without usage should settle");
+            assert_eq!(settlement.quota, 125);
+
+            let after_settle = store.current_data().expect("read settled state");
+            assert_eq!(after_settle.users[0].quota, 375);
+            assert_eq!(after_settle.users[0].used_quota, 125);
+            assert_eq!(after_settle.tokens[0].remain_quota, 375);
+            assert_eq!(after_settle.tokens[0].used_quota, 125);
+        });
+    }
+
+    #[test]
+    fn zero_cost_preconsume_is_a_valid_noop() {
+        block_on(async {
+            let mut data = ManagementData::new(
+                1,
+                vec![user(1, "root", ROLE_ROOT_USER)],
+                vec![token(1, 1, "dev-token")],
+                Vec::new(),
+                Vec::new(),
+            );
+            data.users[0].quota = 500;
+            data.tokens[0].remain_quota = 500;
+            let store = MemoryManagementStore::new(data);
+            let mut event = usage_event("req-free", "1", "");
+            event.quota = Some(0);
+
+            let reservation = store
+                .call(PreConsumeQuotaRequest {
+                    event,
+                    pricing: UsagePricing::default(),
+                })
+                .await
+                .expect("free request should be admitted");
+            assert_eq!(reservation.quota, 0);
+
+            let state = store.current_data().expect("read unchanged state");
+            assert_eq!(state.version, 1);
+            assert_eq!(state.users[0].quota, 500);
+            assert_eq!(state.tokens[0].remain_quota, 500);
+        });
+    }
+
+    #[test]
+    fn preconsume_rejects_when_user_or_token_balance_is_insufficient() {
+        block_on(async {
+            let mut data = ManagementData::new(
+                1,
+                vec![user(1, "root", ROLE_ROOT_USER)],
+                vec![token(1, 1, "dev-token")],
+                Vec::new(),
+                Vec::new(),
+            );
+            data.users[0].quota = 50;
+            data.tokens[0].remain_quota = 500;
+            let store = MemoryManagementStore::new(data);
+
+            let mut event = usage_event("req-insufficient-user", "1", "");
+            event.quota = Some(100);
+            assert!(matches!(
+                store
+                    .call(PreConsumeQuotaRequest {
+                        event,
+                        pricing: UsagePricing::default(),
+                    })
+                    .await,
+                Err(ManagementError::InsufficientQuota)
+            ));
+
+            let mut data = store.current_data().expect("read unchanged state");
+            data.users[0].quota = 500;
+            data.tokens[0].remain_quota = 50;
+            let store = MemoryManagementStore::new(data);
+            let mut event = usage_event("req-insufficient-token", "1", "");
+            event.quota = Some(100);
+            assert!(matches!(
+                store
+                    .call(PreConsumeQuotaRequest {
+                        event,
+                        pricing: UsagePricing::default(),
+                    })
+                    .await,
+                Err(ManagementError::InsufficientQuota)
+            ));
         });
     }
 
@@ -4017,6 +4370,7 @@ mod tests {
                         image_tokens:          None,
                         audio_tokens:          None,
                         quota:                 None,
+                        pre_consumed_quota:    None,
                         status:                UsageStatus::UpstreamError,
                         latency_ms:            1,
                         first_response_ms:     None,
@@ -4126,6 +4480,7 @@ mod tests {
                         image_tokens:          None,
                         audio_tokens:          None,
                         quota:                 None,
+                        pre_consumed_quota:    None,
                         status:                UsageStatus::Success,
                         latency_ms:            123,
                         first_response_ms:     None,
@@ -4189,6 +4544,7 @@ mod tests {
                         image_tokens:          Some(20),
                         audio_tokens:          Some(10),
                         quota:                 None,
+                        pre_consumed_quota:    None,
                         status:                UsageStatus::Success,
                         latency_ms:            1,
                         first_response_ms:     None,

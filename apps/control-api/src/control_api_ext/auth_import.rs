@@ -15,6 +15,11 @@
 use super::{
     openai_oauth::{AuthMethod, expand_codex_import_blob},
     sub2api_data_import::{self, DataImportResult, Sub2apiDataImportRequest},
+    upstream_url::normalize_import_base_url,
+    xai_import::{
+        XAI_DEFAULT_API_BASE, XAI_DEFAULT_CLI_CHAT_BASE, XAI_DEFAULT_MODELS,
+        insert_xai_cli_identity_headers,
+    },
 };
 use crate::{
     channel_probe::{ChannelProbeService, FetchModelsRequest},
@@ -51,19 +56,8 @@ const CLAUDE_OAUTH_BETA: &str =
      fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28";
 const CLAUDE_API_VERSION: &str = "2023-06-01";
 const GEMINI_DEFAULT_MODELS: &str = "gemini-2.5-pro,gemini-2.5-flash";
-const XAI_DEFAULT_API_BASE: &str = "https://api.x.ai/v1";
-const XAI_DEFAULT_CLI_CHAT_BASE: &str = "https://cli-chat-proxy.grok.com/v1";
-const XAI_DEFAULT_MODELS: &str = "grok-build-0.1,grok-4.5,grok-4.3,grok-4.20-0309-reasoning,\
-                                  grok-4.20-0309-non-reasoning,grok-4.20-multi-agent-0309,\
-                                  grok-3-mini,grok-3-mini-fast,grok-composer-2.5-fast";
 const UNSUPPORTED_CLIPROXY_AUTH_TYPE: &str =
     "unsupported CLIProxyAPI auth type (supported: codex, claude, gemini, xai)";
-/// Keep in sync with CLIProxyAPI `xaiClientVersionValue` / chat-proxy identity headers.
-const XAI_TOKEN_AUTH_HEADER: &str = "X-XAI-Token-Auth";
-const XAI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
-const XAI_CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
-const XAI_CLIENT_VERSION_VALUE: &str = "0.2.93";
-const XAI_USER_AGENT: &str = "xai-grok-workspace/0.2.93";
 
 /// Auto-detecting import request (JSON body).
 #[derive(Debug, Clone, Deserialize)]
@@ -742,6 +736,14 @@ async fn import_cliproxy_file(
                     channel.channel_type = CHANNEL_TYPE_CODEX;
                     channel.name = channel_name.clone();
                     channel.status = status_after_auth_file_import(channel.status, imported_status);
+                    let meta_base_url = str_field(&meta, "base_url");
+                    let imported_base = base_url.or(meta_base_url.as_deref());
+                    if imported_base.is_some() {
+                        channel.base_url = normalize_import_base_url(imported_base, "codex", None)
+                            .map_err(|_| {
+                                ManagementError::InvalidRequest("invalid imported base_url")
+                            })?;
+                    }
                     channel.setting = Some(merge_auth_file_identity_setting(
                         channel.setting.as_deref(),
                         "codex",
@@ -782,6 +784,10 @@ async fn import_cliproxy_file(
             }
 
             let key_json = codex_key_to_json(&key)?;
+            let meta_base_url = str_field(&meta, "base_url");
+            let imported_base = base_url.or(meta_base_url.as_deref());
+            let normalized_base = normalize_import_base_url(imported_base, "codex", None)
+                .map_err(|_| ManagementError::InvalidRequest("invalid imported base_url"))?;
             let channel = ChannelRecord {
                 id: 0,
                 snapshot_id: None,
@@ -793,7 +799,7 @@ async fn import_cliproxy_file(
                 created_time: now_unix(),
                 test_time: 0,
                 response_time: 0,
-                base_url: base_url.map(str::to_string),
+                base_url: normalized_base,
                 balance: 0.0,
                 balance_updated_time: 0,
                 models: models.to_string(),
@@ -1133,11 +1139,9 @@ async fn import_cliproxy_claude(
         label.to_string()
     };
     let models = resolve_claude_models(models, models_were_explicit);
-    let resolved_base = base_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| parsed.base_url.clone());
+    let resolved_base =
+        normalize_import_base_url(base_url.or(parsed.base_url.as_deref()), "anthropic", None)
+            .map_err(|_| ManagementError::InvalidRequest("invalid imported base_url"))?;
     let setting = build_claude_channel_setting(&parsed, file_name)?;
     let header_override = build_claude_header_override(&parsed)?;
     let status = auth_file_status(meta);
@@ -1554,10 +1558,15 @@ async fn import_cliproxy_xai(
         label.to_string()
     };
     let models = resolve_xai_models(models, models_were_explicit);
-    let resolved_base = Some(resolve_xai_base_url(
-        parsed.using_api,
-        base_url.or(parsed.base_url.as_deref()),
-    ));
+    let resolved_base = Some(
+        normalize_import_base_url(
+            base_url.or(parsed.base_url.as_deref()),
+            "xai",
+            Some(parsed.using_api),
+        )
+        .map_err(|_| ManagementError::InvalidRequest("invalid imported base_url"))?
+        .unwrap_or_else(|| resolve_xai_base_url(parsed.using_api, None)),
+    );
     let setting = build_xai_channel_setting(&parsed, file_name)?;
     let header_override = build_xai_header_override(&parsed, resolved_base.as_deref())?;
     let status = auth_file_status(meta);
@@ -1707,7 +1716,11 @@ fn parse_cliproxy_xai_auth(
     }
     let using_api = bool_field(meta, "using_api").unwrap_or_else(|| auth_kind != "oauth");
     let file_base = str_field(meta, "base_url");
-    let base_url = Some(resolve_xai_base_url(using_api, file_base.as_deref()));
+    let base_url = Some(
+        normalize_import_base_url(file_base.as_deref(), "xai", Some(using_api))
+            .map_err(|_| ManagementError::InvalidRequest("invalid imported base_url"))?
+            .unwrap_or_else(|| resolve_xai_base_url(using_api, None)),
+    );
     let token_endpoint = str_field(meta, "token_endpoint")
         .map(|endpoint| validate_xai_oauth_endpoint(&endpoint))
         .transpose()?;
@@ -1806,18 +1819,7 @@ fn build_xai_header_override(
             .map(str::trim)
             .filter(|s| !s.is_empty()));
     if !parsed.using_api && base.is_some_and(is_xai_cli_chat_proxy_base) {
-        map.insert(
-            XAI_TOKEN_AUTH_HEADER.into(),
-            JsonValue::String(XAI_TOKEN_AUTH_VALUE.into()),
-        );
-        map.insert(
-            XAI_CLIENT_VERSION_HEADER.into(),
-            JsonValue::String(XAI_CLIENT_VERSION_VALUE.into()),
-        );
-        map.insert(
-            "User-Agent".into(),
-            JsonValue::String(XAI_USER_AGENT.into()),
-        );
+        insert_xai_cli_identity_headers(&mut map);
     }
     if let Some(headers) = &parsed.headers {
         for (key, value) in headers {
@@ -1984,6 +1986,12 @@ async fn import_codex_blob(
         .as_deref()
         .unwrap_or("gpt-5.1,gpt-5,o3,o4-mini")
         .to_string();
+    let normalized_base_url = normalize_import_base_url(req.base_url.as_deref(), "codex", None)
+        .map_err(|_| ManagementError::InvalidRequest("invalid imported base_url"))?;
+    let base_url_was_provided = req
+        .base_url
+        .as_deref()
+        .is_some_and(|base| !base.trim().is_empty());
 
     for (entry_offset, item) in entries.into_iter().enumerate() {
         let source_ordinal = if entry_count == 1 {
@@ -2052,6 +2060,9 @@ async fn import_codex_blob(
                     codex_key_to_json(&merge_codex_oauth_key(&channel.key, item.key.clone()))?;
                 channel.channel_type = CHANNEL_TYPE_CODEX;
                 channel.name = account_name.clone();
+                if base_url_was_provided {
+                    channel.base_url = normalized_base_url.clone();
+                }
                 if let Some(pid) = req.proxy_id {
                     channel.proxy_id = Some(pid);
                 }
@@ -2084,7 +2095,7 @@ async fn import_codex_blob(
             created_time:         now_unix(),
             test_time:            0,
             response_time:        0,
-            base_url:             req.base_url.clone(),
+            base_url:             normalized_base_url.clone(),
             balance:              0.0,
             balance_updated_time: 0,
             models:               models.clone(),
@@ -2161,6 +2172,11 @@ fn _codex_key_placeholder() -> CodexOAuthKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control_api_ext::xai_import::{
+        XAI_AUTHENTICATE_RESPONSE_HEADER, XAI_AUTHENTICATE_RESPONSE_VALUE,
+        XAI_CLIENT_IDENTIFIER_HEADER, XAI_CLIENT_IDENTIFIER_VALUE, XAI_CLIENT_VERSION_HEADER,
+        XAI_CLIENT_VERSION_VALUE, XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE, XAI_USER_AGENT,
+    };
     use halolake_control_plane::ManagementData;
 
     fn codex_channel(id: u64, key: &str) -> ChannelRecord {
@@ -2998,7 +3014,7 @@ mod tests {
             .expect("ok")
             .expect("cli headers");
         let map: JsonMap<String, JsonValue> = serde_json::from_str(&override_json).unwrap();
-        assert_eq!(map.len(), 3);
+        assert_eq!(map.len(), 5);
         assert_eq!(
             map.get(XAI_CLIENT_VERSION_HEADER).and_then(|v| v.as_str()),
             Some(XAI_CLIENT_VERSION_VALUE)
@@ -3006,6 +3022,16 @@ mod tests {
         assert_eq!(
             map.get("User-Agent").and_then(|v| v.as_str()),
             Some(XAI_USER_AGENT)
+        );
+        assert_eq!(
+            map.get(XAI_CLIENT_IDENTIFIER_HEADER)
+                .and_then(|v| v.as_str()),
+            Some(XAI_CLIENT_IDENTIFIER_VALUE)
+        );
+        assert_eq!(
+            map.get(XAI_AUTHENTICATE_RESPONSE_HEADER)
+                .and_then(|v| v.as_str()),
+            Some(XAI_AUTHENTICATE_RESPONSE_VALUE)
         );
     }
 
@@ -3027,7 +3053,7 @@ mod tests {
             .expect("ok")
             .expect("headers");
         let map: JsonMap<String, JsonValue> = serde_json::from_str(&override_json).unwrap();
-        assert_eq!(map.len(), 3);
+        assert_eq!(map.len(), 5);
         assert_eq!(
             map.get("User-Agent").and_then(|v| v.as_str()),
             Some("custom-agent")

@@ -6,8 +6,9 @@ pub(crate) struct GatewayRequest {
     pub(crate) body:    Bytes,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct RouteLookup {
-    pub(crate) token:           String,
+    pub(crate) tokens:          Vec<String>,
     pub(crate) requested_model: String,
     pub(crate) path:            String,
     pub(crate) headers:         HeaderMap,
@@ -24,7 +25,8 @@ pub(crate) struct RouteParts {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RouteAffinityContext {
-    pub(crate) cache_key:   String,
-    pub(crate) ttl_seconds: u64,
-    pub(crate) rule_name:   String,
+    pub(crate) cache_key:             String,
+    pub(crate) ttl_seconds:           u64,
+    pub(crate) rule_name:             String,
+    pub(crate) skip_retry_on_failure: bool,
 }

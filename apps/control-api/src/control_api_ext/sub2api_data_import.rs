@@ -4,6 +4,13 @@
 //! (same as sub2api default `skip_default_group_bind`). Existing proxies are
 //! reused by fingerprint; accounts always create new channels.
 
+use super::{
+    upstream_url::normalize_import_base_url,
+    xai_import::{
+        XAI_DEFAULT_API_BASE, XAI_DEFAULT_CLI_CHAT_BASE, XAI_DEFAULT_MODELS,
+        insert_xai_cli_identity_headers,
+    },
+};
 use crate::{
     codex_auth::{CHANNEL_TYPE_CODEX, CodexOAuthKey, codex_key_to_json, parse_flexible_codex_key},
     proxy::{CreateProxyRequest, ListProxiesRequest, ProxyRecord, ProxyStore, UpdateProxyRequest},
@@ -23,6 +30,7 @@ const DATA_VERSION: i32 = 1;
 const CHANNEL_TYPE_OPENAI: i32 = 1;
 const CHANNEL_TYPE_ANTHROPIC: i32 = 14;
 const CHANNEL_TYPE_GEMINI: i32 = 24;
+const CHANNEL_TYPE_XAI: i32 = 48;
 const OPENAI_DEFAULT_MODELS: &str = "gpt-5.1,gpt-5,o3,o4-mini";
 const CLAUDE_DEFAULT_MODELS: &str =
     "claude-haiku-4-5-20251001,claude-sonnet-4-5-20250929,claude-sonnet-4-6,claude-opus-4-6,\
@@ -518,14 +526,19 @@ fn map_account_to_channel(
     let platform = item.platform.trim().to_ascii_lowercase();
     let account_type = item.account_type.trim().to_ascii_lowercase();
     let is_anthropic = matches!(platform.as_str(), "anthropic" | "claude");
+    let is_xai = matches!(platform.as_str(), "grok" | "xai");
+    let xai_using_api = is_xai.then(|| {
+        cred_bool(&item.credentials, "using_api").unwrap_or(!is_oauth_account_type(&account_type))
+    });
     let (channel_type, key) = match platform.as_str() {
         "openai" => map_openai_account(&account_type, &item.credentials)?,
         "anthropic" | "claude" => map_anthropic_account(&account_type, &item.credentials)?,
         "gemini" | "google" => map_gemini_account(&account_type, &item.credentials)?,
+        "grok" | "xai" => map_xai_account(&account_type, &item.credentials)?,
         other => {
             return Err(format!(
                 "unsupported platform for channel import: {other} (supported: openai, anthropic, \
-                 gemini)"
+                 gemini, grok)"
             ));
         }
     };
@@ -539,9 +552,31 @@ fn map_account_to_channel(
                 .map(str::to_string)
         })
         .unwrap_or_else(|| provider_default_models(&platform).to_string());
-    let base_url = cred_string(&item.credentials, "base_url")
+    let imported_base_url = cred_string(&item.credentials, "base_url")
         .or_else(|| cred_string(&item.extra, "base_url"))
         .filter(|s| !s.is_empty());
+    // Sub2API exports both provider roots and complete operation URLs. Store
+    // only a validated base so relay path joining cannot produce e.g.
+    // `/v1/chat/completions/v1/chat/completions`.
+    let base_provider = if channel_type == CHANNEL_TYPE_CODEX {
+        "codex"
+    } else if is_anthropic {
+        "anthropic"
+    } else {
+        platform.as_str()
+    };
+    let mut base_url =
+        normalize_import_base_url(imported_base_url.as_deref(), base_provider, xai_using_api)?;
+    if is_xai && base_url.is_none() {
+        base_url = Some(
+            if xai_using_api.unwrap_or(true) {
+                XAI_DEFAULT_API_BASE
+            } else {
+                XAI_DEFAULT_CLI_CHAT_BASE
+            }
+            .to_string(),
+        );
+    }
 
     let mut setting_map = JsonMap::new();
     if let Some(proxy_url) = cred_string(&item.credentials, "proxy") {
@@ -568,12 +603,28 @@ fn map_account_to_channel(
             item.expires_at,
         );
     }
+    if is_xai {
+        append_xai_auth_setting(
+            &mut setting_map,
+            &account_type,
+            &item.credentials,
+            item.expires_at,
+            xai_using_api.unwrap_or(true),
+        );
+    }
     if item.concurrency > 0 {
         setting_map.insert("concurrency".into(), json!(item.concurrency));
     }
 
     let header_override = if is_anthropic {
         build_anthropic_header_override(&account_type)?
+    } else if is_xai {
+        build_xai_header_override(
+            &account_type,
+            &item.credentials,
+            xai_using_api.unwrap_or(true),
+            base_url.as_deref(),
+        )?
     } else {
         None
     };
@@ -658,6 +709,26 @@ fn map_anthropic_account(
     Ok((CHANNEL_TYPE_ANTHROPIC, key))
 }
 
+fn map_xai_account(
+    account_type: &str,
+    credentials: &JsonMap<String, JsonValue>,
+) -> Result<(i32, String), String> {
+    let key = if is_oauth_account_type(account_type) {
+        cred_string(credentials, "access_token")
+            .or_else(|| cred_string(credentials, "token"))
+            .or_else(|| cred_string(credentials, "api_key"))
+            .ok_or_else(|| "grok OAuth credentials missing access_token".to_string())?
+    } else if matches!(account_type, "apikey" | "api_key" | "api-key" | "upstream") {
+        cred_string(credentials, "api_key")
+            .or_else(|| cred_string(credentials, "access_token"))
+            .or_else(|| cred_string(credentials, "token"))
+            .ok_or_else(|| "grok API key credentials missing api_key".to_string())?
+    } else {
+        return Err(format!("unsupported grok account type: {account_type}"));
+    };
+    Ok((CHANNEL_TYPE_XAI, key))
+}
+
 fn append_anthropic_auth_setting(
     setting: &mut JsonMap<String, JsonValue>,
     account_type: &str,
@@ -723,7 +794,123 @@ fn build_anthropic_header_override(account_type: &str) -> Result<Option<String>,
         .map_err(|error| format!("failed to serialize anthropic header override: {error}"))
 }
 
+fn append_xai_auth_setting(
+    setting: &mut JsonMap<String, JsonValue>,
+    account_type: &str,
+    credentials: &JsonMap<String, JsonValue>,
+    account_expires_at: Option<i64>,
+    using_api: bool,
+) {
+    setting.insert("provider".into(), JsonValue::String("xai".into()));
+    setting.insert(
+        "auth_kind".into(),
+        JsonValue::String(
+            if is_oauth_account_type(account_type) {
+                "oauth"
+            } else {
+                "api_key"
+            }
+            .into(),
+        ),
+    );
+    setting.insert(
+        "upstream_endpoint_type".into(),
+        JsonValue::String("xai-response".into()),
+    );
+    setting.insert("using_api".into(), JsonValue::Bool(using_api));
+    if !is_oauth_account_type(account_type) {
+        return;
+    }
+
+    for (target, aliases) in [
+        ("refresh_token", &["refresh_token", "refreshToken"][..]),
+        ("token_type", &["token_type", "tokenType"][..]),
+        ("id_token", &["id_token", "idToken"][..]),
+        ("client_id", &["client_id", "clientId"][..]),
+        ("scope", &["scope"][..]),
+        ("email", &["email"][..]),
+        ("sub", &["sub", "subject"][..]),
+        ("team_id", &["team_id", "teamId"][..]),
+        ("subscription_tier", &["subscription_tier", "tier"][..]),
+        ("entitlement_status", &["entitlement_status"][..]),
+        ("token_endpoint", &["token_endpoint", "tokenEndpoint"][..]),
+        ("last_refresh", &["last_refresh", "lastRefresh"][..]),
+    ] {
+        if let Some(value) = first_credential_string(credentials, aliases) {
+            setting.insert(target.into(), JsonValue::String(value));
+        }
+    }
+    let expired = first_credential_string(credentials, &[
+        "expired",
+        "expire",
+        "expires_at",
+        "expiresAt",
+        "expiry",
+    ])
+    .or_else(|| account_expires_at.map(|value| value.to_string()));
+    if let Some(expired) = expired {
+        setting.insert("expired".into(), JsonValue::String(expired));
+    }
+    if let Some(expires_at) = account_expires_at {
+        setting.insert("account_expires_at".into(), json!(expires_at));
+    }
+}
+
+fn build_xai_header_override(
+    account_type: &str,
+    credentials: &JsonMap<String, JsonValue>,
+    using_api: bool,
+    base_url: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut map = JsonMap::new();
+    if is_oauth_account_type(account_type)
+        && !using_api
+        && base_url.is_some_and(|base| {
+            base.trim_end_matches('/')
+                .eq_ignore_ascii_case(XAI_DEFAULT_CLI_CHAT_BASE)
+        })
+    {
+        insert_xai_cli_identity_headers(&mut map);
+    }
+    if let Some(headers) = credentials.get("headers").and_then(JsonValue::as_object) {
+        for (name, value) in headers {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let value = match value {
+                JsonValue::String(value) if !value.trim().is_empty() => {
+                    Some(value.trim().to_string())
+                }
+                JsonValue::Number(value) => Some(value.to_string()),
+                JsonValue::Bool(value) => Some(value.to_string()),
+                _ => None,
+            };
+            let Some(value) = value else {
+                continue;
+            };
+            let canonical_name = map
+                .keys()
+                .find(|existing| existing.eq_ignore_ascii_case(name))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            map.insert(canonical_name, JsonValue::String(value));
+        }
+    }
+    if map.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::to_string(&JsonValue::Object(map))
+            .map(Some)
+            .map_err(|error| format!("failed to serialize grok header override: {error}"))
+    }
+}
+
 fn is_anthropic_oauth_account_type(account_type: &str) -> bool {
+    is_oauth_account_type(account_type)
+}
+
+fn is_oauth_account_type(account_type: &str) -> bool {
     matches!(account_type, "oauth" | "setup-token" | "setup_token")
 }
 
@@ -738,6 +925,7 @@ fn provider_default_models(platform: &str) -> &'static str {
     match platform {
         "anthropic" | "claude" => CLAUDE_DEFAULT_MODELS,
         "gemini" | "google" => GEMINI_DEFAULT_MODELS,
+        "grok" | "xai" => XAI_DEFAULT_MODELS,
         _ => OPENAI_DEFAULT_MODELS,
     }
 }
@@ -806,6 +994,19 @@ fn cred_string(map: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
             _ => None,
         })
         .filter(|s| !s.is_empty())
+}
+
+fn cred_bool(map: &JsonMap<String, JsonValue>, key: &str) -> Option<bool> {
+    map.get(key).and_then(|value| match value {
+        JsonValue::Bool(value) => Some(*value),
+        JsonValue::Number(value) => value.as_i64().map(|value| value != 0),
+        JsonValue::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 fn now_unix() -> i64 {
@@ -974,6 +1175,47 @@ mod tests {
     }
 
     #[test]
+    fn preserves_v1_for_codex_but_strips_it_for_openai_chat() {
+        let oauth = DataAccount {
+            name: "codex-custom".into(),
+            platform: "openai".into(),
+            account_type: "oauth".into(),
+            credentials: JsonMap::from_iter([
+                ("access_token".into(), json!("at-custom")),
+                (
+                    "base_url".into(),
+                    json!("https://relay.example/custom/v1/responses"),
+                ),
+            ]),
+            ..DataAccount::default()
+        };
+        let codex = map_account_to_channel(&oauth, "default", None, None).unwrap();
+        assert_eq!(
+            codex.base_url.as_deref(),
+            Some("https://relay.example/custom/v1")
+        );
+
+        let api_key = DataAccount {
+            name: "openai-custom".into(),
+            platform: "openai".into(),
+            account_type: "apikey".into(),
+            credentials: JsonMap::from_iter([
+                ("api_key".into(), json!("sk-custom")),
+                (
+                    "base_url".into(),
+                    json!("https://relay.example/custom/v1/chat/completions"),
+                ),
+            ]),
+            ..DataAccount::default()
+        };
+        let openai = map_account_to_channel(&api_key, "default", None, None).unwrap();
+        assert_eq!(
+            openai.base_url.as_deref(),
+            Some("https://relay.example/custom")
+        );
+    }
+
+    #[test]
     fn maps_openai_oauth_organization_id_to_codex_account_id() {
         let credentials = JsonMap::from_iter([
             ("access_token".into(), json!("at-organization-fallback")),
@@ -1101,6 +1343,65 @@ mod tests {
             setting.get("auth_kind").and_then(JsonValue::as_str),
             Some("api_key")
         );
+    }
+
+    #[test]
+    fn maps_sub2api_grok_oauth_to_grok_build_channel() {
+        let item = DataAccount {
+            name: "grok-build".into(),
+            platform: "grok".into(),
+            account_type: "oauth".into(),
+            credentials: JsonMap::from_iter([
+                ("access_token".into(), json!("xai-access")),
+                ("refresh_token".into(), json!("xai-refresh")),
+                ("base_url".into(), json!("https://api.x.ai/v1/responses")),
+                ("team_id".into(), json!("team-1")),
+            ]),
+            ..DataAccount::default()
+        };
+        let channel = map_account_to_channel(&item, "default", None, None).unwrap();
+        assert_eq!(channel.channel_type, CHANNEL_TYPE_XAI);
+        assert_eq!(channel.key, "xai-access");
+        assert_eq!(channel.base_url.as_deref(), Some(XAI_DEFAULT_CLI_CHAT_BASE));
+        assert_eq!(channel.models, XAI_DEFAULT_MODELS);
+
+        let setting: JsonValue = serde_json::from_str(channel.setting.as_deref().unwrap()).unwrap();
+        assert_eq!(setting["auth_kind"], "oauth");
+        assert_eq!(setting["upstream_endpoint_type"], "xai-response");
+        assert_eq!(setting["using_api"], false);
+        assert_eq!(setting["refresh_token"], "xai-refresh");
+        assert_eq!(setting["team_id"], "team-1");
+
+        let headers: JsonValue =
+            serde_json::from_str(channel.header_override.as_deref().unwrap()).unwrap();
+        assert_eq!(headers["X-XAI-Token-Auth"], "xai-grok-cli");
+        assert_eq!(headers["x-grok-client-version"], "0.2.120");
+        assert_eq!(headers["x-grok-client-identifier"], "grok-shell");
+        assert_eq!(headers["x-authenticateresponse"], "authenticate-response");
+    }
+
+    #[test]
+    fn maps_sub2api_grok_api_key_with_custom_v1_base() {
+        let item = DataAccount {
+            name: "grok-api".into(),
+            platform: "xai".into(),
+            account_type: "apikey".into(),
+            credentials: JsonMap::from_iter([
+                ("api_key".into(), json!("xai-api-key")),
+                (
+                    "base_url".into(),
+                    json!("https://relay.example/xai/v1/responses"),
+                ),
+            ]),
+            ..DataAccount::default()
+        };
+        let channel = map_account_to_channel(&item, "default", None, None).unwrap();
+        assert_eq!(channel.channel_type, CHANNEL_TYPE_XAI);
+        assert_eq!(
+            channel.base_url.as_deref(),
+            Some("https://relay.example/xai/v1")
+        );
+        assert!(channel.header_override.is_none());
     }
 
     #[test]
