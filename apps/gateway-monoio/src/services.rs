@@ -6,7 +6,6 @@ use crate::{
     },
     upstream_proxy::ProxyTransportService,
 };
-use sha2::{Digest, Sha256};
 
 const MAX_UPSTREAM_ATTEMPTS: u8 = 3;
 const DEFAULT_PRECONSUMED_TOKENS: u64 = 500;
@@ -133,7 +132,7 @@ where
         };
         let lookup = RouteLookup {
             tokens,
-            requested_model: openai_req.model.clone(),
+            requested_model: openai_req.model.clone().into(),
             path: req.path.clone(),
             headers: req.headers.clone(),
             body: req.body.clone(),
@@ -281,7 +280,7 @@ where
         };
         let lookup = RouteLookup {
             tokens,
-            requested_model: parsed.model.clone(),
+            requested_model: parsed.model.clone().into(),
             path: req.path.clone(),
             headers: req.headers.clone(),
             body: req.body.clone(),
@@ -449,7 +448,7 @@ where
         };
         let lookup = RouteLookup {
             tokens,
-            requested_model: model,
+            requested_model: model.into(),
             path: req.path.clone(),
             headers: req.headers.clone(),
             body: req.body.clone(),
@@ -602,7 +601,7 @@ where
             .router
             .call(RouteLookup {
                 tokens,
-                requested_model,
+                requested_model: requested_model.into(),
                 path: req.path.clone(),
                 headers: req.headers.clone(),
                 body: req.body.clone(),
@@ -721,7 +720,7 @@ where
         };
         let lookup = RouteLookup {
             tokens,
-            requested_model: model,
+            requested_model: model.into(),
             path: req.path.clone(),
             headers: req.headers.clone(),
             body: req.body.clone(),
@@ -939,30 +938,34 @@ impl AuthRouteService {
                     "channel affinity hit"
                 );
             }
+            let cached = state
+                .channels
+                .get(route.channel.id.as_str())
+                .expect("cached channel parts exist for every indexed channel");
             let (api_key, api_key_index) = route.channel.select_api_key_with_index(key_seed);
-            let api_key_fingerprint = selected_api_key_fingerprint(api_key);
             return Ok(RouteParts {
                 auth:     RequestAuth {
                     user_id:  route.user_id.to_string(),
                     token_id: auth.token.id().to_string(),
                 },
                 route:    Rc::new(RouteContext {
-                    channel_id: route.channel.id.clone().into(),
+                    channel_id: cached.channel_id.clone(),
                     management_channel_id: route.channel.management_id,
                     provider: route.channel.provider,
-                    base_url: route.channel.base_url.clone().into(),
+                    base_url: cached.base_url.clone(),
                     api_key: api_key.to_string().into(),
-                    api_key_fingerprint: api_key_fingerprint.into(),
+                    // Precomputed per snapshot; selected with the same seed
+                    // rule as select_api_key_with_index.
+                    api_key_fingerprint: cached.fingerprint_for_seed(key_seed),
                     api_key_index,
                     using_group: route.using_group.to_string().into(),
-                    requested_model: route.requested_model.to_string().into(),
+                    // decision.requested_model always equals the lookup input,
+                    // so reuse its FastStr instead of copying from the borrow.
+                    requested_model: lookup.requested_model.clone(),
                     upstream_model: route.upstream_model.to_string().into(),
-                    proxy: ProxyRoute::from_snapshot(
-                        route.channel.proxy.clone(),
-                        route.channel.proxy_required,
-                    ),
-                    header_override: route.channel.header_override.clone(),
-                    upstream_endpoint_type: route.channel.upstream_endpoint_type.clone().into(),
+                    proxy: cached.proxy.clone(),
+                    header_override: cached.header_override.clone(),
+                    upstream_endpoint_type: cached.endpoint_type.clone(),
                 }),
                 affinity: affinity.map(route_affinity_context),
             });
@@ -1022,13 +1025,6 @@ fn route_affinity_context(candidate: ChannelAffinityCandidate) -> RouteAffinityC
         rule_name:             candidate.rule_name,
         skip_retry_on_failure: candidate.skip_retry_on_failure,
     }
-}
-
-fn selected_api_key_fingerprint(api_key: &str) -> String {
-    format!(
-        "sha256:{}",
-        data_encoding::HEXLOWER.encode(&Sha256::digest(api_key.as_bytes()))
-    )
 }
 
 #[derive(Debug, Clone)]
@@ -1598,8 +1594,8 @@ mod tests {
     }
 
     #[test]
-    fn selected_api_key_fingerprint_is_sha256_and_not_plaintext() {
-        let fingerprint = selected_api_key_fingerprint("secret");
+    fn api_key_fingerprint_is_sha256_and_not_plaintext() {
+        let fingerprint = api_key_fingerprint("secret");
         assert_eq!(
             fingerprint,
             "sha256:2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b"
@@ -1615,7 +1611,7 @@ mod tests {
             token_id:            "token-1".to_string(),
             channel_id:          reporting_channel_id(Some(42), "route-alias"),
             api_key_index:       Some(3),
-            api_key_fingerprint: selected_api_key_fingerprint("secret"),
+            api_key_fingerprint: api_key_fingerprint("secret"),
             using_group:         "default".to_string(),
             requested_model:     "model-a".to_string(),
             upstream_model:      "model-a".to_string(),

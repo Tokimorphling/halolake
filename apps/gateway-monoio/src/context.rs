@@ -93,7 +93,9 @@ pub struct RouteContext {
     pub upstream_model:         FastStr,
     pub proxy:                  ProxyRoute,
     /// Explicit channel header overrides (after default/auth headers).
-    pub header_override:        std::collections::BTreeMap<String, String>,
+    /// Arc-shared with the per-snapshot cache so cloning a route context is
+    /// refcount-only; mutate via `Arc::make_mut`.
+    pub header_override:        Arc<std::collections::BTreeMap<String, String>>,
     /// auto | openai | openai-response | sub2api-response |
     /// sub2api-anthropic (channel setting upstream_endpoint_type).
     pub upstream_endpoint_type: FastStr,
@@ -138,6 +140,7 @@ pub(crate) fn proxy_circuit_channel_identity(
 #[cfg(test)]
 mod tests {
     use super::{ProxyRoute, RouteContext, proxy_circuit_channel_identity, reporting_channel_id};
+    use std::sync::Arc;
     use faststr::FastStr;
     use halolake_router_core::Provider;
 
@@ -198,7 +201,7 @@ mod tests {
             requested_model: FastStr::new("model-a"),
             upstream_model: FastStr::new("model-a"),
             proxy: ProxyRoute::Direct,
-            header_override,
+            header_override: Arc::new(header_override),
             upstream_endpoint_type: FastStr::new("auto"),
         };
 

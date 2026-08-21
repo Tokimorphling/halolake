@@ -2303,7 +2303,7 @@ fn xai_compact_route(route: &RouteContext) -> RouteContext {
         return compact;
     }
     compact.base_url = FastStr::from_string("https://api.x.ai/v1".to_string());
-    compact.header_override.retain(|name, _| {
+    Arc::make_mut(&mut compact.header_override).retain(|name, _| {
         !matches!(
             name.to_ascii_lowercase().as_str(),
             "x-xai-token-auth"
@@ -3545,7 +3545,7 @@ fn apply_channel_header_override(
     if route.header_override.is_empty() {
         return;
     }
-    for (name, template) in &route.header_override {
+    for (name, template) in route.header_override.iter() {
         let Some(value) =
             resolve_header_override_value(template, &route.api_key, downstream_headers)
         else {
@@ -4201,7 +4201,7 @@ mod tests {
 
         let mut route = test_route_context("https://cli-chat-proxy.grok.com/v1".to_string());
         route.upstream_endpoint_type = FastStr::new("xai-response");
-        route.header_override = std::collections::BTreeMap::from([
+        route.header_override = Arc::new(std::collections::BTreeMap::from([
             ("X-XAI-Token-Auth".to_string(), "xai-grok-cli".to_string()),
             ("x-grok-client-version".to_string(), "0.2.120".to_string()),
             (
@@ -4209,7 +4209,7 @@ mod tests {
                 "xai-grok-workspace/0.2.120".to_string(),
             ),
             ("X-Custom".to_string(), "keep".to_string()),
-        ]);
+        ]));
         let compact = xai_compact_route(&route);
         assert_eq!(compact.base_url.as_str(), "https://api.x.ai/v1");
         assert!(!compact.header_override.contains_key("X-XAI-Token-Auth"));
@@ -4513,7 +4513,7 @@ mod tests {
             requested_model:        FastStr::new("gpt-5"),
             upstream_model:         FastStr::new("claude-sonnet-4"),
             proxy:                  ProxyRoute::Direct,
-            header_override:        std::collections::BTreeMap::new(),
+            header_override:        Arc::new(std::collections::BTreeMap::new()),
             upstream_endpoint_type: FastStr::new("auto"),
         }
     }

@@ -766,6 +766,13 @@ impl IndexedSnapshot {
         self.version
     }
 
+    /// Channel configs in index order (after key/group normalization).
+    /// Exposed so embedders can precompute per-channel request-time views
+    /// (cheap-clone strings, fingerprints, header maps) once per snapshot.
+    pub fn channels(&self) -> &[ChannelConfig] {
+        &self.channels
+    }
+
     pub fn authenticate(&self, bearer: &str) -> Result<AuthContext<'_>, RouteError> {
         // new-api stores the raw key without the UI `sk-` display prefix, but
         // clients always copy `sk-...` from the dashboard. Accept both forms.

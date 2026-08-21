@@ -9,7 +9,7 @@ pub(crate) struct GatewayRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct RouteLookup {
     pub(crate) tokens:          Vec<String>,
-    pub(crate) requested_model: String,
+    pub(crate) requested_model: FastStr,
     pub(crate) path:            String,
     pub(crate) headers:         HeaderMap,
     pub(crate) body:            Bytes,

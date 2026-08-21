@@ -41,6 +41,35 @@ pub(crate) struct SnapshotStore {
 
 pub(crate) struct SnapshotState {
     pub(crate) snapshot: IndexedSnapshot,
+    /// Per-channel parts precomputed at snapshot load, keyed by channel id,
+    /// so `select_route` only refcounts (FastStr/Arc clones) instead of
+    /// copying strings, hashing API keys, or deep-copying header maps per
+    /// request. Rebuilt on every snapshot swap.
+    pub(crate) channels: std::collections::HashMap<Box<str>, CachedChannel>,
+}
+
+/// Cheap-clone runtime view of one channel config; built once per snapshot.
+#[derive(Clone)]
+pub(crate) struct CachedChannel {
+    pub(crate) channel_id:      FastStr,
+    pub(crate) base_url:        FastStr,
+    pub(crate) endpoint_type:   FastStr,
+    pub(crate) proxy:           ProxyRoute,
+    pub(crate) header_override: Arc<std::collections::BTreeMap<String, String>>,
+    /// `sha256:<hex>` per normalized `api_keys` position. Selected with the
+    /// same `seed % len` rule as `ChannelConfig::select_api_key_with_index`.
+    pub(crate) key_fingerprints: Vec<FastStr>,
+}
+
+impl CachedChannel {
+    /// Fingerprint of the key `select_api_key_with_index(seed)` returns.
+    pub(crate) fn fingerprint_for_seed(&self, seed: u64) -> FastStr {
+        if self.key_fingerprints.is_empty() {
+            return FastStr::new("");
+        }
+        let index = seed as usize % self.key_fingerprints.len();
+        self.key_fingerprints[index].clone()
+    }
 }
 
 impl SnapshotStore {
@@ -75,9 +104,35 @@ impl SnapshotStore {
 
 impl SnapshotState {
     fn new(snapshot: GatewaySnapshot) -> Result<Self> {
-        Ok(Self {
-            snapshot: snapshot.index().context("index gateway snapshot")?,
-        })
+        let snapshot = snapshot.index().context("index gateway snapshot")?;
+        let channels = snapshot
+            .channels()
+            .iter()
+            .map(|channel| {
+                let key_fingerprints = channel
+                    .api_keys
+                    .iter()
+                    .map(|key| FastStr::from_string(api_key_fingerprint(key)))
+                    .collect();
+                (
+                    Box::from(channel.id.as_str()),
+                    CachedChannel {
+                        channel_id:      FastStr::from_string(channel.id.clone()),
+                        base_url:        FastStr::from_string(channel.base_url.clone()),
+                        endpoint_type:   FastStr::from_string(
+                            channel.upstream_endpoint_type.clone(),
+                        ),
+                        proxy:           ProxyRoute::from_snapshot(
+                            channel.proxy.clone(),
+                            channel.proxy_required,
+                        ),
+                        header_override: Arc::new(channel.header_override.clone()),
+                        key_fingerprints,
+                    },
+                )
+            })
+            .collect();
+        Ok(Self { snapshot, channels })
     }
 }
 

@@ -1,5 +1,15 @@
 use super::*;
+use sha2::Digest as _;
 use std::collections::HashMap;
+
+/// `sha256:<hex>` fingerprint of an API key, used instead of the plaintext
+/// credential in feedback events and logs.
+pub(crate) fn api_key_fingerprint(api_key: &str) -> String {
+    format!(
+        "sha256:{}",
+        data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(api_key.as_bytes()))
+    )
+}
 
 pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
