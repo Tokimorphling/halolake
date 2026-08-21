@@ -700,7 +700,13 @@ where
             .get("stream")
             .and_then(JsonValue::as_bool)
             .unwrap_or_else(|| is_stream_like(&req.downstream_headers));
-        let body_bytes = serde_json::to_vec(&req.value).ok();
+        // Serializing the prompt-sized body only pays off when a DEBUG
+        // subscriber actually records the relay log.
+        let body_bytes = if tracing::enabled!(tracing::Level::DEBUG) {
+            serde_json::to_vec(&req.value).ok()
+        } else {
+            None
+        };
         debug_relay(&req.cx, is_stream, body_bytes.as_deref());
 
         match route.provider {

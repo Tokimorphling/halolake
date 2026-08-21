@@ -151,6 +151,11 @@ where
             &self.usage,
             &usage_event_parts(&reserve_cx, openai_req.is_stream()),
             &req.body,
+            // Reuse the typed parse instead of re-parsing the raw body.
+            openai_req
+                .max_completion_tokens
+                .map(u64::from)
+                .max(openai_req.max_tokens.map(u64::from)),
         )
         .await
         {
@@ -290,10 +295,15 @@ where
             .clone()
             .param_set(route.auth.clone())
             .param_set(route.route.clone());
+        let output_cap = match &parsed.payload {
+            OpenAiImagePayload::Json { value, .. } => json_output_cap(value),
+            OpenAiImagePayload::Multipart => None,
+        };
         let reserved_quota = match reserve_request_quota(
             &self.usage,
             &usage_event_parts(&reserve_cx, parsed.stream),
             &req.body,
+            output_cap,
         )
         .await
         {
@@ -461,6 +471,7 @@ where
             &self.usage,
             &usage_event_parts(&reserve_cx, is_stream),
             &req.body,
+            json_output_cap(&value),
         )
         .await
         {
@@ -607,7 +618,8 @@ where
         let affinity_channel_id = route.route.channel_id.clone();
         let cx = cx.param_set(route.auth).param_set(route.route);
         let mut usage = usage_event_parts(&cx, stream);
-        let reserved_quota = match reserve_request_quota(&self.usage, &usage, &req.body).await {
+        let reserved_quota =
+            match reserve_request_quota(&self.usage, &usage, &req.body, None).await {
             Ok(reserved) => reserved,
             Err(response) => return Ok(response),
         };
@@ -676,7 +688,7 @@ where
     type Error = Infallible;
 
     async fn call(&self, (req, cx): (GatewayRequest, CX)) -> Result<Self::Response, Self::Error> {
-        let value: JsonValue = match serde_json::from_slice(&req.body) {
+        let mut value: JsonValue = match serde_json::from_slice(&req.body) {
             Ok(req) => req,
             Err(err) => {
                 return Ok(json_error(
@@ -734,6 +746,7 @@ where
             &self.usage,
             &usage_event_parts(&reserve_cx, is_stream),
             &req.body,
+            json_output_cap(&value),
         )
         .await
         {
@@ -744,14 +757,15 @@ where
         let mut final_response = None;
         let mut failed_channels = Vec::new();
         for attempt in 0..MAX_UPSTREAM_ATTEMPTS {
-            let mut attempt_value = value.clone();
-            attempt_value["model"] = JsonValue::String(route.route.upstream_model.to_string());
+            // Mutate the owned value in place instead of deep-cloning the whole
+            // body per attempt; both rewrites are idempotent across retries.
+            value["model"] = JsonValue::String(route.route.upstream_model.to_string());
             if path_for_stream.ends_with("/chat/completions")
                 || path_for_stream.ends_with("/completions")
             {
-                ensure_openai_stream_include_usage(&mut attempt_value);
+                ensure_openai_stream_include_usage(&mut value);
             }
-            let body = match serde_json::to_vec(&attempt_value) {
+            let body = match serde_json::to_vec(&value) {
                 Ok(body) => Bytes::from(body),
                 Err(err) => {
                     return Ok(json_error(
@@ -1066,8 +1080,9 @@ async fn reserve_request_quota(
     reporter: &UsageReporter,
     parts: &UsageEventParts,
     body: &[u8],
+    output_cap: Option<u64>,
 ) -> Result<Option<i64>, Response<GatewayBody>> {
-    let (prompt_tokens, completion_tokens) = estimate_request_tokens(body);
+    let (prompt_tokens, completion_tokens) = estimate_request_tokens(body, output_cap);
     let event = UsageEvent {
         request_id:            parts.request_id.clone(),
         user_id:               parts.user_id.clone(),
@@ -1111,25 +1126,24 @@ async fn reserve_request_quota(
     }
 }
 
-fn estimate_request_tokens(body: &[u8]) -> (u64, u64) {
+fn estimate_request_tokens(body: &[u8], output_cap: Option<u64>) -> (u64, u64) {
     // Match new-api's admission behavior: when the client does not provide an
     // output cap, reserve at least its default pre-consume token floor instead
     // of admitting a potentially long generation on only a tiny JSON body.
     let input = (body.len() as u64 / 4)
         .max(1)
         .max(DEFAULT_PRECONSUMED_TOKENS);
-    let value = serde_json::from_slice::<JsonValue>(body).ok();
-    let output = value
-        .as_ref()
-        .and_then(|value| {
-            ["max_tokens", "max_completion_tokens", "max_output_tokens"]
-                .into_iter()
-                .filter_map(|key| value.get(key).and_then(JsonValue::as_u64))
-                .max()
-        })
-        .unwrap_or(0)
-        .min(1_000_000);
+    let output = output_cap.unwrap_or(0).min(1_000_000);
     (input.min(10_000_000), output)
+}
+
+/// Max explicit output cap across the OpenAI-style keys, read from an
+/// already-parsed body so quota estimation never re-parses the payload.
+fn json_output_cap(value: &JsonValue) -> Option<u64> {
+    ["max_tokens", "max_completion_tokens", "max_output_tokens"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(JsonValue::as_u64))
+        .max()
 }
 
 fn finalize_response_usage(
@@ -1490,13 +1504,25 @@ mod tests {
     #[test]
     fn quota_estimate_uses_new_api_floor_and_explicit_output_limit() {
         assert_eq!(
-            estimate_request_tokens(br#"{"model":"gpt","messages":[]}"#),
+            estimate_request_tokens(br#"{"model":"gpt","messages":[]}"#, None),
             (DEFAULT_PRECONSUMED_TOKENS, 0)
         );
         assert_eq!(
-            estimate_request_tokens(br#"{"max_tokens":2048,"max_output_tokens":1024}"#),
+            estimate_request_tokens(br#"{"max_tokens":2048}"#, Some(2048)),
             (DEFAULT_PRECONSUMED_TOKENS, 2048)
         );
+    }
+
+    #[test]
+    fn json_output_cap_takes_max_across_keys() {
+        assert_eq!(
+            json_output_cap(&serde_json::json!({
+                "max_tokens": 2048,
+                "max_output_tokens": 1024
+            })),
+            Some(2048)
+        );
+        assert_eq!(json_output_cap(&serde_json::json!({})), None);
     }
 
     #[test]
