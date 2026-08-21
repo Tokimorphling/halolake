@@ -109,8 +109,8 @@ jobs:
           for i in $(seq 1 60); do
             if curl -fsS "http://127.0.0.1:19090/healthz" >/dev/null; then
               echo "control-api healthy"
-              # gateway should also be up after control is healthy
-              if curl -fsS -o /dev/null -w "%{http_code}" "http://127.0.0.1:18082/" | grep -Eq '^[0-9]{3}$'; then
+              # gateway has no route at "/" (404) — use its /healthz endpoint
+              if curl -fsS "http://127.0.0.1:18082/healthz" | grep -q '"status":"ok"'; then
                 echo "gateway port responding"
                 docker rm -f hl-smoke
                 exit 0
