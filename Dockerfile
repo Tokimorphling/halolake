@@ -26,9 +26,13 @@ COPY apps apps
 COPY crates crates
 COPY examples examples
 
+# sharing=locked: BuildKit runs both builder stages in parallel; without this they
+# race unpacking crates into the shared registry ("failed to open .cargo-ok: File exists").
+# Note: cargo's package lock lives in /usr/local/cargo, outside these mounts, so it
+# cannot arbitrate between the two stage containers.
 FROM rust-source AS control-builder
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --profile dist -p halolake-control-api \
     --no-default-features \
     --features core,admin-extras,compat-stubs,allocator-mimalloc,passkey \
@@ -36,8 +40,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/dist/halolake-control-api /artifacts/
 
 FROM rust-source AS gateway-builder
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --profile dist -p halolake-gateway-monoio \
     && mkdir -p /artifacts \
     && cp target/dist/halolake-gateway-monoio /artifacts/
