@@ -1,0 +1,946 @@
+[
+  {
+    "case": {
+      "name": "prepared-request-text/null/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": null
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/null/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": ""
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/null/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": null
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/null/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/null/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": null
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/null/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": null,
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/missing/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text"
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/missing/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": ""
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/missing/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text"
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/missing/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/missing/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text"
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/missing/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": null,
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/number/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": 20
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/number/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "20"
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/number/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": 20
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/number/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "20"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/number/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": 20
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/number/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "20"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/boolean/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": false
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/boolean/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "false"
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/boolean/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": false
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/boolean/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "false"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/boolean/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": false
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/boolean/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "false"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/object/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": {
+                  "a": 1
+                }
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/object/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "map[a:1]"
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/object/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": {
+                  "a": 1
+                }
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/object/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "map[a:1]"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/object/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": {
+                  "a": 1
+                }
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/object/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "map[a:1]"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/array/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": [
+                  "a",
+                  null
+                ]
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/array/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "[a <nil>]"
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/array/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": [
+                  "a",
+                  null
+                ]
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/array/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "[a <nil>]"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/array/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": [
+                  "a",
+                  null
+                ]
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/array/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "[a <nil>]"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/mixed/to-openai",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "openai",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": null
+              },
+              {
+                "type": "input_text",
+                "text": "Hello"
+              },
+              {
+                "type": "output_text"
+              },
+              {
+                "type": "text",
+                "text": "世界"
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "prepared-request-text/mixed/to-openai",
+      "quality": "good",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello世界"
+          }
+        ],
+        "max_completion_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/mixed/to-claude",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "claude",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": null
+              },
+              {
+                "type": "input_text",
+                "text": "Hello"
+              },
+              {
+                "type": "output_text"
+              },
+              {
+                "type": "text",
+                "text": "世界"
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "prepared-request-text/mixed/to-claude",
+      "quality": "fair",
+      "value": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello"
+              },
+              {
+                "type": "text",
+                "text": "世界"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 20
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "prepared-request-text/mixed/to-gemini",
+      "kind": "request",
+      "from": "openai_responses",
+      "to": "gemini",
+      "model": "upstream-model",
+      "input": {
+        "model": "m",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": null
+              },
+              {
+                "type": "input_text",
+                "text": "Hello"
+              },
+              {
+                "type": "output_text"
+              },
+              {
+                "type": "text",
+                "text": "世界"
+              }
+            ]
+          }
+        ],
+        "max_output_tokens": 20
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "prepared-request-text/mixed/to-gemini",
+      "quality": "fair",
+      "value": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Hello"
+              },
+              {
+                "text": "世界"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 20
+        }
+      }
+    }
+  }
+]

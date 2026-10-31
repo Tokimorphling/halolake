@@ -7,6 +7,7 @@ use crate::{
         ProxyTransportRequest, ProxyTransportService, parse_proxy_endpoint, send_direct_https1,
     },
 };
+use halolake_protocol::{apply_claude_prompt_cache, convert_request_json, relaykit};
 use monoio_transports::{
     connectors::pollio::PollIo,
     http::hyper::{HyperBody, HyperH1Connector, MonoioBody as HyperIncomingBody},
@@ -230,41 +231,43 @@ impl RelayService {
     /// upstream's outbound fetch behavior. This is best-effort: a fetch that
     /// fails or whose media type cannot be determined leaves the URL block
     /// untouched so the upstream still gets the original representation.
-    async fn resolve_claude_url_images(&self, request: &mut claude::MessagesRequest) {
-        for message in &mut request.messages {
-            for block in &mut message.content {
-                let claude::ContentBlock::Image { source, .. } = block else {
-                    continue;
-                };
-                if source.source_type != "url" {
-                    continue;
-                }
-                let Some(url) = source.url.clone() else {
-                    continue;
-                };
-                let (content_type, data) = match self.fetch_image_url(&url).await {
-                    Ok(fetched) => fetched,
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            url = %url,
-                            "failed to fetch image URL; forwarding original URL to Anthropic upstream"
-                        );
-                        continue;
-                    }
-                };
-                let media_type = image_media_type(content_type.as_deref(), &url);
-                let Some(media_type) = media_type else {
+    async fn resolve_claude_url_images(&self, request: &mut JsonValue) {
+        let Some(messages) = request.get_mut("messages") else {
+            return;
+        };
+        let mut sources = Vec::new();
+        claude_url_image_sources(messages, &mut sources);
+        for source in sources {
+            let Some(url) = source
+                .get("url")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let (content_type, data) = match self.fetch_image_url(&url).await {
+                Ok(fetched) => fetched,
+                Err(err) => {
                     warn!(
+                        ?err,
                         url = %url,
-                        "image URL media type could not be determined; forwarding original URL to Anthropic upstream"
+                        "failed to fetch image URL; forwarding original URL to Anthropic upstream"
                     );
                     continue;
-                };
-                source.source_type = "base64".to_string();
-                source.media_type = Some(media_type);
-                source.data = Some(data_encoding::BASE64.encode(&data));
-                source.url = None;
+                }
+            };
+            let Some(media_type) = image_media_type(content_type.as_deref(), &url) else {
+                warn!(
+                    url = %url,
+                    "image URL media type could not be determined; forwarding original URL to Anthropic upstream"
+                );
+                continue;
+            };
+            source["type"] = JsonValue::String("base64".to_string());
+            source["media_type"] = JsonValue::String(media_type);
+            source["data"] = JsonValue::String(data_encoding::BASE64.encode(&data));
+            if let Some(object) = source.as_object_mut() {
+                object.remove("url");
             }
         }
     }
@@ -384,6 +387,30 @@ impl RelayService {
             anyhow::bail!("image URL resolves to a private or reserved address");
         }
         Ok(address)
+    }
+}
+
+fn claude_url_image_sources<'a>(value: &'a mut JsonValue, sources: &mut Vec<&'a mut JsonValue>) {
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                claude_url_image_sources(value, sources);
+            }
+        }
+        JsonValue::Object(object) => {
+            if object.get("type").and_then(JsonValue::as_str) == Some("image") {
+                if let Some(source) = object.get_mut("source")
+                    && source.get("type").and_then(JsonValue::as_str) == Some("url")
+                {
+                    sources.push(source);
+                }
+            } else {
+                for value in object.values_mut() {
+                    claude_url_image_sources(value, sources);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -535,7 +562,7 @@ where
 }
 
 pub(crate) struct OpenAiChatRelayRequest<CX> {
-    pub(crate) request:            openai::ChatCompletionRequest,
+    pub(crate) stream:             bool,
     /// Original downstream body; used for redacted structured logs and
     /// OpenAI passthrough so unknown fields (e.g. reasoning_effort) survive.
     pub(crate) raw_body:           Bytes,
@@ -555,16 +582,14 @@ where
 
     async fn call(&self, req: OpenAiChatRelayRequest<CX>) -> Result<Self::Response, Self::Error> {
         let route = ParamRef::<Rc<RouteContext>>::param_ref(&req.cx).clone();
-        debug_relay(
-            &req.cx,
-            req.request.is_stream(),
-            Some(req.raw_body.as_ref()),
-        );
+        debug_relay(&req.cx, req.stream, Some(req.raw_body.as_ref()));
 
         match route.provider {
             Provider::Claude => {
-                let mut claude_req = match openai_chat_to_claude_messages(
-                    &req.request,
+                let (mut claude_req, _) = match convert_text_request_body(
+                    relaykit::Format::OpenAi,
+                    relaykit::Format::Claude,
+                    &req.raw_body,
                     route.upstream_model.as_str(),
                 ) {
                     Ok(req) => req,
@@ -596,7 +621,7 @@ where
                 if !upstream.status().is_success() {
                     return Ok(upstream_error_response(upstream).await);
                 }
-                if req.request.is_stream() {
+                if req.stream {
                     Ok(stream_claude_as_openai(
                         upstream,
                         route.requested_model.clone(),
@@ -622,14 +647,19 @@ where
                     }
                 };
                 let target = OpenAiResponseTarget::ChatCompletions {
-                    stream:          req.request.is_stream(),
+                    stream:          req.stream,
                     requested_model: route.requested_model.clone(),
                 };
                 self.openai_passthrough(&route, prepared, &req.downstream_headers, target)
                     .await
             }
             Provider::Gemini => {
-                let gemini_req = match openai_chat_to_gemini_request(&req.request) {
+                let (gemini_req, _) = match convert_text_request_body(
+                    relaykit::Format::OpenAi,
+                    relaykit::Format::Gemini,
+                    &req.raw_body,
+                    route.upstream_model.as_str(),
+                ) {
                     Ok(req) => req,
                     Err(err) => {
                         return Ok(json_error(
@@ -639,8 +669,8 @@ where
                         ));
                     }
                 };
-                let upstream_path = self
-                    .gemini_generate_content_path(&route.upstream_model, req.request.is_stream());
+                let upstream_path =
+                    self.gemini_generate_content_path(&route.upstream_model, req.stream);
                 let upstream = match self
                     .send_gemini_json(&route, &req.downstream_headers, &gemini_req, &upstream_path)
                     .await
@@ -660,7 +690,7 @@ where
                 if !upstream.status().is_success() {
                     return Ok(upstream_error_response(upstream).await);
                 }
-                if req.request.is_stream() {
+                if req.stream {
                     Ok(stream_gemini_as_openai(
                         upstream,
                         route.requested_model.clone(),
@@ -708,10 +738,13 @@ where
             None
         };
         debug_relay(&req.cx, is_stream, body_bytes.as_deref());
+        let mut value = req.value;
+        if route.provider != Provider::Claude && is_stream && value.get("stream").is_none() {
+            value["stream"] = JsonValue::Bool(true);
+        }
 
         match route.provider {
             Provider::Claude => {
-                let mut value = req.value;
                 value["model"] = JsonValue::String(route.upstream_model.to_string());
                 let body = match serde_json::to_vec(&value) {
                     Ok(body) => Bytes::from(body),
@@ -742,18 +775,10 @@ where
                 Ok(upstream_to_response(upstream))
             }
             Provider::OpenAi => {
-                let claude_req: claude::MessagesRequest = match serde_json::from_value(req.value) {
-                    Ok(req) => req,
-                    Err(err) => {
-                        return Ok(json_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_request_error",
-                            &format!("invalid Claude messages request: {err}"),
-                        ));
-                    }
-                };
-                let openai_req = match claude_messages_to_openai_chat_request(
-                    &claude_req,
+                let (openai_req, _) = match convert_request_json(
+                    relaykit::Format::Claude,
+                    relaykit::Format::OpenAi,
+                    value,
                     route.upstream_model.as_str(),
                 ) {
                     Ok(req) => req,
@@ -815,7 +840,7 @@ where
                     return Ok(upstream_error_response(upstream).await);
                 }
                 let upstream = if prepared.protocol == OpenAiTextProtocol::Responses {
-                    if openai_req.is_stream() {
+                    if is_stream {
                         stream_responses_as_openai_chat(
                             upstream,
                             route.requested_model.clone(),
@@ -835,7 +860,7 @@ where
                 if !upstream.status().is_success() {
                     return Ok(upstream);
                 }
-                if openai_req.is_stream() {
+                if is_stream {
                     Ok(stream_openai_as_claude(
                         upstream,
                         route.requested_model.clone(),
@@ -845,18 +870,10 @@ where
                 }
             }
             Provider::Gemini => {
-                let claude_req: claude::MessagesRequest = match serde_json::from_value(req.value) {
-                    Ok(req) => req,
-                    Err(err) => {
-                        return Ok(json_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_request_error",
-                            &format!("invalid Claude messages request: {err}"),
-                        ));
-                    }
-                };
-                let openai_req = match claude_messages_to_openai_chat_request(
-                    &claude_req,
+                let (gemini_req, _) = match convert_request_json(
+                    relaykit::Format::Claude,
+                    relaykit::Format::Gemini,
+                    value,
                     route.upstream_model.as_str(),
                 ) {
                     Ok(req) => req,
@@ -868,18 +885,8 @@ where
                         ));
                     }
                 };
-                let gemini_req = match openai_chat_to_gemini_request(&openai_req) {
-                    Ok(req) => req,
-                    Err(err) => {
-                        return Ok(json_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_request_error",
-                            &err.to_string(),
-                        ));
-                    }
-                };
-                let upstream_path = self
-                    .gemini_generate_content_path(&route.upstream_model, openai_req.is_stream());
+                let upstream_path =
+                    self.gemini_generate_content_path(&route.upstream_model, is_stream);
                 let upstream = match self
                     .send_gemini_json(&route, &req.downstream_headers, &gemini_req, &upstream_path)
                     .await
@@ -899,7 +906,7 @@ where
                 if !upstream.status().is_success() {
                     return Ok(upstream_error_response(upstream).await);
                 }
-                if openai_req.is_stream() {
+                if is_stream {
                     Ok(stream_gemini_as_claude(
                         upstream,
                         route.requested_model.clone(),
@@ -1163,53 +1170,60 @@ where
                     )
                     .await;
             }
-            let include_encrypted_reasoning = serde_json::from_slice::<JsonValue>(&req.body)
-                .ok()
-                .and_then(|body| body.get("include").and_then(JsonValue::as_array).cloned())
+            let responses_request: JsonValue = match serde_json::from_slice(&req.body) {
+                Ok(request) => request,
+                Err(err) => {
+                    return Ok(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request_error",
+                        &format!("invalid Responses request: {err}"),
+                    ));
+                }
+            };
+            let include_encrypted_reasoning = responses_request
+                .get("include")
+                .and_then(JsonValue::as_array)
                 .is_some_and(|include| {
                     include
                         .iter()
                         .any(|value| value.as_str() == Some("reasoning.encrypted_content"))
                 });
-            let tool_mapping = match responses_tool_mapping(&req.body) {
-                Ok(mapping) => mapping,
+            let cache_mode = prompt_cache_mode_for_base_url(&route.base_url);
+            let cache_options = serde_json::json!({
+                "cache_control": responses_request.get("cache_control").cloned()
+            });
+            let (mut claude_request, tool_mapping) = match convert_request_json(
+                relaykit::Format::OpenAiResponses,
+                relaykit::Format::Claude,
+                responses_request,
+                route.upstream_model.as_str(),
+            ) {
+                Ok(request) => request,
                 Err(err) => {
                     return Ok(json_error(
                         StatusCode::BAD_REQUEST,
                         "invalid_request_error",
-                        &format!("failed to inspect Responses tools: {err}"),
+                        &format!("failed to convert Responses request to Claude: {err}"),
                     ));
                 }
             };
-            let cache_mode = prompt_cache_mode_for_base_url(&route.base_url);
-            let mut claude_request =
-                match openai_responses_to_claude_messages_with_tools_and_cache_mode(
-                    &req.body,
-                    route.upstream_model.clone(),
-                    &tool_mapping,
-                    cache_mode,
-                ) {
-                    Ok(request) => request,
-                    Err(err) => {
-                        return Ok(json_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_request_error",
-                            &format!("failed to convert Responses request to Claude: {err}"),
-                        ));
-                    }
-                };
+            apply_claude_prompt_cache(&mut claude_request, &cache_options, cache_mode);
             if endpoint_mode == "sub2api-anthropic" {
                 let auth = ParamRef::<RequestAuth>::param_ref(&req.cx);
+                let mut metadata = claude_request.get("metadata").cloned();
                 let metadata_injected = ensure_sub2api_session_metadata(
-                    &mut claude_request.metadata,
+                    &mut metadata,
                     &req.body,
                     &req.downstream_headers,
                     auth,
                 );
+                if let Some(metadata) = metadata {
+                    claude_request["metadata"] = metadata;
+                }
                 debug!(
                     channel_id = %route.channel_id,
                     metadata_injected,
-                    has_session_metadata = claude_request.metadata.as_ref().is_some_and(|value| {
+                    has_session_metadata = claude_request.get("metadata").is_some_and(|value| {
                         value.get("user_id").and_then(JsonValue::as_str).is_some()
                     }),
                     "prepared Anthropic-compatible session metadata"
@@ -1340,8 +1354,7 @@ where
                 Ok(upstream_to_response(upstream))
             }
             Provider::OpenAi => {
-                let gemini_req: gemini::GeminiChatRequest = match serde_json::from_slice(&req.body)
-                {
+                let mut gemini_req: JsonValue = match serde_json::from_slice(&req.body) {
                     Ok(req) => req,
                     Err(err) => {
                         return Ok(json_error(
@@ -1351,10 +1364,14 @@ where
                         ));
                     }
                 };
-                let openai_req = match gemini_request_to_openai_chat(
-                    &gemini_req,
+                if let Some(object) = gemini_req.as_object_mut() {
+                    object.insert("stream".to_string(), JsonValue::Bool(req.stream));
+                }
+                let (openai_req, _) = match convert_request_json(
+                    relaykit::Format::Gemini,
+                    relaykit::Format::OpenAi,
+                    gemini_req,
                     route.upstream_model.as_str(),
-                    req.stream,
                 ) {
                     Ok(req) => req,
                     Err(err) => {
@@ -2357,412 +2374,108 @@ fn rewrite_openai_any_model_body(raw_body: &[u8], upstream_model: &str) -> Resul
     ))
 }
 
-/// Chat Completions → Responses conversion aligned with the pinned CLIProxyAPI Codex
-/// translator for typed messages and function-call transcripts.
+/// Decode JSON once before entering the shared protocol conversion engine.
+fn convert_text_request_body(
+    from: relaykit::Format,
+    to: relaykit::Format,
+    raw_body: &[u8],
+    upstream_model: &str,
+) -> Result<(JsonValue, ResponsesToolMapping)> {
+    let request = serde_json::from_slice(raw_body).context("parse text protocol request")?;
+    convert_request_json(from, to, request, upstream_model).map_err(anyhow::Error::from)
+}
+
 fn convert_chat_body_to_responses(
     raw_body: &[u8],
     upstream_model: &str,
     compact: bool,
     profile: OpenAiResponsesProfile,
 ) -> Result<(Bytes, std::collections::BTreeMap<String, String>)> {
-    let chat: JsonValue =
-        serde_json::from_slice(raw_body).context("parse chat request for responses convert")?;
+    let mut chat: JsonValue =
+        serde_json::from_slice(raw_body).context("parse chat request for Responses conversion")?;
     let tool_names = codex_tool_name_map(&chat, profile);
     let tool_name_reverse = tool_names
         .iter()
         .map(|(original, shortened)| (shortened.clone(), original.clone()))
         .collect();
-    let mut out = serde_json::Map::new();
-    out.insert(
-        "model".into(),
-        JsonValue::String(upstream_model.to_string()),
-    );
-    out.insert(
-        "input".into(),
-        chat_messages_to_responses_input(&chat, &tool_names),
-    );
-    match profile {
-        OpenAiResponsesProfile::Codex => {
-            out.insert("instructions".into(), JsonValue::String(String::new()));
-            out.insert(
-                "stream".into(),
-                JsonValue::Bool(
-                    chat.get("stream")
-                        .and_then(JsonValue::as_bool)
-                        .unwrap_or(false),
-                ),
-            );
-            out.insert(
-                "reasoning".into(),
-                serde_json::json!({
-                    "effort": chat
-                        .get("reasoning_effort")
-                        .cloned()
-                        .unwrap_or_else(|| JsonValue::String("medium".into())),
-                    "summary": "auto",
-                }),
-            );
-            out.insert("parallel_tool_calls".into(), JsonValue::Bool(true));
-            out.insert(
-                "include".into(),
-                serde_json::json!(["reasoning.encrypted_content"]),
-            );
-        }
-        OpenAiResponsesProfile::Generic => {
-            if let Some(stream) = chat.get("stream") {
-                out.insert("stream".into(), stream.clone());
+    let stream = chat
+        .get("stream")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let effort = chat
+        .get("reasoning_effort")
+        .cloned()
+        .unwrap_or_else(|| JsonValue::String("medium".to_string()));
+    rewrite_chat_tool_names(&mut chat, &tool_names);
+    let (mut out, _) = convert_request_json(
+        relaykit::Format::OpenAi,
+        relaykit::Format::OpenAiResponses,
+        chat,
+        upstream_model,
+    )?;
+    if profile == OpenAiResponsesProfile::Codex {
+        out["instructions"] = JsonValue::String(String::new());
+        out["stream"] = JsonValue::Bool(stream);
+        out["reasoning"] = serde_json::json!({"effort": effort, "summary": "auto"});
+        out["parallel_tool_calls"] = JsonValue::Bool(true);
+        if let Some(object) = out.as_object_mut() {
+            for key in ["temperature", "top_p", "max_output_tokens"] {
+                object.remove(key);
             }
-            if let Some(temp) = chat.get("temperature") {
-                out.insert("temperature".into(), temp.clone());
-            }
-            if let Some(top_p) = chat.get("top_p") {
-                out.insert("top_p".into(), top_p.clone());
-            }
-            if let Some(max_out) = chat
-                .get("max_completion_tokens")
-                .or_else(|| chat.get("max_tokens"))
-            {
-                out.insert("max_output_tokens".into(), max_out.clone());
-            }
-            if let Some(parallel) = chat.get("parallel_tool_calls") {
-                out.insert("parallel_tool_calls".into(), parallel.clone());
-            }
-            if let Some(effort) = chat.get("reasoning_effort") {
-                out.insert("reasoning".into(), serde_json::json!({"effort": effort}));
-            }
-            // Preserve provider-specific reasoning signatures across the
-            // Chat -> Responses -> Chat round trip when the upstream exposes
-            // encrypted reasoning content.
-            out.insert(
-                "include".into(),
-                serde_json::json!(["reasoning.encrypted_content"]),
-            );
         }
     }
-    if let Some(tools) = chat.get("tools").and_then(JsonValue::as_array) {
-        out.insert(
-            "tools".into(),
-            JsonValue::Array(
-                tools
-                    .iter()
-                    .map(|tool| chat_tool_to_responses_tool(tool, &tool_names))
-                    .collect(),
-            ),
-        );
-    }
-    if let Some(tool_choice) = chat.get("tool_choice") {
-        out.insert(
-            "tool_choice".into(),
-            chat_tool_choice_to_responses(tool_choice, &tool_names),
-        );
-    }
-    if let Some(response_format) = chat.get("response_format") {
-        out.insert(
-            "text".into(),
-            serde_json::json!({"format": chat_response_format_to_responses(response_format)}),
-        );
-    }
-    if let Some(user) = chat.get("user") {
-        out.insert("user".into(), user.clone());
-    }
-    out.insert("store".into(), JsonValue::Bool(false));
-    if compact {
-        // compact API is non-stream in new-api tests
-        out.remove("stream");
+    out["include"] = serde_json::json!(["reasoning.encrypted_content"]);
+    out["store"] = JsonValue::Bool(false);
+    if compact && let Some(object) = out.as_object_mut() {
+        object.remove("stream");
     }
     Ok((
-        Bytes::from(
-            serde_json::to_vec(&JsonValue::Object(out)).context("serialize responses body")?,
-        ),
+        Bytes::from(serde_json::to_vec(&out).context("serialize Responses body")?),
         tool_name_reverse,
     ))
 }
 
-fn chat_messages_to_responses_input(
-    chat: &JsonValue,
+fn rewrite_chat_tool_names(
+    chat: &mut JsonValue,
     tool_names: &std::collections::BTreeMap<String, String>,
-) -> JsonValue {
-    let mut input = Vec::new();
-    for message in chat
-        .get("messages")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let role = message
-            .get("role")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("user");
-        if role == "tool" {
-            input.push(serde_json::json!({
-                "type": "function_call_output",
-                "call_id": message
-                    .get("tool_call_id")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or_default(),
-                "output": chat_tool_output_to_responses(message.get("content")),
-            }));
-            continue;
-        }
-
-        let content = chat_message_content_to_responses(role, message.get("content"));
-        if role == "assistant" {
-            let reasoning = message
-                .get("reasoning_content")
-                .or_else(|| message.get("reasoning"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default();
-            let signature = message
-                .get("reasoning_signature")
-                .or_else(|| message.get("reasoning_content_signature"))
-                .or_else(|| message.get("reasoningSignature"))
-                .or_else(|| message.get("encrypted_content"))
-                .and_then(JsonValue::as_str)
-                .filter(|value| !value.is_empty());
-            if !reasoning.is_empty() || signature.is_some() {
-                let mut item = serde_json::json!({
-                    "type": "reasoning",
-                    "summary": if reasoning.is_empty() {
-                        JsonValue::Array(Vec::new())
-                    } else {
-                        serde_json::json!([{"type":"summary_text","text":reasoning}])
-                    },
-                });
-                if let Some(signature) = signature {
-                    item["encrypted_content"] = JsonValue::String(signature.to_string());
-                }
-                input.push(item);
-            }
-        }
-        if role != "assistant" || !content.is_empty() {
-            input.push(serde_json::json!({
-                "type": "message",
-                "role": if role == "system" { "developer" } else { role },
-                "content": content,
-            }));
-        }
-        if role == "assistant" {
-            for call in message
-                .get("tool_calls")
-                .and_then(JsonValue::as_array)
-                .into_iter()
-                .flatten()
+) {
+    if tool_names.is_empty() {
+        return;
+    }
+    fn rewrite_tool(tool: &mut JsonValue, names: &std::collections::BTreeMap<String, String>) {
+        for key in ["function", "custom"] {
+            if let Some(name) = tool.get_mut(key).and_then(|value| value.get_mut("name"))
+                && let Some(mapped) = name.as_str().and_then(|value| names.get(value))
             {
-                if call.get("type").and_then(JsonValue::as_str) != Some("function") {
-                    continue;
-                }
-                let mut item = serde_json::json!({
-                    "type": "function_call",
-                    "call_id": call.get("id").and_then(JsonValue::as_str).unwrap_or_default(),
-                    "name": mapped_tool_name(
-                        call.get("function")
-                            .and_then(|function| function.get("name"))
-                            .and_then(JsonValue::as_str)
-                            .unwrap_or_default(),
-                        tool_names,
-                    ),
-                    "arguments": call
-                        .get("function")
-                        .and_then(|function| function.get("arguments"))
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or_default(),
-                });
-                if let Some(signature) = call
-                    .get("thought_signature")
-                    .or_else(|| call.get("thoughtSignature"))
-                    .and_then(JsonValue::as_str)
-                    .filter(|value| !value.is_empty())
-                {
-                    item["thought_signature"] = JsonValue::String(signature.to_string());
-                }
-                input.push(item);
+                *name = JsonValue::String(mapped.clone());
             }
         }
     }
-    JsonValue::Array(input)
-}
-
-fn chat_message_content_to_responses(role: &str, content: Option<&JsonValue>) -> Vec<JsonValue> {
-    let part_type = if role == "assistant" {
-        "output_text"
-    } else {
-        "input_text"
-    };
-    match content {
-        Some(JsonValue::String(text)) if !text.is_empty() => {
-            vec![serde_json::json!({"type": part_type, "text": text})]
+    if let Some(tools) = chat.get_mut("tools").and_then(JsonValue::as_array_mut) {
+        for tool in tools {
+            rewrite_tool(tool, tool_names);
         }
-        Some(JsonValue::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| chat_content_part_to_responses(role, part_type, part))
-            .collect(),
-        _ => Vec::new(),
     }
-}
-
-fn chat_content_part_to_responses(
-    role: &str,
-    text_part_type: &str,
-    part: &JsonValue,
-) -> Option<JsonValue> {
-    match part.get("type").and_then(JsonValue::as_str) {
-        Some("text") => Some(serde_json::json!({
-            "type": text_part_type,
-            "text": part.get("text").and_then(JsonValue::as_str).unwrap_or_default(),
-        })),
-        Some("image_url") if role == "user" => {
-            let image = part.get("image_url")?;
-            let mut out = serde_json::json!({"type": "input_image"});
-            if let Some(url) = image.get("url").and_then(JsonValue::as_str) {
-                out["image_url"] = JsonValue::String(url.to_string());
-            }
-            if let Some(file_id) = image.get("file_id").and_then(JsonValue::as_str) {
-                out["file_id"] = JsonValue::String(file_id.to_string());
-            }
-            if let Some(detail) = image.get("detail").and_then(JsonValue::as_str) {
-                out["detail"] = JsonValue::String(detail.to_string());
-            }
-            Some(out)
-        }
-        Some("file") if role == "user" => {
-            let file = part.get("file")?;
-            let mut out = serde_json::json!({"type": "input_file"});
-            for key in ["file_id", "file_data", "file_url", "filename"] {
-                if let Some(value) = file.get(key).and_then(JsonValue::as_str) {
-                    out[key] = JsonValue::String(value.to_string());
+    if let Some(messages) = chat.get_mut("messages").and_then(JsonValue::as_array_mut) {
+        for message in messages {
+            if let Some(calls) = message
+                .get_mut("tool_calls")
+                .and_then(JsonValue::as_array_mut)
+            {
+                for call in calls {
+                    rewrite_tool(call, tool_names);
                 }
             }
-            Some(out)
-        }
-        Some("input_audio") if role == "user" => {
-            let audio = part.get("input_audio")?;
-            let data = audio.get("data").and_then(JsonValue::as_str)?;
-            let mut out = serde_json::json!({"type": "input_audio", "data": data});
-            if let Some(format) = audio.get("format").and_then(JsonValue::as_str) {
-                out["format"] = JsonValue::String(format.to_string());
-            }
-            Some(out)
-        }
-        Some("input_text" | "output_text" | "input_image" | "input_file") => Some(part.clone()),
-        _ => None,
-    }
-}
-
-fn chat_tool_output_to_responses(content: Option<&JsonValue>) -> JsonValue {
-    match content {
-        Some(JsonValue::String(text)) => JsonValue::String(text.clone()),
-        Some(JsonValue::Array(parts)) => JsonValue::Array(
-            parts
-                .iter()
-                .map(chat_tool_output_part_to_responses)
-                .collect(),
-        ),
-        Some(value) => {
-            JsonValue::String(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()))
-        }
-        None => JsonValue::String(String::new()),
-    }
-}
-
-fn chat_tool_output_part_to_responses(part: &JsonValue) -> JsonValue {
-    match part.get("type").and_then(JsonValue::as_str) {
-        Some("text") => serde_json::json!({
-            "type": "input_text",
-            "text": part.get("text").and_then(JsonValue::as_str).unwrap_or_default(),
-        }),
-        Some("image_url") => {
-            let image = part.get("image_url").unwrap_or(&JsonValue::Null);
-            let mut out = serde_json::json!({"type": "input_image"});
-            let mut valid = false;
-            if let Some(url) = image.get("url").and_then(JsonValue::as_str) {
-                out["image_url"] = JsonValue::String(url.to_string());
-                valid = true;
-            }
-            if let Some(file_id) = image.get("file_id").and_then(JsonValue::as_str) {
-                out["file_id"] = JsonValue::String(file_id.to_string());
-                valid = true;
-            }
-            if let Some(detail) = image.get("detail").and_then(JsonValue::as_str) {
-                out["detail"] = JsonValue::String(detail.to_string());
-            }
-            if valid {
-                out
-            } else {
-                chat_tool_output_fallback(part)
-            }
-        }
-        Some("file") => {
-            let file = part.get("file").unwrap_or(&JsonValue::Null);
-            let mut out = serde_json::json!({"type": "input_file"});
-            let mut valid = false;
-            for key in ["file_id", "file_data", "file_url"] {
-                if let Some(value) = file.get(key).and_then(JsonValue::as_str) {
-                    out[key] = JsonValue::String(value.to_string());
-                    valid = true;
-                }
-            }
-            if let Some(filename) = file.get("filename").and_then(JsonValue::as_str) {
-                out["filename"] = JsonValue::String(filename.to_string());
-            }
-            if valid {
-                out
-            } else {
-                chat_tool_output_fallback(part)
-            }
-        }
-        _ => chat_tool_output_fallback(part),
-    }
-}
-
-fn chat_tool_output_fallback(part: &JsonValue) -> JsonValue {
-    serde_json::json!({
-        "type": "input_text",
-        "text": serde_json::to_string(part).unwrap_or_else(|_| part.to_string()),
-    })
-}
-
-fn chat_tool_to_responses_tool(
-    tool: &JsonValue,
-    tool_names: &std::collections::BTreeMap<String, String>,
-) -> JsonValue {
-    if tool.get("type").and_then(JsonValue::as_str) != Some("function") {
-        return tool.clone();
-    }
-    let function = tool.get("function").unwrap_or(&JsonValue::Null);
-    let mut out = serde_json::json!({"type": "function"});
-    for key in ["name", "description", "parameters", "strict"] {
-        if let Some(value) = function.get(key) {
-            out[key] = if key == "name" {
-                JsonValue::String(mapped_tool_name(
-                    value.as_str().unwrap_or_default(),
-                    tool_names,
-                ))
-            } else {
-                value.clone()
-            };
         }
     }
-    out
-}
-
-fn chat_tool_choice_to_responses(
-    tool_choice: &JsonValue,
-    tool_names: &std::collections::BTreeMap<String, String>,
-) -> JsonValue {
-    if tool_choice.get("type").and_then(JsonValue::as_str) != Some("function") {
-        return tool_choice.clone();
+    if let Some(choice) = chat.get_mut("tool_choice") {
+        rewrite_tool(choice, tool_names);
+        if let Some(name) = choice.get_mut("name")
+            && let Some(mapped) = name.as_str().and_then(|value| tool_names.get(value))
+        {
+            *name = JsonValue::String(mapped.clone());
+        }
     }
-    serde_json::json!({
-        "type": "function",
-        "name": mapped_tool_name(
-            tool_choice
-                .get("function")
-                .and_then(|function| function.get("name"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default(),
-            tool_names,
-        ),
-    })
 }
 
 fn codex_tool_name_map(
@@ -2779,7 +2492,7 @@ fn codex_tool_name_map(
         .and_then(JsonValue::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|tool| tool.get("function"))
+        .filter_map(|tool| tool.get("function").or_else(|| tool.get("custom")))
         .filter_map(|function| function.get("name"))
         .filter_map(JsonValue::as_str)
         .collect();
@@ -2795,13 +2508,13 @@ fn codex_tool_name_map(
                     .into_iter()
                     .flatten()
             })
-            .filter_map(|call| call.get("function"))
+            .filter_map(|call| call.get("function").or_else(|| call.get("custom")))
             .filter_map(|function| function.get("name"))
             .filter_map(JsonValue::as_str),
     );
     if let Some(choice_name) = chat
         .get("tool_choice")
-        .and_then(|choice| choice.get("function"))
+        .and_then(|choice| choice.get("function").or_else(|| choice.get("custom")))
         .and_then(|function| function.get("name"))
         .and_then(JsonValue::as_str)
     {
@@ -2825,13 +2538,6 @@ fn codex_tool_name_map(
     mapped
 }
 
-fn mapped_tool_name(name: &str, tool_names: &std::collections::BTreeMap<String, String>) -> String {
-    tool_names
-        .get(name)
-        .cloned()
-        .unwrap_or_else(|| name.to_string())
-}
-
 fn shorten_codex_tool_name(name: &str) -> String {
     if name.len() <= 64 {
         return name.to_string();
@@ -2853,645 +2559,22 @@ fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> &str {
     &value[..end]
 }
 
-fn chat_response_format_to_responses(response_format: &JsonValue) -> JsonValue {
-    match response_format.get("type").and_then(JsonValue::as_str) {
-        Some("json_schema") => {
-            let schema = response_format
-                .get("json_schema")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            let mut out = serde_json::json!({"type": "json_schema"});
-            if let Some(object) = schema.as_object() {
-                for key in ["name", "strict", "schema"] {
-                    if let Some(value) = object.get(key) {
-                        out[key] = value.clone();
-                    }
-                }
-            }
-            out
-        }
-        Some(kind) => serde_json::json!({"type": kind}),
-        None => response_format.clone(),
-    }
-}
-
-/// Responses → Chat Completions conversion for channels forced to `/v1/chat/completions`.
+/// Responses conversion is delegated to the same engine used by native text routes.
 fn convert_responses_body_to_chat(
     raw_body: &[u8],
     upstream_model: &str,
 ) -> Result<(Bytes, ResponsesToolMapping)> {
-    let resp: JsonValue =
-        serde_json::from_slice(raw_body).context("parse responses request for chat convert")?;
-    let tool_mapping = responses_tool_mapping(raw_body)
-        .context("collect Responses client tool mapping for chat convert")?;
-    if resp
-        .get("previous_response_id")
-        .is_some_and(|value| !value.is_null())
-    {
-        anyhow::bail!(
-            "previous_response_id cannot be represented by a stateless Chat Completions upstream"
-        );
-    }
-    let mut messages = Vec::new();
-    if let Some(instructions) = resp.get("instructions") {
-        let content = responses_content_to_chat(instructions, false);
-        if !chat_content_is_empty(&content) {
-            messages.push(serde_json::json!({"role": "system", "content": content}));
-        }
-    }
-    let mut additional_tools = Vec::new();
-    match resp.get("input") {
-        Some(JsonValue::String(text)) => {
-            messages.push(serde_json::json!({"role": "user", "content": text}));
-        }
-        Some(JsonValue::Array(items)) => {
-            for item in items {
-                if item.get("type").and_then(JsonValue::as_str) == Some("additional_tools") {
-                    if let Some(tools) = item.get("tools").and_then(JsonValue::as_array) {
-                        additional_tools.extend(tools.iter().cloned());
-                    }
-                    continue;
-                }
-                responses_input_item_to_chat(item, &mut messages)?;
-            }
-        }
-        Some(JsonValue::Null) | None => {}
-        Some(other) => {
-            messages.push(serde_json::json!({
-                "role": "user",
-                "content": serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
-            }));
-        }
-    }
-    messages = normalize_responses_chat_messages(messages);
-    if messages.is_empty() {
-        anyhow::bail!("Responses input produced no Chat Completions messages");
-    }
-    let mut out = serde_json::Map::new();
-    out.insert(
-        "model".into(),
-        JsonValue::String(upstream_model.to_string()),
-    );
-    out.insert("messages".into(), JsonValue::Array(messages));
-    if let Some(stream) = resp.get("stream") {
-        out.insert("stream".into(), stream.clone());
-    }
-    if let Some(temp) = resp.get("temperature") {
-        out.insert("temperature".into(), temp.clone());
-    }
-    if let Some(top_p) = resp.get("top_p") {
-        out.insert("top_p".into(), top_p.clone());
-    }
-    if let Some(max_out) = resp.get("max_output_tokens") {
-        out.insert("max_tokens".into(), max_out.clone());
-    }
-    if let Some(tools) = resp.get("tools").and_then(JsonValue::as_array) {
-        additional_tools.extend(tools.iter().cloned());
-    }
-    if !additional_tools.is_empty() {
-        let chat_tools: Vec<JsonValue> = additional_tools
-            .iter()
-            .filter_map(responses_tool_to_chat)
-            .collect();
-        if !chat_tools.is_empty() {
-            out.insert("tools".into(), JsonValue::Array(chat_tools));
-        }
-    }
-    if let Some(tool_choice) = resp.get("tool_choice")
-        && let Some(tool_choice) = responses_tool_choice_to_chat(tool_choice)
-    {
-        out.insert("tool_choice".into(), tool_choice);
-    }
-    if let Some(user) = resp.get("user") {
-        out.insert("user".into(), user.clone());
-    }
-    if let Some(parallel) = resp.get("parallel_tool_calls") {
-        out.insert("parallel_tool_calls".into(), parallel.clone());
-    }
-    if let Some(effort) = resp
-        .get("reasoning")
-        .and_then(|reasoning| reasoning.get("effort"))
-    {
-        out.insert("reasoning_effort".into(), effort.clone());
-    }
-    if let Some(format) = resp.get("text").and_then(|text| text.get("format")) {
-        out.insert(
-            "response_format".into(),
-            responses_text_format_to_chat(format),
-        );
-    }
-    if out.get("stream").and_then(|v| v.as_bool()) == Some(true) {
-        out.insert(
-            "stream_options".into(),
-            serde_json::json!({"include_usage": true}),
-        );
-    }
+    let (mut chat, tool_mapping) = convert_text_request_body(
+        relaykit::Format::OpenAiResponses,
+        relaykit::Format::OpenAi,
+        raw_body,
+        upstream_model,
+    )?;
+    ensure_openai_stream_include_usage(&mut chat);
     Ok((
-        Bytes::from(serde_json::to_vec(&JsonValue::Object(out)).context("serialize chat body")?),
+        Bytes::from(serde_json::to_vec(&chat).context("serialize Chat body")?),
         tool_mapping,
     ))
-}
-
-fn responses_input_item_to_chat(item: &JsonValue, messages: &mut Vec<JsonValue>) -> Result<()> {
-    let item_type = item.get("type").and_then(JsonValue::as_str);
-    match item_type {
-        Some("message") | None if item.get("role").is_some() => {
-            let role = item
-                .get("role")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("user");
-            let content = responses_content_to_chat(
-                item.get("content").unwrap_or(&JsonValue::Null),
-                role == "assistant",
-            );
-            let mut message = serde_json::json!({"role": role, "content": content});
-            if let Some(name) = item.get("name") {
-                message["name"] = name.clone();
-            }
-            messages.push(message);
-        }
-        Some("function_call") | Some("tool_search_call") => {
-            let is_tool_search = item_type == Some("tool_search_call");
-            let call_id = item
-                .get("call_id")
-                .or_else(|| item.get("id"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default();
-            let mut tool_call = serde_json::json!({
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": if is_tool_search {
-                        "tool_search"
-                    } else {
-                        item.get("name").and_then(JsonValue::as_str).unwrap_or_default()
-                    },
-                    "arguments": responses_arguments_to_chat_string(
-                        item.get("arguments").or_else(|| item.get("input"))
-                    ),
-                },
-            });
-            if let Some(signature) = item
-                .get("thought_signature")
-                .or_else(|| item.get("thoughtSignature"))
-            {
-                tool_call["thoughtSignature"] = signature.clone();
-            }
-            merge_responses_assistant(messages, None, None, Some(tool_call));
-        }
-        Some("custom_tool_call") => {
-            let call_id = item
-                .get("call_id")
-                .or_else(|| item.get("id"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default();
-            let input = item
-                .get("input")
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default();
-            let mut tool_call = serde_json::json!({
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": item.get("name").and_then(JsonValue::as_str).unwrap_or_default(),
-                    "arguments": serde_json::to_string(&serde_json::json!({"input": input}))
-                        .unwrap_or_else(|_| "{\"input\":\"\"}".to_string()),
-                },
-            });
-            if let Some(signature) = item
-                .get("thought_signature")
-                .or_else(|| item.get("thoughtSignature"))
-            {
-                tool_call["thoughtSignature"] = signature.clone();
-            }
-            merge_responses_assistant(messages, None, None, Some(tool_call));
-        }
-        Some("function_call_output")
-        | Some("custom_tool_call_output")
-        | Some("tool_search_output") => {
-            messages.push(serde_json::json!({
-                "role": "tool",
-                "tool_call_id": item
-                    .get("call_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or_default(),
-                "content": responses_content_to_chat(
-                    item.get("output").unwrap_or(&JsonValue::Null),
-                    false,
-                ),
-            }));
-        }
-        Some("reasoning") => {
-            let reasoning = responses_reasoning_text(item);
-            let signature = item
-                .get("encrypted_content")
-                .or_else(|| item.get("signature"))
-                .and_then(JsonValue::as_str)
-                .map(str::to_string);
-            if !reasoning.is_empty() || signature.is_some() {
-                merge_responses_assistant(messages, Some(reasoning), signature, None);
-            }
-        }
-        Some("item_reference") => {
-            anyhow::bail!("Responses item_reference cannot be resolved for Chat Completions")
-        }
-        Some(
-            "web_search_call" | "file_search_call" | "computer_call" | "message_output"
-            | "additional_tools",
-        ) => {}
-        Some(kind) => anyhow::bail!("unsupported Responses input item type for Chat: {kind}"),
-        None => {
-            messages.push(serde_json::json!({
-                "role": "user",
-                "content": serde_json::to_string(item).unwrap_or_else(|_| item.to_string()),
-            }));
-        }
-    }
-    Ok(())
-}
-
-fn normalize_responses_chat_messages(messages: Vec<JsonValue>) -> Vec<JsonValue> {
-    let messages = merge_adjacent_responses_assistant_messages(messages);
-    let mut replies = std::collections::BTreeMap::new();
-    for message in &messages {
-        if message.get("role").and_then(JsonValue::as_str) == Some("tool")
-            && let Some(call_id) = message.get("tool_call_id").and_then(JsonValue::as_str)
-            && !call_id.is_empty()
-        {
-            replies.insert(call_id.to_string(), message.clone());
-        }
-    }
-
-    let mut emitted = std::collections::BTreeSet::new();
-    let mut normalized = Vec::with_capacity(messages.len());
-    for mut message in messages {
-        let role = message
-            .get("role")
-            .and_then(JsonValue::as_str)
-            .unwrap_or_default();
-        if role == "tool" {
-            // Tool replies are re-emitted immediately after their answered
-            // assistant tool_calls message; standalone/orphan replies are invalid
-            // for Chat Completions and must not reach the upstream.
-            continue;
-        }
-        let Some(calls) = message.get("tool_calls").and_then(JsonValue::as_array) else {
-            normalized.push(message);
-            continue;
-        };
-        let kept = calls
-            .iter()
-            .filter(|call| {
-                let id = call
-                    .get("id")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or_default();
-                !id.is_empty() && replies.contains_key(id) && !emitted.contains(id)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if kept.is_empty() {
-            message.as_object_mut().map(|object| {
-                object.remove("tool_calls");
-            });
-            if chat_message_has_content_or_reasoning(&message) {
-                normalized.push(message);
-            }
-            continue;
-        }
-        if let Some(object) = message.as_object_mut() {
-            object.insert("tool_calls".to_string(), JsonValue::Array(kept.clone()));
-        }
-        normalized.push(message);
-        for call in kept {
-            let id = call
-                .get("id")
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default();
-            if let Some(reply) = replies.get(id)
-                && emitted.insert(id.to_string())
-            {
-                normalized.push(reply.clone());
-            }
-        }
-    }
-    normalized
-}
-
-fn merge_adjacent_responses_assistant_messages(messages: Vec<JsonValue>) -> Vec<JsonValue> {
-    let mut merged: Vec<JsonValue> = Vec::with_capacity(messages.len());
-    for message in messages {
-        let is_assistant = message.get("role").and_then(JsonValue::as_str) == Some("assistant");
-        if is_assistant
-            && let Some(previous) = merged.last_mut()
-            && previous.get("role").and_then(JsonValue::as_str) == Some("assistant")
-        {
-            merge_responses_chat_assistant(previous, &message);
-        } else {
-            merged.push(message);
-        }
-    }
-    merged
-}
-
-fn merge_responses_chat_assistant(target: &mut JsonValue, source: &JsonValue) {
-    let target_object = target
-        .as_object_mut()
-        .expect("assistant message is an object");
-    if let Some(content) = source.get("content")
-        && !chat_content_is_empty(content)
-    {
-        let existing = target_object
-            .get("content")
-            .cloned()
-            .unwrap_or(JsonValue::Null);
-        target_object.insert(
-            "content".to_string(),
-            merge_chat_content_values(existing, content.clone()),
-        );
-    }
-    for key in ["reasoning_content", "reasoning_signature"] {
-        if let Some(value) = source.get(key).and_then(JsonValue::as_str)
-            && !value.is_empty()
-        {
-            let previous = target_object
-                .get(key)
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default();
-            target_object.insert(
-                key.to_string(),
-                JsonValue::String(format!("{previous}{value}")),
-            );
-        }
-    }
-    if let Some(calls) = source.get("tool_calls").and_then(JsonValue::as_array) {
-        let entry = target_object
-            .entry("tool_calls".to_string())
-            .or_insert_with(|| JsonValue::Array(Vec::new()));
-        if let JsonValue::Array(existing) = entry {
-            existing.extend(calls.iter().cloned());
-        }
-    }
-}
-
-fn merge_chat_content_values(left: JsonValue, right: JsonValue) -> JsonValue {
-    match (left, right) {
-        (JsonValue::Null, value) => value,
-        (JsonValue::String(left), JsonValue::String(right)) => {
-            JsonValue::String(format!("{left}{right}"))
-        }
-        (JsonValue::Array(mut left), JsonValue::Array(right)) => {
-            left.extend(right);
-            JsonValue::Array(left)
-        }
-        (JsonValue::Array(mut left), value) => {
-            left.push(value);
-            JsonValue::Array(left)
-        }
-        (left, JsonValue::Array(mut right)) => {
-            right.insert(0, left);
-            JsonValue::Array(right)
-        }
-        (left, right) => JsonValue::Array(vec![left, right]),
-    }
-}
-
-fn chat_message_has_content_or_reasoning(message: &JsonValue) -> bool {
-    message
-        .get("content")
-        .is_some_and(|content| !chat_content_is_empty(content))
-        || message
-            .get("reasoning_content")
-            .and_then(JsonValue::as_str)
-            .is_some_and(|reasoning| !reasoning.is_empty())
-}
-
-fn merge_responses_assistant(
-    messages: &mut Vec<JsonValue>,
-    reasoning: Option<String>,
-    reasoning_signature: Option<String>,
-    tool_call: Option<JsonValue>,
-) {
-    let can_merge = messages
-        .last()
-        .and_then(|message| message.get("role"))
-        .and_then(JsonValue::as_str)
-        == Some("assistant");
-    if !can_merge {
-        messages.push(serde_json::json!({"role": "assistant", "content": JsonValue::Null}));
-    }
-    let message = messages
-        .last_mut()
-        .expect("assistant message inserted when none was present");
-    if let Some(reasoning) = reasoning {
-        let existing = message
-            .get("reasoning_content")
-            .and_then(JsonValue::as_str)
-            .unwrap_or_default();
-        message["reasoning_content"] = JsonValue::String(format!("{existing}{reasoning}"));
-    }
-    if let Some(signature) = reasoning_signature {
-        message["reasoning_signature"] = JsonValue::String(signature);
-    }
-    if let Some(tool_call) = tool_call {
-        match message.get_mut("tool_calls") {
-            Some(JsonValue::Array(calls)) => calls.push(tool_call),
-            _ => message["tool_calls"] = JsonValue::Array(vec![tool_call]),
-        }
-    }
-}
-
-fn responses_content_to_chat(value: &JsonValue, assistant: bool) -> JsonValue {
-    match value {
-        JsonValue::String(text) => JsonValue::String(text.clone()),
-        JsonValue::Array(parts) => {
-            let converted: Vec<JsonValue> = parts
-                .iter()
-                .filter_map(|part| responses_content_part_to_chat(part, assistant))
-                .collect();
-            if converted.len() == 1
-                && converted[0].get("type").and_then(JsonValue::as_str) == Some("text")
-            {
-                converted[0].get("text").cloned().unwrap_or(JsonValue::Null)
-            } else {
-                JsonValue::Array(converted)
-            }
-        }
-        JsonValue::Null => JsonValue::Null,
-        other => {
-            JsonValue::String(serde_json::to_string(other).unwrap_or_else(|_| other.to_string()))
-        }
-    }
-}
-
-fn responses_content_part_to_chat(part: &JsonValue, assistant: bool) -> Option<JsonValue> {
-    match part.get("type").and_then(JsonValue::as_str) {
-        Some("input_text" | "output_text" | "text" | "summary_text") => Some(serde_json::json!({
-            "type": "text",
-            "text": part.get("text").and_then(JsonValue::as_str).unwrap_or_default(),
-        })),
-        Some("refusal") => Some(serde_json::json!({
-            "type": "text",
-            "text": part
-                .get("refusal")
-                .or_else(|| part.get("text"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default(),
-        })),
-        Some("input_image") if !assistant => {
-            let mut image = serde_json::Map::new();
-            if let Some(url) = part.get("image_url").or_else(|| part.get("url")) {
-                image.insert("url".into(), url.clone());
-            }
-            if let Some(file_id) = part.get("file_id") {
-                image.insert("file_id".into(), file_id.clone());
-            }
-            if let Some(detail) = part.get("detail") {
-                image.insert("detail".into(), detail.clone());
-            }
-            (!image.is_empty()).then(
-                || serde_json::json!({"type": "image_url", "image_url": JsonValue::Object(image)}),
-            )
-        }
-        Some("input_file") if !assistant => {
-            let mut file = serde_json::Map::new();
-            for key in ["file_id", "file_data", "file_url", "filename"] {
-                if let Some(value) = part.get(key) {
-                    file.insert(key.into(), value.clone());
-                }
-            }
-            (!file.is_empty())
-                .then(|| serde_json::json!({"type": "file", "file": JsonValue::Object(file)}))
-        }
-        Some("input_audio") if !assistant => Some(serde_json::json!({
-            "type": "input_audio",
-            "input_audio": {
-                "data": part.get("data").and_then(JsonValue::as_str).unwrap_or_default(),
-                "format": part.get("format").and_then(JsonValue::as_str).unwrap_or("wav"),
-            },
-        })),
-        _ => None,
-    }
-}
-
-fn responses_reasoning_text(item: &JsonValue) -> String {
-    let mut out = String::new();
-    for part in item
-        .get("summary")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(text) = part.get("text").and_then(JsonValue::as_str) {
-            out.push_str(text);
-        }
-    }
-    if out.is_empty()
-        && let Some(text) = item.get("content").and_then(JsonValue::as_str)
-    {
-        out.push_str(text);
-    }
-    out
-}
-
-fn chat_content_is_empty(content: &JsonValue) -> bool {
-    match content {
-        JsonValue::Null => true,
-        JsonValue::String(text) => text.is_empty(),
-        JsonValue::Array(parts) => parts.is_empty(),
-        _ => false,
-    }
-}
-
-fn responses_tool_to_chat(tool: &JsonValue) -> Option<JsonValue> {
-    let tool_type = tool.get("type").and_then(JsonValue::as_str)?;
-    if tool_type == "tool_search" {
-        return Some(serde_json::json!({
-            "type":"function",
-            "function":{
-                "name":"tool_search",
-                "description":"Search and load tools available to the current task.",
-                "parameters":{
-                    "type":"object",
-                    "properties":{
-                        "query":{"type":"string"},
-                        "limit":{"type":"integer"}
-                    },
-                    "required":["query"]
-                }
-            }
-        }));
-    }
-    if !matches!(tool_type, "function" | "custom") {
-        return None;
-    }
-    let mut function = serde_json::Map::new();
-    for key in ["name", "description", "parameters", "strict"] {
-        if let Some(value) = tool.get(key) {
-            function.insert(key.into(), value.clone());
-        }
-    }
-    if tool_type == "custom" {
-        function.insert(
-            "parameters".into(),
-            serde_json::json!({
-                "type":"object",
-                "properties":{"input":{"type":"string"}},
-                "required":["input"]
-            }),
-        );
-        function.remove("strict");
-    }
-    Some(serde_json::json!({
-        "type": "function",
-        "function": JsonValue::Object(function),
-    }))
-}
-
-fn responses_tool_choice_to_chat(tool_choice: &JsonValue) -> Option<JsonValue> {
-    let Some(kind) = tool_choice.get("type").and_then(JsonValue::as_str) else {
-        return Some(tool_choice.clone());
-    };
-    match kind {
-        "function" | "custom" => Some(serde_json::json!({
-            "type": "function",
-            "function": {
-                "name": tool_choice.get("name").and_then(JsonValue::as_str).unwrap_or_default(),
-            },
-        })),
-        "tool_search" => Some(serde_json::json!({
-            "type":"function",
-            "function":{"name":"tool_search"}
-        })),
-        // Server-side tools are not exposed by a Chat Completions upstream;
-        // forwarding a choice that points at a dropped tool causes a 400.
-        "web_search" | "file_search" | "computer" => None,
-        _ => Some(tool_choice.clone()),
-    }
-}
-
-fn responses_arguments_to_chat_string(value: Option<&JsonValue>) -> String {
-    match value {
-        Some(JsonValue::String(value)) => value.clone(),
-        Some(JsonValue::Null) | None => "{}".to_string(),
-        Some(value) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
-    }
-}
-
-fn responses_text_format_to_chat(format: &JsonValue) -> JsonValue {
-    match format.get("type").and_then(JsonValue::as_str) {
-        Some("json_schema") => serde_json::json!({
-            "type": "json_schema",
-            "json_schema": {
-                "name": format.get("name").cloned().unwrap_or_else(|| JsonValue::String("response".into())),
-                "strict": format.get("strict").cloned().unwrap_or(JsonValue::Bool(false)),
-                "schema": format.get("schema").cloned().unwrap_or_else(|| serde_json::json!({})),
-            },
-        }),
-        Some(kind) => serde_json::json!({"type": kind}),
-        None => format.clone(),
-    }
 }
 
 fn rewrite_openai_chat_model_body(raw_body: &[u8], upstream_model: &str) -> Result<Bytes> {
@@ -4294,6 +3377,35 @@ mod tests {
     }
 
     #[test]
+    fn codex_tool_name_policy_keeps_custom_declarations_and_calls_consistent() {
+        let name = format!("mcp__shell__{}", "execute".repeat(12));
+        let mut request = serde_json::json!({
+            "tools": [{"type": "custom", "custom": {"name": name}}],
+            "messages": [{
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_1", "type": "custom",
+                    "custom": {"name": name, "input": "echo hello"}
+                }]
+            }],
+            "tool_choice": {"type": "custom", "custom": {"name": name}}
+        });
+        let names = codex_tool_name_map(&request, OpenAiResponsesProfile::Codex);
+        rewrite_chat_tool_names(&mut request, &names);
+        let shortened = request["tools"][0]["custom"]["name"].as_str().unwrap();
+        assert!(shortened.len() <= 64);
+        assert_eq!(
+            request["messages"][0]["tool_calls"][0]["custom"]["name"],
+            shortened
+        );
+        assert_eq!(request["tool_choice"]["custom"]["name"], shortened);
+        assert_eq!(
+            request["messages"][0]["tool_calls"][0]["custom"]["input"],
+            "echo hello"
+        );
+    }
+
+    #[test]
     fn xai_response_keeps_generic_responses_sampling_fields() {
         let raw = serde_json::to_vec(&serde_json::json!({
             "model": "requested-model",
@@ -4380,7 +3492,8 @@ mod tests {
         assert_eq!(body["tool_choice"]["function"]["name"], "lookup");
         assert_eq!(body["reasoning_effort"], "high");
         assert_eq!(body["response_format"]["type"], "json_schema");
-        assert_eq!(body["max_tokens"], 128);
+        assert_eq!(body["max_completion_tokens"], 128);
+        assert!(body.get("max_tokens").is_none());
         assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
@@ -4396,6 +3509,160 @@ mod tests {
             .err()
             .expect("stateful reference must be rejected");
         assert!(err.to_string().contains("previous_response_id"));
+    }
+
+    #[test]
+    fn forced_chat_rejects_other_unresolvable_responses_state() {
+        for (field, value) in [
+            ("conversation", serde_json::json!("conv_saved")),
+            ("prompt", serde_json::json!({"id": "pmpt_saved"})),
+            (
+                "context_management",
+                serde_json::json!([{"type": "compaction"}]),
+            ),
+        ] {
+            let mut request = serde_json::json!({"model": "requested-model", "input": "continue"});
+            request[field] = value;
+            let raw = serde_json::to_vec(&request).unwrap();
+            let error = prepare_openai_text_upstream("/v1/responses", &raw, "o3", "openai")
+                .err()
+                .expect("unresolved Responses state must not be dropped");
+            assert!(error.to_string().contains(field), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn forced_chat_uses_completion_token_limit_for_reasoning_models() {
+        let raw = br#"{"model":"requested-model","input":"hi","max_output_tokens":64}"#;
+        let prepared = prepare_openai_text_upstream("/v1/responses", raw, "o3", "openai")
+            .expect("Responses request should convert");
+        let body: JsonValue = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(body["model"], "o3");
+        assert_eq!(body["max_completion_tokens"], 64);
+        assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn forced_chat_preserves_namespace_declaration_and_forced_choice() {
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "model": "requested-model",
+            "input": "hi",
+            "tools": [{
+                "type": "namespace", "name": "math", "tools": [{
+                    "type": "function", "name": "add", "parameters": {"type": "object"}
+                }]
+            }],
+            "tool_choice": {"type": "function", "namespace": "math", "name": "add"}
+        }))
+        .unwrap();
+        let prepared =
+            prepare_openai_text_upstream("/v1/responses", &raw, "gpt-upstream", "openai")
+                .expect("namespace tools should convert");
+        let body: JsonValue = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(body["tools"][0]["function"]["name"], "math__add");
+        assert_eq!(body["tool_choice"]["function"]["name"], "math__add");
+        assert_eq!(
+            prepared
+                .responses_tool_mapping
+                .responses_tool_name("math__add"),
+            ("math".to_string(), "add".to_string())
+        );
+    }
+
+    #[test]
+    fn forced_chat_moves_tool_result_images_to_a_user_message() {
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "model": "requested-model",
+            "input": [
+                {"role": "user", "content": "look"},
+                {"type": "function_call", "call_id": "call_1", "name": "screenshot", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": [
+                    {"type": "input_image", "image_url": "https://images.example/screenshot.png"}
+                ]}
+            ]
+        }))
+        .unwrap();
+        let prepared =
+            prepare_openai_text_upstream("/v1/responses", &raw, "gpt-upstream", "openai")
+                .expect("image-bearing tool results should convert");
+        let body: JsonValue = serde_json::from_slice(&prepared.body).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        let tool = messages
+            .iter()
+            .find(|message| message["role"] == "tool")
+            .expect("tool reply must survive");
+        assert_eq!(tool["tool_call_id"], "call_1");
+        if let Some(parts) = tool["content"].as_array() {
+            assert!(parts.iter().all(|part| part["type"] == "text"));
+        } else {
+            assert!(tool["content"].is_string());
+        }
+        assert!(messages.iter().any(|message| {
+            message["role"] == "user"
+                && message["content"].as_array().is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part["type"] == "image_url"
+                            && part["image_url"]["url"] == "https://images.example/screenshot.png"
+                    })
+                })
+        }));
+    }
+
+    #[test]
+    fn claude_to_chat_accepts_string_content_without_a_legacy_dto() {
+        let raw = br#"{"model":"claude-sonnet-4-5","max_tokens":100,"messages":[{"role":"user","content":"hello"}]}"#;
+        let (chat, _) = convert_text_request_body(
+            relaykit::Format::Claude,
+            relaykit::Format::OpenAi,
+            raw,
+            "gpt-upstream",
+        )
+        .expect("Claude string content is valid");
+        assert_eq!(chat["model"], "gpt-upstream");
+        assert_eq!(chat["messages"][0]["role"], "user");
+        assert_eq!(chat["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn chat_to_claude_keeps_url_images_for_the_async_host_resolver() {
+        let raw = br#"{"model":"requested-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://images.example/screenshot.png"}}]}]}"#;
+        let (request, _) = convert_text_request_body(
+            relaykit::Format::OpenAi,
+            relaykit::Format::Claude,
+            raw,
+            "claude-sonnet-4-5",
+        )
+        .expect("URL images must remain available to the host resolver");
+        assert_eq!(request["messages"][0]["content"][0]["type"], "image");
+        assert_eq!(
+            request["messages"][0]["content"][0]["source"]["type"],
+            "url"
+        );
+        assert_eq!(
+            request["messages"][0]["content"][0]["source"]["url"],
+            "https://images.example/screenshot.png"
+        );
+    }
+
+    #[test]
+    fn chat_to_gemini_keeps_url_images_as_native_file_data() {
+        let raw = br#"{"model":"requested-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://images.example/screenshot.png"}}]}]}"#;
+        let (request, _) = convert_text_request_body(
+            relaykit::Format::OpenAi,
+            relaykit::Format::Gemini,
+            raw,
+            "gemini-2.5-flash",
+        )
+        .expect("Gemini can receive URL images without a synchronous network callback");
+        assert!(
+            request["contents"][0]["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|part| {
+                    part["fileData"]["fileUri"] == "https://images.example/screenshot.png"
+                })
+        );
     }
 
     #[test]
@@ -4456,7 +3723,7 @@ mod tests {
         let reasoning_1 = messages
             .iter()
             .find(|m| m["reasoning_content"] == "first thought")
-            .expect("first reasoning should survive");
+            .unwrap_or_else(|| panic!("first reasoning should survive: {body}"));
         assert_eq!(reasoning_1["reasoning_signature"], "sig-1");
         let assistant_with_tools = messages
             .iter()
@@ -5041,7 +4308,7 @@ data: {"type":"message_stop"}
     }
 
     #[monoio::test_all(enable_timer = true)]
-    async fn responses_bridge_emits_terminal_event_on_eof_without_message_stop() {
+    async fn responses_bridge_reports_failure_on_eof_without_message_stop() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind eof upstream");
         let address = listener.local_addr().expect("mock address");
@@ -5098,12 +4365,13 @@ data: {"type":"message_stop"}
         server.await;
         let events = parse_responses_sse(&payload);
         let event_types: Vec<&str> = events.iter().map(|(t, _)| t.as_str()).collect();
-        // finish() must still emit a terminal event even without message_stop.
         assert!(
-            event_types.iter().any(|t| {
-                *t == "response.completed" || *t == "response.incomplete" || *t == "response.failed"
-            }),
-            "missing terminal event after EOF: {event_types:?}"
+            event_types.contains(&"response.failed"),
+            "truncated upstream must emit a failed terminal: {event_types:?}"
+        );
+        assert!(
+            !event_types.contains(&"response.completed"),
+            "truncated upstream must not fabricate success: {event_types:?}"
         );
     }
 
@@ -5111,47 +4379,47 @@ data: {"type":"message_stop"}
     async fn rejects_private_url_images_before_connecting() {
         let relay = test_relay_service();
         let image_url = "http://127.0.0.1:9/cat.png".to_string();
-        let mut request = claude::MessagesRequest {
-            model:          "claude-sonnet-4".to_string(),
-            max_tokens:     1024,
-            system:         None,
-            cache_control:  None,
-            metadata:       None,
-            messages:       vec![claude::Message {
-                role:    "user".to_string(),
-                content: vec![
-                    claude::ContentBlock::Text {
-                        text:          "what is in this image?".to_string(),
-                        cache_control: None,
-                    },
-                    claude::ContentBlock::Image {
-                        source:        claude::ImageSource {
-                            source_type: "url".to_string(),
-                            media_type:  None,
-                            data:        None,
-                            url:         Some(image_url.clone()),
-                        },
-                        cache_control: None,
-                    },
-                ],
-            }],
-            temperature:    None,
-            top_p:          None,
-            top_k:          None,
-            stream:         Some(false),
-            tools:          None,
-            tool_choice:    None,
-            stop_sequences: Vec::new(),
-            thinking:       None,
-            output_config:  None,
-        };
+        let mut request = serde_json::json!({
+            "model": "claude-sonnet-4",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "what is in this image?"},
+                {"type": "image", "source": {"type": "url", "url": image_url}}
+            ]}]
+        });
         relay.resolve_claude_url_images(&mut request).await;
 
-        let claude::ContentBlock::Image { source, .. } = &request.messages[0].content[1] else {
-            panic!("image block should still be present");
-        };
-        assert_eq!(source.source_type, "url");
-        assert_eq!(source.url.as_deref(), Some(image_url.as_str()));
+        assert_eq!(
+            request["messages"][0]["content"][1]["source"]["type"],
+            "url"
+        );
+        assert_eq!(
+            request["messages"][0]["content"][1]["source"]["url"],
+            image_url
+        );
+    }
+
+    #[test]
+    fn claude_image_resolver_finds_nested_tool_images_but_not_documents() {
+        let mut messages = serde_json::json!([{"role": "user", "content": [
+            {"type": "image", "source": {"type": "url", "url": "https://images.example/a.png"}},
+            {"type": "tool_result", "tool_use_id": "call_1", "content": [
+                {"type": "image", "source": {"type": "url", "url": "https://images.example/b.png"}}
+            ]},
+            {"type": "document", "source": {"type": "url", "url": "https://files.example/report.pdf"}}
+        ]}]);
+        let mut sources = Vec::new();
+        claude_url_image_sources(&mut messages, &mut sources);
+        assert_eq!(sources.len(), 2);
+        for source in sources {
+            source["type"] = JsonValue::String("base64".to_string());
+        }
+        assert_eq!(messages[0]["content"][0]["source"]["type"], "base64");
+        assert_eq!(
+            messages[0]["content"][1]["content"][0]["source"]["type"],
+            "base64"
+        );
+        assert_eq!(messages[0]["content"][2]["source"]["type"], "url");
     }
 
     #[test]

@@ -1,0 +1,2107 @@
+{
+  "provenance": {
+    "repository": "https://github.com/QuantumNous/new-api",
+    "path": "relaykit",
+    "baseline_tag": "relaykit/v0.3.5",
+    "baseline_commit": "d8e65613c09adf3663f960ea4316414a99694751",
+    "target_module": "v0.3.6-0.20261030132816-c59f6fd55392",
+    "target_commit": "c59f6fd553921702cb47dacadc9731fa01548e96",
+    "latest_relaykit_path_commit": "a2defd2a8256abe039e5295bd583aeb2d02f111f",
+    "verified_repository_head": "c59f6fd553921702cb47dacadc9731fa01548e96",
+    "go_version": "go1.27.1 darwin/arm64",
+    "source_go_sha256": "c541955e1f67b4f7119913b601c1fb6ce258c13ba795b577cfb269d7fc1fba2a",
+    "oracle_sha256": "37b73d491335aaba3d7fcacdfd879d8ec0bb2ceb927f1c347d33484357bb1c3e",
+    "generated_on": "2026-10-31"
+  },
+  "cases": [
+    {
+      "case": {
+        "name": "gemini_text_with_function_call",
+        "kind": "request",
+        "from": "gemini",
+        "to": "openai",
+        "model": "upstream-model",
+        "input": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "question"
+                }
+              ]
+            },
+            {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "visible answer"
+                },
+                {
+                  "functionCall": {
+                    "id": "call_1",
+                    "name": "inspect",
+                    "args": {
+                      "x": 1
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "generationConfig": {
+            "maxOutputTokens": 4096
+          }
+        },
+        "input_json": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"question\"}]},{\"role\":\"model\",\"parts\":[{\"text\":\"visible answer\"},{\"functionCall\":{\"id\":\"call_1\",\"name\":\"inspect\",\"args\":{\"x\":1}}}]}],\"generationConfig\":{\"maxOutputTokens\":4096}}"
+      },
+      "expected": {
+        "converter": "gemini_generate_content_to_openai_chat_completions",
+        "diagnostics": null,
+        "name": "gemini_text_with_function_call",
+        "quality": "fair",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"},{\"role\":\"assistant\",\"content\":\"visible answer\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"arguments\":\"{\\\"x\\\":1}\"}}]}],\"stream\":false,\"max_tokens\":4096}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            },
+            {
+              "role": "assistant",
+              "content": "visible answer",
+              "tool_calls": [
+                {
+                  "id": "call_1",
+                  "type": "function",
+                  "function": {
+                    "name": "inspect",
+                    "arguments": "{\"x\":1}"
+                  }
+                }
+              ]
+            }
+          ],
+          "stream": false,
+          "max_tokens": 4096
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_nonstring_stop_entries_are_filtered",
+        "kind": "request",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "stop": [
+            "first",
+            42,
+            null,
+            "second",
+            false
+          ]
+        },
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"stop\":[\"first\",42,null,\"second\",false]}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "chat_nonstring_stop_entries_are_filtered",
+        "quality": "fair",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"max_tokens\":4096,\"stop_sequences\":[\"first\",\"second\"]}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "max_tokens": 4096,
+          "stop_sequences": [
+            "first",
+            "second"
+          ]
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_empty_and_nonstring_stops_do_not_panic",
+        "kind": "request",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "stop": [
+            {},
+            [],
+            7,
+            false
+          ]
+        },
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"stop\":[{},[],7,false]}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "chat_empty_and_nonstring_stops_do_not_panic",
+        "quality": "fair",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"max_tokens\":4096}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "max_tokens": 4096
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_top_level_gemini_image_config",
+        "kind": "request",
+        "from": "openai",
+        "to": "gemini",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "imageConfig": {
+            "aspectRatio": "16:9",
+            "imageSize": "2K"
+          }
+        },
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"imageConfig\":{\"aspectRatio\":\"16:9\",\"imageSize\":\"2K\"}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_gemini_generate_content",
+        "diagnostics": null,
+        "name": "chat_top_level_gemini_image_config",
+        "quality": "fair",
+        "serialized_value": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"question\"}]}],\"generationConfig\":{\"maxOutputTokens\":4096,\"imageConfig\":{\"aspectRatio\":\"16:9\",\"imageSize\":\"2K\"}}}",
+        "value": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "question"
+                }
+              ]
+            }
+          ],
+          "generationConfig": {
+            "maxOutputTokens": 4096,
+            "imageConfig": {
+              "aspectRatio": "16:9",
+              "imageSize": "2K"
+            }
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "gemini_extra_body_image_config_overrides_top_level",
+        "kind": "request",
+        "from": "openai",
+        "to": "gemini",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "imageConfig": {
+            "aspectRatio": "16:9",
+            "imageSize": "2K"
+          },
+          "extra_body": {
+            "google": {
+              "image_config": {
+                "aspect_ratio": "1:1"
+              }
+            }
+          }
+        },
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"imageConfig\":{\"aspectRatio\":\"16:9\",\"imageSize\":\"2K\"},\"extra_body\":{\"google\":{\"image_config\":{\"aspect_ratio\":\"1:1\"}}}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_gemini_generate_content",
+        "diagnostics": null,
+        "name": "gemini_extra_body_image_config_overrides_top_level",
+        "quality": "fair",
+        "serialized_value": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"question\"}]}],\"generationConfig\":{\"maxOutputTokens\":4096,\"imageConfig\":{\"aspectRatio\":\"1:1\"}}}",
+        "value": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "question"
+                }
+              ]
+            }
+          ],
+          "generationConfig": {
+            "maxOutputTokens": 4096,
+            "imageConfig": {
+              "aspectRatio": "1:1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_dto_keeps_prompt_cache_and_image_config",
+        "kind": "dto",
+        "from": "openai",
+        "to": "openai",
+        "model": "GeneralOpenAIRequest",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "prompt_cache_options": {
+            "ttl": "12h"
+          },
+          "imageConfig": {
+            "aspectRatio": "16:9"
+          }
+        },
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"prompt_cache_options\":{\"ttl\":\"12h\"},\"imageConfig\":{\"aspectRatio\":\"16:9\"}}"
+      },
+      "expected": {
+        "name": "chat_dto_keeps_prompt_cache_and_image_config",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"max_completion_tokens\":4096,\"prompt_cache_options\":{\"ttl\":\"12h\"},\"imageConfig\":{\"aspectRatio\":\"16:9\"}}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "max_completion_tokens": 4096,
+          "prompt_cache_options": {
+            "ttl": "12h"
+          },
+          "imageConfig": {
+            "aspectRatio": "16:9"
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "input_token_details_keep_cache_creation_alias_and_ttls",
+        "kind": "dto",
+        "from": "openai",
+        "to": "openai",
+        "model": "InputTokenDetails",
+        "input": {
+          "cached_tokens": 5,
+          "cache_write_tokens": 30,
+          "cached_creation_tokens": 40,
+          "cache_creation_input_tokens": 60,
+          "cache_write_tokens_details": {
+            "ttl_30m_tokens": 20,
+            "ttl_12h_tokens": 40
+          }
+        },
+        "input_json": "{\"cached_tokens\":5,\"cache_write_tokens\":30,\"cached_creation_tokens\":40,\"cache_creation_input_tokens\":60,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":20,\"ttl_12h_tokens\":40}}"
+      },
+      "expected": {
+        "name": "input_token_details_keep_cache_creation_alias_and_ttls",
+        "serialized_value": "{\"cached_tokens\":5,\"cached_creation_tokens\":40,\"cache_write_tokens\":30,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":20,\"ttl_12h_tokens\":40},\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"cache_creation_input_tokens\":60}",
+        "value": {
+          "cached_tokens": 5,
+          "cached_creation_tokens": 40,
+          "cache_write_tokens": 30,
+          "cache_write_tokens_details": {
+            "ttl_30m_tokens": 20,
+            "ttl_12h_tokens": 40
+          },
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "cache_creation_input_tokens": 60
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_chat_to_claude",
+        "kind": "request",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "inspect",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "zeta": {
+                      "type": "string"
+                    },
+                    "alpha": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "zeta",
+                    "alpha"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "raw_pointer": "/tools/0/input_schema/properties",
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}}]}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "schema_order_chat_to_claude",
+        "quality": "fair",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"max_tokens\":4096,\"tools\":[{\"name\":\"inspect\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}]}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "max_tokens": 4096,
+          "tools": [
+            {
+              "name": "inspect",
+              "input_schema": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_chat_to_responses_format",
+        "kind": "request",
+        "from": "openai",
+        "to": "openai_responses",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_completion_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          }
+        },
+        "raw_pointer": "/text/format/schema/properties",
+        "input_json": "{\"model\":\"upstream-model\",\"max_completion_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"reply\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_openai_responses",
+        "diagnostics": null,
+        "name": "schema_order_chat_to_responses_format",
+        "quality": "good",
+        "serialized_value": "{\"model\":\"upstream-model\",\"input\":[{\"content\":\"question\",\"role\":\"user\"}],\"max_output_tokens\":4096,\"text\":{\"format\":{\"name\":\"reply\",\"schema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]},\"strict\":true,\"type\":\"json_schema\"}}}",
+        "value": {
+          "model": "upstream-model",
+          "input": [
+            {
+              "content": "question",
+              "role": "user"
+            }
+          ],
+          "max_output_tokens": 4096,
+          "text": {
+            "format": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              },
+              "strict": true,
+              "type": "json_schema"
+            }
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_responses_to_chat_tools",
+        "kind": "request",
+        "from": "openai_responses",
+        "to": "openai",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "input": "question",
+          "tools": [
+            {
+              "type": "function",
+              "name": "inspect",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          ]
+        },
+        "raw_pointer": "/tools/0/function/parameters/properties",
+        "input_json": "{\"model\":\"upstream-model\",\"input\":\"question\",\"tools\":[{\"type\":\"function\",\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}]}"
+      },
+      "expected": {
+        "converter": "openai_responses_to_openai_chat_completions",
+        "diagnostics": null,
+        "name": "schema_order_responses_to_chat_tools",
+        "quality": "good",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}}]}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "inspect",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "zeta": {
+                      "type": "string"
+                    },
+                    "alpha": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "zeta",
+                    "alpha"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_responses_to_chat_format",
+        "kind": "request",
+        "from": "openai_responses",
+        "to": "openai",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "input": "question",
+          "text": {
+            "format": {
+              "type": "json_schema",
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          }
+        },
+        "raw_pointer": "/response_format/json_schema/schema/properties",
+        "input_json": "{\"model\":\"upstream-model\",\"input\":\"question\",\"text\":{\"format\":{\"type\":\"json_schema\",\"name\":\"reply\",\"schema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}}}"
+      },
+      "expected": {
+        "converter": "openai_responses_to_openai_chat_completions",
+        "diagnostics": null,
+        "name": "schema_order_responses_to_chat_format",
+        "quality": "good",
+        "serialized_value": "{\"model\":\"upstream-model\",\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"type\":\"json_schema\",\"name\":\"reply\",\"schema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}}}",
+        "value": {
+          "model": "upstream-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "type": "json_schema",
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_claude_to_responses",
+        "kind": "request",
+        "from": "claude",
+        "to": "openai_responses",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_tokens": 4096,
+          "messages": [
+            {
+              "role": "user",
+              "content": "question"
+            }
+          ],
+          "tools": [
+            {
+              "name": "inspect",
+              "input_schema": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          ]
+        },
+        "raw_pointer": "/tools/0/parameters/properties",
+        "input_json": "{\"model\":\"upstream-model\",\"max_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"question\"}],\"tools\":[{\"name\":\"inspect\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}]}"
+      },
+      "expected": {
+        "converter": "claude_messages_to_openai_responses",
+        "diagnostics": null,
+        "name": "schema_order_claude_to_responses",
+        "quality": "fair",
+        "serialized_value": "{\"model\":\"upstream-model\",\"input\":[{\"content\":\"question\",\"role\":\"user\"}],\"max_output_tokens\":4096,\"tools\":[{\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]},\"type\":\"function\"}]}",
+        "value": {
+          "model": "upstream-model",
+          "input": [
+            {
+              "content": "question",
+              "role": "user"
+            }
+          ],
+          "max_output_tokens": 4096,
+          "tools": [
+            {
+              "name": "inspect",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              },
+              "type": "function"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_responses_to_gemini_json_schema",
+        "kind": "request",
+        "from": "openai_responses",
+        "to": "gemini",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_output_tokens": 4096,
+          "input": "question",
+          "tools": [
+            {
+              "type": "function",
+              "name": "inspect",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          ]
+        },
+        "supports_json_schema": true,
+        "raw_pointer": "/tools/0/functionDeclarations/0/parametersJsonSchema/properties",
+        "input_json": "{\"model\":\"upstream-model\",\"max_output_tokens\":4096,\"input\":\"question\",\"tools\":[{\"type\":\"function\",\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"number\"}]},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}]}"
+      },
+      "expected": {
+        "converter": "openai_responses_to_gemini_generate_content",
+        "diagnostics": null,
+        "name": "schema_order_responses_to_gemini_json_schema",
+        "quality": "fair",
+        "serialized_value": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"question\"}]}],\"generationConfig\":{\"maxOutputTokens\":4096},\"tools\":[{\"functionDeclarations\":[{\"name\":\"inspect\",\"parametersJsonSchema\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"number\"}]},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}]}]}",
+        "value": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "question"
+                }
+              ]
+            }
+          ],
+          "generationConfig": {
+            "maxOutputTokens": 4096
+          },
+          "tools": [
+            {
+              "functionDeclarations": [
+                {
+                  "name": "inspect",
+                  "parametersJsonSchema": {
+                    "type": "object",
+                    "properties": {
+                      "zeta": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "alpha": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "zeta",
+                      "alpha"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "function_parameters_null_remain_omitted",
+        "kind": "dto",
+        "from": "openai",
+        "to": "openai",
+        "model": "FunctionRequest",
+        "input": {
+          "name": "inspect",
+          "parameters": null
+        },
+        "input_json": "{\"name\":\"inspect\",\"parameters\":null}"
+      },
+      "expected": {
+        "name": "function_parameters_null_remain_omitted",
+        "serialized_value": "{\"name\":\"inspect\"}",
+        "value": {
+          "name": "inspect"
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "claude_tools_null_remain_omitted",
+        "kind": "dto",
+        "from": "claude",
+        "to": "claude",
+        "model": "ClaudeRequest",
+        "input": {
+          "model": "upstream-model",
+          "tools": null
+        },
+        "input_json": "{\"model\":\"upstream-model\",\"tools\":null}"
+      },
+      "expected": {
+        "name": "claude_tools_null_remain_omitted",
+        "serialized_value": "{\"model\":\"upstream-model\"}",
+        "value": {
+          "model": "upstream-model"
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_to_claude_tool_input_number_lexemes",
+        "kind": "response",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "id": "chat_fixed",
+          "object": "chat.completion",
+          "created": 123,
+          "model": "upstream-model",
+          "choices": [
+            {
+              "index": 0,
+              "finish_reason": "tool_calls",
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                      "name": "inspect",
+                      "arguments": "{\"integer\":9007199254740993,\"maximum\":18446744073709551615,\"huge\":1000000000000000000000000000001,\"decimal\":0.0000000000001234567890123456789}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "raw_pointer": "/content/0/input",
+        "input_json": "{\"id\":\"chat_fixed\",\"object\":\"chat.completion\",\"created\":123,\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"arguments\":\"{\\\"integer\\\":9007199254740993,\\\"maximum\\\":18446744073709551615,\\\"huge\\\":1000000000000000000000000000001,\\\"decimal\\\":0.0000000000001234567890123456789}\"}}]}}]}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "chat_to_claude_tool_input_number_lexemes",
+        "quality": "fair",
+        "serialized_value": "{\"id\":\"chat_fixed\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"inspect\",\"input\":{\"decimal\":0.0000000000001234567890123456789,\"huge\":1000000000000000000000000000001,\"integer\":9007199254740993,\"maximum\":18446744073709551615}}],\"stop_reason\":\"tool_use\",\"model\":\"upstream-model\",\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": {
+          "id": "chat_fixed",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call_1",
+              "name": "inspect",
+              "input": {
+                "decimal": 1.234567890123457e-13,
+                "huge": 1000000000000000000000000000001,
+                "integer": 9007199254740993,
+                "maximum": 18446744073709551615
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "model": "upstream-model",
+          "usage": {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "cache_creation_alias_wins_without_double_counting",
+        "kind": "response",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "id": "chat_fixed",
+          "object": "chat.completion",
+          "created": 123,
+          "model": "upstream-model",
+          "choices": [
+            {
+              "index": 0,
+              "finish_reason": "stop",
+              "message": {
+                "role": "assistant",
+                "content": "answer"
+              }
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 200,
+            "completion_tokens": 10,
+            "total_tokens": 210,
+            "prompt_tokens_details": {
+              "cached_tokens": 20,
+              "cached_creation_tokens": 40,
+              "cache_write_tokens": 30,
+              "cache_creation_input_tokens": 60,
+              "cache_write_tokens_details": {
+                "ttl_30m_tokens": 20,
+                "ttl_12h_tokens": 40
+              }
+            }
+          }
+        },
+        "input_json": "{\"id\":\"chat_fixed\",\"object\":\"chat.completion\",\"created\":123,\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"answer\"}}],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"prompt_tokens_details\":{\"cached_tokens\":20,\"cached_creation_tokens\":40,\"cache_write_tokens\":30,\"cache_creation_input_tokens\":60,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":20,\"ttl_12h_tokens\":40}}}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "cache_creation_alias_wins_without_double_counting",
+        "quality": "fair",
+        "serialized_value": "{\"id\":\"chat_fixed\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"model\":\"upstream-model\",\"usage\":{\"input_tokens\":120,\"cache_creation_input_tokens\":60,\"cache_read_input_tokens\":20,\"output_tokens\":10,\"cache_creation\":{\"ephemeral_5m_input_tokens\":40},\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0,\"billing_usage\":{\"source\":\"oai_chat\",\"semantic\":\"openai\",\"openai_usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"prompt_tokens_details\":{\"cached_tokens\":20,\"cached_creation_tokens\":40,\"cache_write_tokens\":30,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":20,\"ttl_12h_tokens\":40},\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"cache_creation_input_tokens\":60},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}}}",
+        "usage": {
+          "prompt_tokens": 200,
+          "completion_tokens": 10,
+          "total_tokens": 210,
+          "billing_usage": {
+            "source": "oai_chat",
+            "semantic": "openai",
+            "openai_usage": {
+              "prompt_tokens": 200,
+              "completion_tokens": 10,
+              "total_tokens": 210,
+              "prompt_tokens_details": {
+                "cached_tokens": 20,
+                "cached_creation_tokens": 40,
+                "cache_write_tokens": 30,
+                "cache_write_tokens_details": {
+                  "ttl_30m_tokens": 20,
+                  "ttl_12h_tokens": 40
+                },
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "cache_creation_input_tokens": 60
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 200,
+          "output_tokens": 10,
+          "input_tokens_details": {
+            "cached_tokens": 20,
+            "cached_creation_tokens": 40,
+            "cache_write_tokens": 30,
+            "cache_write_tokens_details": {
+              "ttl_30m_tokens": 20,
+              "ttl_12h_tokens": 40
+            },
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "cache_creation_input_tokens": 60
+          },
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": {
+          "id": "chat_fixed",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "model": "upstream-model",
+          "usage": {
+            "input_tokens": 120,
+            "cache_creation_input_tokens": 60,
+            "cache_read_input_tokens": 20,
+            "output_tokens": 10,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 40
+            },
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0,
+            "billing_usage": {
+              "source": "oai_chat",
+              "semantic": "openai",
+              "openai_usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 10,
+                "total_tokens": 210,
+                "prompt_tokens_details": {
+                  "cached_tokens": 20,
+                  "cached_creation_tokens": 40,
+                  "cache_write_tokens": 30,
+                  "cache_write_tokens_details": {
+                    "ttl_30m_tokens": 20,
+                    "ttl_12h_tokens": 40
+                  },
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "cache_creation_input_tokens": 60
+                },
+                "completion_tokens_details": {
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "reasoning_tokens": 0
+                },
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "input_tokens_details": null,
+                "claude_cache_creation_5_m_tokens": 0,
+                "claude_cache_creation_1_h_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "cache_creation_alias_is_clamped_not_added",
+        "kind": "response",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "id": "chat_fixed",
+          "object": "chat.completion",
+          "created": 123,
+          "model": "upstream-model",
+          "choices": [
+            {
+              "index": 0,
+              "finish_reason": "stop",
+              "message": {
+                "role": "assistant",
+                "content": "answer"
+              }
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 200,
+            "completion_tokens": 10,
+            "total_tokens": 210,
+            "prompt_tokens_details": {
+              "cached_tokens": 20,
+              "cached_creation_tokens": -5,
+              "cache_write_tokens": -10,
+              "cache_creation_input_tokens": -30
+            }
+          }
+        },
+        "input_json": "{\"id\":\"chat_fixed\",\"object\":\"chat.completion\",\"created\":123,\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"answer\"}}],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"prompt_tokens_details\":{\"cached_tokens\":20,\"cached_creation_tokens\":-5,\"cache_write_tokens\":-10,\"cache_creation_input_tokens\":-30}}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "cache_creation_alias_is_clamped_not_added",
+        "quality": "fair",
+        "serialized_value": "{\"id\":\"chat_fixed\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}],\"stop_reason\":\"end_turn\",\"model\":\"upstream-model\",\"usage\":{\"input_tokens\":180,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":20,\"output_tokens\":10,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0,\"billing_usage\":{\"source\":\"oai_chat\",\"semantic\":\"openai\",\"openai_usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"prompt_tokens_details\":{\"cached_tokens\":20,\"cached_creation_tokens\":-5,\"cache_write_tokens\":-10,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"cache_creation_input_tokens\":-30},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}}}",
+        "usage": {
+          "prompt_tokens": 200,
+          "completion_tokens": 10,
+          "total_tokens": 210,
+          "billing_usage": {
+            "source": "oai_chat",
+            "semantic": "openai",
+            "openai_usage": {
+              "prompt_tokens": 200,
+              "completion_tokens": 10,
+              "total_tokens": 210,
+              "prompt_tokens_details": {
+                "cached_tokens": 20,
+                "cached_creation_tokens": -5,
+                "cache_write_tokens": -10,
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "cache_creation_input_tokens": -30
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 200,
+          "output_tokens": 10,
+          "input_tokens_details": {
+            "cached_tokens": 20,
+            "cached_creation_tokens": -5,
+            "cache_write_tokens": -10,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "cache_creation_input_tokens": -30
+          },
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": {
+          "id": "chat_fixed",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "model": "upstream-model",
+          "usage": {
+            "input_tokens": 180,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 20,
+            "output_tokens": 10,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0,
+            "billing_usage": {
+              "source": "oai_chat",
+              "semantic": "openai",
+              "openai_usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 10,
+                "total_tokens": 210,
+                "prompt_tokens_details": {
+                  "cached_tokens": 20,
+                  "cached_creation_tokens": -5,
+                  "cache_write_tokens": -10,
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "cache_creation_input_tokens": -30
+                },
+                "completion_tokens_details": {
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "reasoning_tokens": 0
+                },
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "input_tokens_details": null,
+                "claude_cache_creation_5_m_tokens": 0,
+                "claude_cache_creation_1_h_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_cache_creation_only_details_reach_responses",
+        "kind": "response",
+        "from": "openai",
+        "to": "openai_responses",
+        "model": "upstream-model",
+        "input": {
+          "id": "chat_fixed",
+          "object": "chat.completion",
+          "created": 123,
+          "model": "upstream-model",
+          "choices": [
+            {
+              "index": 0,
+              "finish_reason": "stop",
+              "message": {
+                "role": "assistant",
+                "content": "answer"
+              }
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 200,
+            "completion_tokens": 10,
+            "total_tokens": 210,
+            "prompt_tokens_details": {
+              "cache_creation_input_tokens": 60
+            }
+          }
+        },
+        "input_json": "{\"id\":\"chat_fixed\",\"object\":\"chat.completion\",\"created\":123,\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"answer\"}}],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"prompt_tokens_details\":{\"cache_creation_input_tokens\":60}}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_openai_responses",
+        "diagnostics": null,
+        "name": "chat_cache_creation_only_details_reach_responses",
+        "quality": "good",
+        "serialized_value": "{\"id\":\"chat_fixed\",\"object\":\"response\",\"created_at\":123,\"status\":\"completed\",\"instructions\":null,\"max_output_tokens\":0,\"model\":\"upstream-model\",\"output\":[{\"type\":\"message\",\"id\":\"chat_fixed_msg_0\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}],\"quality\":\"\",\"size\":\"\"}],\"parallel_tool_calls\":false,\"previous_response_id\":null,\"reasoning\":null,\"store\":false,\"temperature\":0,\"tool_choice\":null,\"tools\":null,\"top_p\":0,\"truncation\":null,\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"billing_usage\":{\"source\":\"oai_chat\",\"semantic\":\"openai\",\"openai_usage\":{\"prompt_tokens\":200,\"completion_tokens\":10,\"total_tokens\":210,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"cache_creation_input_tokens\":60},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":200,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"cache_creation_input_tokens\":60},\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0},\"user\":null,\"metadata\":null}",
+        "usage": {
+          "prompt_tokens": 200,
+          "completion_tokens": 10,
+          "total_tokens": 210,
+          "billing_usage": {
+            "source": "oai_chat",
+            "semantic": "openai",
+            "openai_usage": {
+              "prompt_tokens": 200,
+              "completion_tokens": 10,
+              "total_tokens": 210,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "cache_creation_input_tokens": 60
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 200,
+          "output_tokens": 10,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "cache_creation_input_tokens": 60
+          },
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": {
+          "id": "chat_fixed",
+          "object": "response",
+          "created_at": 123,
+          "status": "completed",
+          "instructions": null,
+          "max_output_tokens": 0,
+          "model": "upstream-model",
+          "output": [
+            {
+              "type": "message",
+              "id": "chat_fixed_msg_0",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "answer",
+                  "annotations": []
+                }
+              ],
+              "quality": "",
+              "size": ""
+            }
+          ],
+          "parallel_tool_calls": false,
+          "previous_response_id": null,
+          "reasoning": null,
+          "store": false,
+          "temperature": 0,
+          "tool_choice": null,
+          "tools": null,
+          "top_p": 0,
+          "truncation": null,
+          "usage": {
+            "prompt_tokens": 200,
+            "completion_tokens": 10,
+            "total_tokens": 210,
+            "billing_usage": {
+              "source": "oai_chat",
+              "semantic": "openai",
+              "openai_usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 10,
+                "total_tokens": 210,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "cache_creation_input_tokens": 60
+                },
+                "completion_tokens_details": {
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "reasoning_tokens": 0
+                },
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "input_tokens_details": null,
+                "claude_cache_creation_5_m_tokens": 0,
+                "claude_cache_creation_1_h_tokens": 0
+              }
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 200,
+            "output_tokens": 10,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "cache_creation_input_tokens": 60
+            },
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          },
+          "user": null,
+          "metadata": null
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "cache_write_lifetime_details_create_native_billing_usage",
+        "kind": "response",
+        "from": "openai",
+        "to": "openai_responses",
+        "model": "upstream-model",
+        "input": {
+          "id": "chat_fixed",
+          "object": "chat.completion",
+          "created": 123,
+          "model": "upstream-model",
+          "choices": [
+            {
+              "index": 0,
+              "finish_reason": "stop",
+              "message": {
+                "role": "assistant",
+                "content": "answer"
+              }
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cache_write_tokens_details": {
+                "ttl_30m_tokens": 7,
+                "ttl_12h_tokens": 9
+              }
+            }
+          }
+        },
+        "input_json": "{\"id\":\"chat_fixed\",\"object\":\"chat.completion\",\"created\":123,\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"answer\"}}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cache_write_tokens_details\":{\"ttl_30m_tokens\":7,\"ttl_12h_tokens\":9}}}}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_openai_responses",
+        "diagnostics": null,
+        "name": "cache_write_lifetime_details_create_native_billing_usage",
+        "quality": "good",
+        "serialized_value": "{\"id\":\"chat_fixed\",\"object\":\"response\",\"created_at\":123,\"status\":\"completed\",\"instructions\":null,\"max_output_tokens\":0,\"model\":\"upstream-model\",\"output\":[{\"type\":\"message\",\"id\":\"chat_fixed_msg_0\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}],\"quality\":\"\",\"size\":\"\"}],\"parallel_tool_calls\":false,\"previous_response_id\":null,\"reasoning\":null,\"store\":false,\"temperature\":0,\"tool_choice\":null,\"tools\":null,\"top_p\":0,\"truncation\":null,\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"billing_usage\":{\"source\":\"oai_chat\",\"semantic\":\"openai\",\"openai_usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":7,\"ttl_12h_tokens\":9},\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0},\"user\":null,\"metadata\":null}",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "billing_usage": {
+            "source": "oai_chat",
+            "semantic": "openai",
+            "openai_usage": {
+              "prompt_tokens": 0,
+              "completion_tokens": 0,
+              "total_tokens": 0,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens_details": {
+                  "ttl_30m_tokens": 7,
+                  "ttl_12h_tokens": 9
+                },
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": {
+          "id": "chat_fixed",
+          "object": "response",
+          "created_at": 123,
+          "status": "completed",
+          "instructions": null,
+          "max_output_tokens": 0,
+          "model": "upstream-model",
+          "output": [
+            {
+              "type": "message",
+              "id": "chat_fixed_msg_0",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "answer",
+                  "annotations": []
+                }
+              ],
+              "quality": "",
+              "size": ""
+            }
+          ],
+          "parallel_tool_calls": false,
+          "previous_response_id": null,
+          "reasoning": null,
+          "store": false,
+          "temperature": 0,
+          "tool_choice": null,
+          "tools": null,
+          "top_p": 0,
+          "truncation": null,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "billing_usage": {
+              "source": "oai_chat",
+              "semantic": "openai",
+              "openai_usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens_details": {
+                    "ttl_30m_tokens": 7,
+                    "ttl_12h_tokens": 9
+                  },
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "text_tokens": 0,
+                  "audio_tokens": 0,
+                  "image_tokens": 0,
+                  "reasoning_tokens": 0
+                },
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "input_tokens_details": null,
+                "claude_cache_creation_5_m_tokens": 0,
+                "claude_cache_creation_1_h_tokens": 0
+              }
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          },
+          "user": null,
+          "metadata": null
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "stream_cache_write_lifetimes_merge_nonzero_snapshots",
+        "kind": "stream",
+        "from": "openai",
+        "to": "openai_responses",
+        "model": "upstream-model",
+        "input": {},
+        "chunks": [
+          {
+            "id": "chat_fixed",
+            "object": "chat.completion.chunk",
+            "created": 123,
+            "model": "upstream-model",
+            "choices": [],
+            "usage": {
+              "prompt_tokens": 200,
+              "completion_tokens": 10,
+              "total_tokens": 210,
+              "prompt_tokens_details": {
+                "cache_write_tokens": 40,
+                "cache_creation_input_tokens": 60,
+                "cache_write_tokens_details": {
+                  "ttl_30m_tokens": 20,
+                  "ttl_12h_tokens": 40
+                }
+              }
+            }
+          },
+          {
+            "id": "chat_fixed",
+            "object": "chat.completion.chunk",
+            "created": 123,
+            "model": "upstream-model",
+            "choices": [],
+            "usage": {
+              "prompt_tokens_details": {
+                "cache_write_tokens_details": {
+                  "ttl_30m_tokens": 0,
+                  "ttl_12h_tokens": 50
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "diagnostics": null,
+        "name": "stream_cache_write_lifetimes_merge_nonzero_snapshots",
+        "serialized_value": "[{\"Type\":\"response.created\",\"Payload\":{\"type\":\"response.created\",\"response\":{\"id\":\"stream_fixed\",\"object\":\"response\",\"created_at\":1793382412,\"status\":\"in_progress\",\"instructions\":null,\"max_output_tokens\":0,\"model\":\"stream-model\",\"output\":[],\"parallel_tool_calls\":false,\"previous_response_id\":null,\"reasoning\":null,\"store\":false,\"temperature\":0,\"tool_choice\":null,\"tools\":null,\"top_p\":0,\"truncation\":null,\"usage\":null,\"user\":null,\"metadata\":null}}},{\"Type\":\"response.completed\",\"Payload\":{\"type\":\"response.completed\",\"response\":{\"id\":\"stream_fixed\",\"object\":\"response\",\"created_at\":1793382412,\"status\":\"completed\",\"instructions\":null,\"max_output_tokens\":0,\"model\":\"stream-model\",\"output\":[],\"parallel_tool_calls\":false,\"previous_response_id\":null,\"reasoning\":null,\"store\":false,\"temperature\":0,\"tool_choice\":null,\"tools\":null,\"top_p\":0,\"truncation\":null,\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"billing_usage\":{\"source\":\"oai_chat\",\"semantic\":\"openai\",\"openai_usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":0,\"ttl_12h_tokens\":50},\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0},\"user\":null,\"metadata\":null}}}]",
+        "usage": {
+          "prompt_tokens": 200,
+          "completion_tokens": 10,
+          "total_tokens": 210,
+          "billing_usage": {
+            "source": "oai_chat",
+            "semantic": "openai",
+            "openai_usage": {
+              "prompt_tokens": 200,
+              "completion_tokens": 10,
+              "total_tokens": 210,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 40,
+                "cache_write_tokens_details": {
+                  "ttl_30m_tokens": 20,
+                  "ttl_12h_tokens": 50
+                },
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "cache_creation_input_tokens": 60
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 200,
+          "output_tokens": 10,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 40,
+            "cache_write_tokens_details": {
+              "ttl_30m_tokens": 20,
+              "ttl_12h_tokens": 40
+            },
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "cache_creation_input_tokens": 60
+          },
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": [
+          {
+            "Type": "response.created",
+            "Payload": {
+              "type": "response.created",
+              "response": {
+                "id": "stream_fixed",
+                "object": "response",
+                "created_at": 1793382412,
+                "status": "in_progress",
+                "instructions": null,
+                "max_output_tokens": 0,
+                "model": "stream-model",
+                "output": [],
+                "parallel_tool_calls": false,
+                "previous_response_id": null,
+                "reasoning": null,
+                "store": false,
+                "temperature": 0,
+                "tool_choice": null,
+                "tools": null,
+                "top_p": 0,
+                "truncation": null,
+                "usage": null,
+                "user": null,
+                "metadata": null
+              }
+            }
+          },
+          {
+            "Type": "response.completed",
+            "Payload": {
+              "type": "response.completed",
+              "response": {
+                "id": "stream_fixed",
+                "object": "response",
+                "created_at": 1793382412,
+                "status": "completed",
+                "instructions": null,
+                "max_output_tokens": 0,
+                "model": "stream-model",
+                "output": [],
+                "parallel_tool_calls": false,
+                "previous_response_id": null,
+                "reasoning": null,
+                "store": false,
+                "temperature": 0,
+                "tool_choice": null,
+                "tools": null,
+                "top_p": 0,
+                "truncation": null,
+                "usage": {
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "total_tokens": 0,
+                  "billing_usage": {
+                    "source": "oai_chat",
+                    "semantic": "openai",
+                    "openai_usage": {
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "total_tokens": 0,
+                      "prompt_tokens_details": {
+                        "cached_tokens": 0,
+                        "cache_write_tokens_details": {
+                          "ttl_30m_tokens": 0,
+                          "ttl_12h_tokens": 50
+                        },
+                        "text_tokens": 0,
+                        "audio_tokens": 0,
+                        "image_tokens": 0
+                      },
+                      "completion_tokens_details": {
+                        "text_tokens": 0,
+                        "audio_tokens": 0,
+                        "image_tokens": 0,
+                        "reasoning_tokens": 0
+                      },
+                      "input_tokens": 0,
+                      "output_tokens": 0,
+                      "input_tokens_details": null,
+                      "claude_cache_creation_5_m_tokens": 0,
+                      "claude_cache_creation_1_h_tokens": 0
+                    }
+                  },
+                  "prompt_tokens_details": {
+                    "cached_tokens": 0,
+                    "text_tokens": 0,
+                    "audio_tokens": 0,
+                    "image_tokens": 0
+                  },
+                  "completion_tokens_details": {
+                    "text_tokens": 0,
+                    "audio_tokens": 0,
+                    "image_tokens": 0,
+                    "reasoning_tokens": 0
+                  },
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "input_tokens_details": null,
+                  "claude_cache_creation_5_m_tokens": 0,
+                  "claude_cache_creation_1_h_tokens": 0
+                },
+                "user": null,
+                "metadata": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case": {
+        "name": "schema_order_responses_to_gemini_typed_schema",
+        "kind": "request",
+        "from": "openai_responses",
+        "to": "gemini",
+        "model": "upstream-model",
+        "input": {
+          "model": "upstream-model",
+          "max_output_tokens": 4096,
+          "input": "question",
+          "tools": [
+            {
+              "type": "function",
+              "name": "inspect",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "zeta": {
+                    "type": "string"
+                  },
+                  "alpha": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "zeta",
+                  "alpha"
+                ]
+              }
+            }
+          ]
+        },
+        "supports_json_schema": true,
+        "input_json": "{\"model\":\"upstream-model\",\"max_output_tokens\":4096,\"input\":\"question\",\"tools\":[{\"type\":\"function\",\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"}},\"required\":[\"zeta\",\"alpha\"]}}]}"
+      },
+      "expected": {
+        "converter": "openai_responses_to_gemini_generate_content",
+        "diagnostics": null,
+        "name": "schema_order_responses_to_gemini_typed_schema",
+        "quality": "fair",
+        "serialized_value": "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"question\"}]}],\"generationConfig\":{\"maxOutputTokens\":4096},\"tools\":[{\"functionDeclarations\":[{\"name\":\"inspect\",\"parameters\":{\"properties\":{\"alpha\":{\"type\":\"INTEGER\"},\"zeta\":{\"type\":\"STRING\"}},\"required\":[\"zeta\",\"alpha\"],\"type\":\"OBJECT\"}}]}]}",
+        "value": {
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "question"
+                }
+              ]
+            }
+          ],
+          "generationConfig": {
+            "maxOutputTokens": 4096
+          },
+          "tools": [
+            {
+              "functionDeclarations": [
+                {
+                  "name": "inspect",
+                  "parameters": {
+                    "properties": {
+                      "alpha": {
+                        "type": "INTEGER"
+                      },
+                      "zeta": {
+                        "type": "STRING"
+                      }
+                    },
+                    "required": [
+                      "zeta",
+                      "alpha"
+                    ],
+                    "type": "OBJECT"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case": {
+        "name": "chat_to_claude_nested_tool_input_raw_values",
+        "kind": "response",
+        "from": "openai",
+        "to": "claude",
+        "model": "upstream-model",
+        "input": {
+          "id": "chat_fixed",
+          "object": "chat.completion",
+          "created": 123,
+          "model": "upstream-model",
+          "choices": [
+            {
+              "index": 0,
+              "finish_reason": "tool_calls",
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                      "name": "inspect",
+                      "arguments": "{\"z\":{\"nested\":{\"zeta\":2.0,\"alpha\":1e-20},\"order\":[\"a\",\"b\"]},\"a\":[9007199254740993]}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "raw_pointer": "/content/0/input",
+        "input_json": "{\"id\":\"chat_fixed\",\"object\":\"chat.completion\",\"created\":123,\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"arguments\":\"{\\\"z\\\":{\\\"nested\\\":{\\\"zeta\\\":2.0,\\\"alpha\\\":1e-20},\\\"order\\\":[\\\"a\\\",\\\"b\\\"]},\\\"a\\\":[9007199254740993]}\"}}]}}]}"
+      },
+      "expected": {
+        "converter": "openai_chat_completions_to_anthropic_messages",
+        "diagnostics": null,
+        "name": "chat_to_claude_nested_tool_input_raw_values",
+        "quality": "fair",
+        "serialized_value": "{\"id\":\"chat_fixed\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"inspect\",\"input\":{\"a\":[9007199254740993],\"z\":{\"nested\":{\"zeta\":2.0,\"alpha\":1e-20},\"order\":[\"a\",\"b\"]}}}],\"stop_reason\":\"tool_use\",\"model\":\"upstream-model\",\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        },
+        "value": {
+          "id": "chat_fixed",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call_1",
+              "name": "inspect",
+              "input": {
+                "a": [
+                  9007199254740993
+                ],
+                "z": {
+                  "nested": {
+                    "zeta": 2.0,
+                    "alpha": 1e-20
+                  },
+                  "order": [
+                    "a",
+                    "b"
+                  ]
+                }
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "model": "upstream-model",
+          "usage": {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      }
+    }
+  ]
+}

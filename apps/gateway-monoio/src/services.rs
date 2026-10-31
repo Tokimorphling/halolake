@@ -110,7 +110,15 @@ where
     type Error = Infallible;
 
     async fn call(&self, (req, cx): (GatewayRequest, CX)) -> Result<Self::Response, Self::Error> {
-        let openai_req: openai::ChatCompletionRequest = match serde_json::from_slice(&req.body) {
+        let openai_req = match serde_json::from_slice(&req.body)
+            .map_err(halolake_protocol::relaykit::Error::from)
+            .and_then(|value| {
+                halolake_protocol::relaykit::Request::from_value(
+                    halolake_protocol::relaykit::Format::OpenAi,
+                    value,
+                )
+            })
+        {
             Ok(req) => req,
             Err(err) => {
                 return Ok(json_error(
@@ -120,6 +128,15 @@ where
                 ));
             }
         };
+        let value = openai_req.as_value();
+        let Some(model) = value.get("model").and_then(JsonValue::as_str) else {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "OpenAI chat request model must be a string",
+            ));
+        };
+        let stream = value.get("stream").and_then(JsonValue::as_bool).unwrap_or(false);
         let tokens = match self.router.extract_tokens(&req.headers) {
             Some(tokens) => tokens,
             None => {
@@ -132,7 +149,7 @@ where
         };
         let lookup = RouteLookup {
             tokens,
-            requested_model: openai_req.model.clone().into(),
+            requested_model: model.to_string().into(),
             path: req.path.clone(),
             headers: req.headers.clone(),
             body: req.body.clone(),
@@ -148,13 +165,10 @@ where
             .param_set(route.route.clone());
         let reserved_quota = match reserve_request_quota(
             &self.usage,
-            &usage_event_parts(&reserve_cx, openai_req.is_stream()),
+            &usage_event_parts(&reserve_cx, stream),
             &req.body,
-            // Reuse the typed parse instead of re-parsing the raw body.
-            openai_req
-                .max_completion_tokens
-                .map(u64::from)
-                .max(openai_req.max_tokens.map(u64::from)),
+            value.get("max_completion_tokens").and_then(JsonValue::as_u64)
+                .max(value.get("max_tokens").and_then(JsonValue::as_u64)),
         )
         .await
         {
@@ -169,11 +183,11 @@ where
                 .clone()
                 .param_set(route.auth.clone())
                 .param_set(route.route.clone());
-            let attempt_usage = usage_event_parts(&attempt_cx, openai_req.is_stream());
+            let attempt_usage = usage_event_parts(&attempt_cx, stream);
             let response = self
                 .relay
                 .call(OpenAiChatRelayRequest {
-                    request:            openai_req.clone(),
+                    stream,
                     raw_body:           req.body.clone(),
                     downstream_headers: req.headers.clone(),
                     cx:                 attempt_cx,
@@ -207,7 +221,7 @@ where
             .clone()
             .param_set(route.auth.clone())
             .param_set(route.route.clone());
-        let mut usage = usage_event_parts(&final_cx, openai_req.is_stream());
+        let mut usage = usage_event_parts(&final_cx, stream);
         usage.pre_consumed_quota = reserved_quota;
         let affinity = route.affinity.clone();
         let affinity_channel_id = route.route.channel_id.clone();
@@ -1316,6 +1330,9 @@ fn wrap_streaming_usage_body(
                 }
             }
         }
+        if collector.failed() && status == UsageStatus::Success {
+            status = UsageStatus::UpstreamError;
+        }
         let usage = collector.usage();
         let latency_ms = started.elapsed().as_millis() as u64;
         let http_status = match status {
@@ -1364,12 +1381,22 @@ fn wrap_streaming_usage_body(
 struct SseUsageCollector {
     decoder: SseBuffer,
     usage:   Option<ResponseUsage>,
+    failed:  bool,
 }
 
 impl SseUsageCollector {
     fn push(&mut self, bytes: &[u8]) {
         let usage = &mut self.usage;
+        let failed = &mut self.failed;
         self.decoder.for_each_payload(bytes, false, |payload| {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload)
+                && (matches!(value["type"].as_str(), Some("error" | "response.failed"))
+                    || value.get("error").is_some_and(|error| !error.is_null())
+                    || value.pointer("/response/status").and_then(serde_json::Value::as_str)
+                        == Some("failed"))
+            {
+                *failed = true;
+            }
             if !may_contain_response_usage(payload) {
                 return;
             }
@@ -1381,6 +1408,10 @@ impl SseUsageCollector {
 
     fn usage(&self) -> Option<ResponseUsage> {
         self.usage
+    }
+
+    fn failed(&self) -> bool {
+        self.failed
     }
 }
 
@@ -1583,6 +1614,15 @@ mod tests {
                 audio_tokens:          None,
             })
         );
+    }
+
+    #[test]
+    fn sse_usage_collector_marks_protocol_failure_events() {
+        let mut collector = SseUsageCollector::default();
+        collector.push(
+            b"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\"}}\n\n",
+        );
+        assert!(collector.failed());
     }
 
     #[test]

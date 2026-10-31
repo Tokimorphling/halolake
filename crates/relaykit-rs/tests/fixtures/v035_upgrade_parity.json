@@ -1,0 +1,3900 @@
+[
+  {
+    "case": {
+      "name": "v035/merge/two_empty_tool_messages",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_b",
+                "type": "function",
+                "function": {
+                  "name": "b",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/two_empty_tool_messages",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              },
+              {
+                "type": "tool_use",
+                "id": "call_b",
+                "name": "b",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/two_null_tool_messages",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_b",
+                "type": "function",
+                "function": {
+                  "name": "b",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/two_null_tool_messages",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              },
+              {
+                "type": "tool_use",
+                "id": "call_b",
+                "name": "b",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/text_and_tools",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "First",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Second",
+            "tool_calls": [
+              {
+                "id": "call_b",
+                "type": "function",
+                "function": {
+                  "name": "b",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/text_and_tools",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "First Second"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              },
+              {
+                "type": "tool_use",
+                "id": "call_b",
+                "name": "b",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/tool_then_text",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Then answer"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/tool_then_text",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Then answer"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/text_then_tool",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "First answer"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/text_then_tool",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "First answer"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/literal_ellipsis",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "...",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Then answer"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/literal_ellipsis",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "... Then answer"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/empty_plain_then_tool",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": ""
+          },
+          {
+            "role": "assistant",
+            "content": "Next",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/empty_plain_then_tool",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "... Next"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/three_tool_messages",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_b",
+                "type": "function",
+                "function": {
+                  "name": "b",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Final"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/three_tool_messages",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Final"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              },
+              {
+                "type": "tool_use",
+                "id": "call_b",
+                "name": "b",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/empty_messages_without_tools",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": ""
+          },
+          {
+            "role": "assistant",
+            "content": ""
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/empty_messages_without_tools",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": "... "
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/merge/null_text_and_tools",
+      "kind": "request",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "claude-test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Next",
+            "tool_calls": [
+              {
+                "id": "call_b",
+                "type": "function",
+                "function": {
+                  "name": "b",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "content": "a result"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_b",
+            "content": "b result"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "a",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "b",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "v035/merge/null_text_and_tools",
+      "quality": "fair",
+      "value": {
+        "model": "claude-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Start"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Next"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {}
+              },
+              {
+                "type": "tool_use",
+                "id": "call_b",
+                "name": "b",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "a result",
+                "tool_use_id": "call_a"
+              },
+              {
+                "type": "tool_result",
+                "content": "b result",
+                "tool_use_id": "call_b"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048,
+        "tools": [
+          {
+            "name": "a",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "name": "b",
+            "input_schema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/text_then_tool/openai",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Before the call",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "v035/assistant_content/text_then_tool/openai",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Before the call",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ],
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{\"n\":1}"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/text_then_tool/gemini",
+      "kind": "request",
+      "from": "claude",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Before the call",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "claude_messages_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "v035/assistant_content/text_then_tool/gemini",
+      "quality": "discouraged",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "call_a",
+                  "name": "a",
+                  "args": {
+                    "n": 1
+                  }
+                }
+              },
+              {
+                "text": "Before the call"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048
+        },
+        "tools": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/tool_then_text/openai",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              },
+              {
+                "type": "text",
+                "text": "Before the call",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "v035/assistant_content/tool_then_text/openai",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Before the call",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ],
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{\"n\":1}"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/tool_then_text/gemini",
+      "kind": "request",
+      "from": "claude",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              },
+              {
+                "type": "text",
+                "text": "Before the call",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "claude_messages_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "v035/assistant_content/tool_then_text/gemini",
+      "quality": "discouraged",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "call_a",
+                  "name": "a",
+                  "args": {
+                    "n": 1
+                  }
+                }
+              },
+              {
+                "text": "Before the call"
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048
+        },
+        "tools": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/only_tool/openai",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "v035/assistant_content/only_tool/openai",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{\"n\":1}"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/only_tool/gemini",
+      "kind": "request",
+      "from": "claude",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "claude_messages_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "v035/assistant_content/only_tool/gemini",
+      "quality": "discouraged",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "call_a",
+                  "name": "a",
+                  "args": {
+                    "n": 1
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048
+        },
+        "tools": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/empty_text_and_tool/openai",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "v035/assistant_content/empty_text_and_tool/openai",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ],
+            "tool_calls": [
+              {
+                "id": "call_a",
+                "type": "function",
+                "function": {
+                  "name": "a",
+                  "arguments": "{\"n\":1}"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/assistant_content/empty_text_and_tool/gemini",
+      "kind": "request",
+      "from": "claude",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "call_a",
+                "name": "a",
+                "input": {
+                  "n": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "model": "gemini-3-pro"
+    },
+    "expected": {
+      "converter": "claude_messages_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "v035/assistant_content/empty_text_and_tool/gemini",
+      "quality": "discouraged",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "call_a",
+                  "name": "a",
+                  "args": {
+                    "n": 1
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048
+        },
+        "tools": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/None",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/None",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": ""
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/low",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": "low"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/low",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "low",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/HIGH",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": "HIGH"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/HIGH",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "high",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/auto",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": "auto"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/auto",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/ original ",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": " original "
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/ original ",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "original",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/unsupported",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": "unsupported"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/unsupported",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/7",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.test/image.png",
+                  "detail": 7
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/7",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/image_detail/string_url",
+      "kind": "request",
+      "from": "openai",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image_url",
+                "image_url": "https://example.test/image.png"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/image_detail/string_url",
+      "quality": "good",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/claude_image/url/tool_result=False",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "url",
+                  "url": "https://example.test/image.png"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "claude_messages_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/claude_image/url/tool_result=False",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "max_output_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/claude_image/url/tool_result=True",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_a",
+                "content": [
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "url",
+                      "url": "https://example.test/image.png"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "claude_messages_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/claude_image/url/tool_result=True",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "call_id": "call_a",
+            "output": [
+              {
+                "detail": "auto",
+                "image_url": "https://example.test/image.png",
+                "type": "input_image"
+              }
+            ],
+            "type": "function_call_output"
+          }
+        ],
+        "max_output_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/claude_image/base64/tool_result=False",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "image/png",
+                  "data": "aGVsbG8="
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "claude_messages_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/claude_image/base64/tool_result=False",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "content": [
+              {
+                "detail": "auto",
+                "image_url": "data:image/png;base64,aGVsbG8=",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "max_output_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/claude_image/base64/tool_result=True",
+      "kind": "request",
+      "from": "claude",
+      "to": "openai_responses",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_a",
+                "content": [
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "base64",
+                      "media_type": "image/png",
+                      "data": "aGVsbG8="
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "claude_messages_to_openai_responses",
+      "diagnostics": null,
+      "name": "v035/claude_image/base64/tool_result=True",
+      "quality": "fair",
+      "value": {
+        "model": "test",
+        "input": [
+          {
+            "call_id": "call_a",
+            "output": [
+              {
+                "detail": "auto",
+                "image_url": "data:image/png;base64,aGVsbG8=",
+                "type": "input_image"
+              }
+            ],
+            "type": "function_call_output"
+          }
+        ],
+        "max_output_tokens": 2048
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_dto/binding",
+      "kind": "dto",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "type": "enabled",
+        "budget_tokens": 1024,
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
+      },
+      "model": "Thinking"
+    },
+    "expected": {
+      "name": "v035/thinking_dto/binding",
+      "value": {
+        "type": "enabled",
+        "budget_tokens": 1024,
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_native/binding",
+      "kind": "request",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1024,
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/thinking_native/binding",
+      "quality": "",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "max_tokens": 2048,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1024,
+          "block_binding": {
+            "prefix_mismatch_behavior": "drop_block"
+          }
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_dto/null_binding",
+      "kind": "dto",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "type": "adaptive",
+        "block_binding": null
+      },
+      "model": "Thinking"
+    },
+    "expected": {
+      "name": "v035/thinking_dto/null_binding",
+      "value": {
+        "type": "adaptive",
+        "block_binding": null
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_native/null_binding",
+      "kind": "request",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": null
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/thinking_native/null_binding",
+      "quality": "",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "max_tokens": 2048,
+        "thinking": {
+          "type": "adaptive",
+          "block_binding": null
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_dto/future_fields",
+      "kind": "dto",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "type": "adaptive",
+        "future_control": {
+          "enabled": true,
+          "modes": [
+            "a",
+            null
+          ]
+        },
+        "large_integer": 9007199254740993,
+        "future_null": null
+      },
+      "model": "Thinking"
+    },
+    "expected": {
+      "name": "v035/thinking_dto/future_fields",
+      "value": {
+        "future_control": {
+          "enabled": true,
+          "modes": [
+            "a",
+            null
+          ]
+        },
+        "future_null": null,
+        "large_integer": 9007199254740993,
+        "type": "adaptive"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_native/future_fields",
+      "kind": "request",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "thinking": {
+          "type": "adaptive",
+          "future_control": {
+            "enabled": true,
+            "modes": [
+              "a",
+              null
+            ]
+          },
+          "large_integer": 9007199254740993,
+          "future_null": null
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/thinking_native/future_fields",
+      "quality": "",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "max_tokens": 2048,
+        "thinking": {
+          "future_control": {
+            "enabled": true,
+            "modes": [
+              "a",
+              null
+            ]
+          },
+          "future_null": null,
+          "large_integer": 9007199254740993,
+          "type": "adaptive"
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_dto/empty",
+      "kind": "dto",
+      "from": "claude",
+      "to": "claude",
+      "input": {},
+      "model": "Thinking"
+    },
+    "expected": {
+      "name": "v035/thinking_dto/empty",
+      "value": {}
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_native/empty",
+      "kind": "request",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "thinking": {},
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/thinking_native/empty",
+      "quality": "",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "max_tokens": 2048,
+        "thinking": {}
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_dto/case_alias",
+      "kind": "dto",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "TYPE": "enabled",
+        "BUDGET_TOKENS": 1024,
+        "BLOCK_BINDING": {
+          "flag": true
+        }
+      },
+      "model": "Thinking"
+    },
+    "expected": {
+      "name": "v035/thinking_dto/case_alias",
+      "value": {
+        "BLOCK_BINDING": {
+          "flag": true
+        },
+        "BUDGET_TOKENS": 1024,
+        "TYPE": "enabled",
+        "block_binding": {
+          "flag": true
+        },
+        "budget_tokens": 1024,
+        "type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/thinking_native/case_alias",
+      "kind": "request",
+      "from": "claude",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_tokens": 2048,
+        "thinking": {
+          "TYPE": "enabled",
+          "BUDGET_TOKENS": 1024,
+          "BLOCK_BINDING": {
+            "flag": true
+          }
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/thinking_native/case_alias",
+      "quality": "",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "max_tokens": 2048,
+        "thinking": {
+          "BLOCK_BINDING": {
+            "flag": true
+          },
+          "BUDGET_TOKENS": 1024,
+          "TYPE": "enabled",
+          "block_binding": {
+            "flag": true
+          },
+          "budget_tokens": 1024,
+          "type": "enabled"
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_dto/missing",
+      "kind": "dto",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "reasoning_fixed",
+        "type": "reasoning",
+        "status": "in_progress"
+      },
+      "model": "ResponsesOutput"
+    },
+    "expected": {
+      "name": "v035/reasoning_dto/missing",
+      "value": {
+        "type": "reasoning",
+        "id": "reasoning_fixed",
+        "status": "in_progress",
+        "role": "",
+        "content": null,
+        "quality": "",
+        "size": "",
+        "summary": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_response/missing",
+      "kind": "response",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "resp_fixed",
+        "model": "test",
+        "status": "completed",
+        "output": [
+          {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/reasoning_response/missing",
+      "quality": "",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "resp_fixed",
+        "object": "",
+        "created_at": 0,
+        "status": "completed",
+        "instructions": null,
+        "max_output_tokens": 0,
+        "model": "test",
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "quality": "",
+            "size": "",
+            "summary": []
+          }
+        ],
+        "parallel_tool_calls": false,
+        "previous_response_id": null,
+        "reasoning": null,
+        "store": false,
+        "temperature": 0,
+        "tool_choice": null,
+        "tools": null,
+        "top_p": 0,
+        "truncation": null,
+        "usage": null,
+        "user": null,
+        "metadata": null
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_stream/missing",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "chunks": [
+        {
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress"
+          }
+        }
+      ]
+    },
+    "expected": {
+      "diagnostics": null,
+      "name": "v035/reasoning_stream/missing",
+      "usage": null,
+      "value": [
+        {
+          "type": "response.output_item.added",
+          "item": {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "quality": "",
+            "size": "",
+            "summary": []
+          },
+          "output_index": 0
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_dto/null",
+      "kind": "dto",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "reasoning_fixed",
+        "type": "reasoning",
+        "status": "in_progress",
+        "summary": null
+      },
+      "model": "ResponsesOutput"
+    },
+    "expected": {
+      "name": "v035/reasoning_dto/null",
+      "value": {
+        "type": "reasoning",
+        "id": "reasoning_fixed",
+        "status": "in_progress",
+        "role": "",
+        "content": null,
+        "quality": "",
+        "size": "",
+        "summary": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_response/null",
+      "kind": "response",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "resp_fixed",
+        "model": "test",
+        "status": "completed",
+        "output": [
+          {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": null
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/reasoning_response/null",
+      "quality": "",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "resp_fixed",
+        "object": "",
+        "created_at": 0,
+        "status": "completed",
+        "instructions": null,
+        "max_output_tokens": 0,
+        "model": "test",
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "quality": "",
+            "size": "",
+            "summary": []
+          }
+        ],
+        "parallel_tool_calls": false,
+        "previous_response_id": null,
+        "reasoning": null,
+        "store": false,
+        "temperature": 0,
+        "tool_choice": null,
+        "tools": null,
+        "top_p": 0,
+        "truncation": null,
+        "usage": null,
+        "user": null,
+        "metadata": null
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_stream/null",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "chunks": [
+        {
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": null
+          }
+        }
+      ]
+    },
+    "expected": {
+      "diagnostics": null,
+      "name": "v035/reasoning_stream/null",
+      "usage": null,
+      "value": [
+        {
+          "type": "response.output_item.added",
+          "item": {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "quality": "",
+            "size": "",
+            "summary": []
+          },
+          "output_index": 0
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_dto/empty",
+      "kind": "dto",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "reasoning_fixed",
+        "type": "reasoning",
+        "status": "in_progress",
+        "summary": []
+      },
+      "model": "ResponsesOutput"
+    },
+    "expected": {
+      "name": "v035/reasoning_dto/empty",
+      "value": {
+        "type": "reasoning",
+        "id": "reasoning_fixed",
+        "status": "in_progress",
+        "role": "",
+        "content": null,
+        "quality": "",
+        "size": "",
+        "summary": []
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_response/empty",
+      "kind": "response",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "resp_fixed",
+        "model": "test",
+        "status": "completed",
+        "output": [
+          {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": []
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/reasoning_response/empty",
+      "quality": "",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "resp_fixed",
+        "object": "",
+        "created_at": 0,
+        "status": "completed",
+        "instructions": null,
+        "max_output_tokens": 0,
+        "model": "test",
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "quality": "",
+            "size": "",
+            "summary": []
+          }
+        ],
+        "parallel_tool_calls": false,
+        "previous_response_id": null,
+        "reasoning": null,
+        "store": false,
+        "temperature": 0,
+        "tool_choice": null,
+        "tools": null,
+        "top_p": 0,
+        "truncation": null,
+        "usage": null,
+        "user": null,
+        "metadata": null
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_stream/empty",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "chunks": [
+        {
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": []
+          }
+        }
+      ]
+    },
+    "expected": {
+      "diagnostics": null,
+      "name": "v035/reasoning_stream/empty",
+      "usage": null,
+      "value": [
+        {
+          "type": "response.output_item.added",
+          "item": {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "quality": "",
+            "size": "",
+            "summary": []
+          },
+          "output_index": 0
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_dto/text",
+      "kind": "dto",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "reasoning_fixed",
+        "type": "reasoning",
+        "status": "in_progress",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "A thought"
+          }
+        ]
+      },
+      "model": "ResponsesOutput"
+    },
+    "expected": {
+      "name": "v035/reasoning_dto/text",
+      "value": {
+        "type": "reasoning",
+        "id": "reasoning_fixed",
+        "status": "in_progress",
+        "role": "",
+        "content": null,
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "A thought"
+          }
+        ],
+        "quality": "",
+        "size": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_response/text",
+      "kind": "response",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": {
+        "id": "resp_fixed",
+        "model": "test",
+        "status": "completed",
+        "output": [
+          {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "A thought"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "",
+      "diagnostics": null,
+      "name": "v035/reasoning_response/text",
+      "quality": "",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "resp_fixed",
+        "object": "",
+        "created_at": 0,
+        "status": "completed",
+        "instructions": null,
+        "max_output_tokens": 0,
+        "model": "test",
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "A thought"
+              }
+            ],
+            "quality": "",
+            "size": ""
+          }
+        ],
+        "parallel_tool_calls": false,
+        "previous_response_id": null,
+        "reasoning": null,
+        "store": false,
+        "temperature": 0,
+        "tool_choice": null,
+        "tools": null,
+        "top_p": 0,
+        "truncation": null,
+        "usage": null,
+        "user": null,
+        "metadata": null
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/reasoning_stream/text",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "chunks": [
+        {
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "reasoning_fixed",
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "A thought"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "expected": {
+      "diagnostics": null,
+      "name": "v035/reasoning_stream/text",
+      "usage": null,
+      "value": [
+        {
+          "type": "response.output_item.added",
+          "item": {
+            "type": "reasoning",
+            "id": "reasoning_fixed",
+            "status": "in_progress",
+            "role": "",
+            "content": null,
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "A thought"
+              }
+            ],
+            "quality": "",
+            "size": ""
+          },
+          "output_index": 0
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-flash",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-flash"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-flash",
+      "value": {
+        "base_model": "deepseek-flash",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-flash-none",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-flash-none"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-flash-none",
+      "value": {
+        "base_model": "deepseek-flash",
+        "effort": "",
+        "ok": true,
+        "thinking_type": "disabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-flash-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-flash-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-flash-low",
+      "value": {
+        "base_model": "deepseek-flash",
+        "effort": "low",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-flash-max",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-flash-max"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-flash-max",
+      "value": {
+        "base_model": "deepseek-flash",
+        "effort": "max",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-none",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4-pro-none"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-none",
+      "value": {
+        "base_model": "deepseek-v4-pro",
+        "effort": "",
+        "ok": true,
+        "thinking_type": "disabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4-pro-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-low",
+      "value": {
+        "base_model": "deepseek-v4-pro",
+        "effort": "low",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-max",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4-pro-max"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-max",
+      "value": {
+        "base_model": "deepseek-v4-pro",
+        "effort": "max",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4-flash-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4-flash-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4-flash-low",
+      "value": {
+        "base_model": "deepseek-v4-flash",
+        "effort": "low",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4.1-flash-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4.1-flash-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4.1-flash-low",
+      "value": {
+        "base_model": "deepseek-v4.1-flash-low",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4-test-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4-test-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4-test-low",
+      "value": {
+        "base_model": "deepseek-v4-test",
+        "effort": "low",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-flash-high",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-flash-high"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-flash-high",
+      "value": {
+        "base_model": "deepseek-flash-high",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-high",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4-pro-high"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4-pro-high",
+      "value": {
+        "base_model": "deepseek-v4-pro-high",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-low",
+      "value": {
+        "base_model": "deepseek-low",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v3-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v3-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v3-low",
+      "value": {
+        "base_model": "deepseek-v3-low",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/DeepSeek-flash-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "DeepSeek-flash-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/DeepSeek-flash-low",
+      "value": {
+        "base_model": "DeepSeek-flash-low",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/provider/deepseek-flash-low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "provider/deepseek-flash-low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/provider/deepseek-flash-low",
+      "value": {
+        "base_model": "provider/deepseek-flash-low",
+        "effort": "",
+        "ok": false,
+        "thinking_type": ""
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_suffix/deepseek-v4--low",
+      "kind": "deepseek_suffix",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-v4--low"
+      }
+    },
+    "expected": {
+      "name": "v035/deepseek_suffix/deepseek-v4--low",
+      "value": {
+        "base_model": "deepseek-v4-",
+        "effort": "low",
+        "ok": true,
+        "thinking_type": "enabled"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/channel_settings",
+      "kind": "dto",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "vertex_key_type": "api_key",
+        "vertex_project_id": "project-test",
+        "aws_api_type": "mantle"
+      },
+      "model": "ChannelOtherSettings"
+    },
+    "expected": {
+      "name": "v035/channel_settings",
+      "value": {
+        "vertex_key_type": "api_key",
+        "vertex_project_id": "project-test",
+        "aws_api_type": "mantle"
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/user_settings",
+      "kind": "dto",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "quota_warning_enabled": false,
+        "channel_notify_enabled": true
+      },
+      "model": "UserSetting"
+    },
+    "expected": {
+      "name": "v035/user_settings",
+      "value": {
+        "quota_warning_enabled": false,
+        "gotify_priority": 0,
+        "channel_notify_enabled": true
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "v035/deepseek_tools_dto",
+      "kind": "dto",
+      "from": "openai",
+      "to": "openai",
+      "input": {
+        "model": "deepseek-search",
+        "query": "ignored host-only body"
+      },
+      "model": "DeepSeekToolsRequest"
+    },
+    "expected": {
+      "name": "v035/deepseek_tools_dto",
+      "value": {
+        "model": "deepseek-search"
+      }
+    }
+  }
+]

@@ -1,0 +1,2161 @@
+[
+  {
+    "case": {
+      "name": "identity/openai/missing",
+      "kind": "stream",
+      "from": "openai",
+      "to": "openai",
+      "input": [
+        {}
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai",
+      "kind": "stream",
+      "name": "identity/openai/missing",
+      "to": "openai",
+      "usage": null,
+      "value": [
+        {
+          "id": "",
+          "object": "",
+          "created": 0,
+          "model": "",
+          "system_fingerprint": null,
+          "choices": null,
+          "usage": null
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai/null",
+      "kind": "stream",
+      "from": "openai",
+      "to": "openai",
+      "input": [
+        {
+          "usage": null
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai",
+      "kind": "stream",
+      "name": "identity/openai/null",
+      "to": "openai",
+      "usage": null,
+      "value": [
+        {
+          "id": "",
+          "object": "",
+          "created": 0,
+          "model": "",
+          "system_fingerprint": null,
+          "choices": null,
+          "usage": null
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai/empty",
+      "kind": "stream",
+      "from": "openai",
+      "to": "openai",
+      "input": [
+        {
+          "usage": {}
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai",
+      "kind": "stream",
+      "name": "identity/openai/empty",
+      "to": "openai",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "id": "",
+          "object": "",
+          "created": 0,
+          "model": "",
+          "system_fingerprint": null,
+          "choices": null,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai/canonical",
+      "kind": "stream",
+      "from": "openai",
+      "to": "openai",
+      "input": [
+        {
+          "usage": {
+            "prompt_tokens": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai",
+      "kind": "stream",
+      "name": "identity/openai/canonical",
+      "to": "openai",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "oai_chat",
+          "semantic": "openai",
+          "openai_usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "id": "",
+          "object": "",
+          "created": 0,
+          "model": "",
+          "system_fingerprint": null,
+          "choices": null,
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai/upper_top",
+      "kind": "stream",
+      "from": "openai",
+      "to": "openai",
+      "input": [
+        {
+          "USAGE": {
+            "prompt_tokens": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai",
+      "kind": "stream",
+      "name": "identity/openai/upper_top",
+      "to": "openai",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "oai_chat",
+          "semantic": "openai",
+          "openai_usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "id": "",
+          "object": "",
+          "created": 0,
+          "model": "",
+          "system_fingerprint": null,
+          "choices": null,
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai/upper_inner",
+      "kind": "stream",
+      "from": "openai",
+      "to": "openai",
+      "input": [
+        {
+          "usage": {
+            "PROMPT_TOKENS": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai",
+      "kind": "stream",
+      "name": "identity/openai/upper_inner",
+      "to": "openai",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "oai_chat",
+          "semantic": "openai",
+          "openai_usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "id": "",
+          "object": "",
+          "created": 0,
+          "model": "",
+          "system_fingerprint": null,
+          "choices": null,
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/missing",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {}
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/missing",
+      "to": "claude",
+      "usage": null,
+      "value": [
+        {
+          "type": ""
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/null",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "usage": null
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/null",
+      "to": "claude",
+      "usage": null,
+      "value": [
+        {
+          "type": ""
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/empty",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "usage": {}
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/empty",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "usage": {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/canonical",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "usage": {
+            "input_tokens": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/canonical",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/upper_top",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "USAGE": {
+            "input_tokens": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/upper_top",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/upper_inner",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "usage": {
+            "INPUT_TOKENS": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/upper_inner",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/message",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "message": {
+            "usage": {
+              "input_tokens": 7
+            }
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/message",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "message": {
+            "usage": {
+              "input_tokens": 7,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 0,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/null_with_message",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "usage": null,
+          "message": {
+            "usage": {
+              "input_tokens": 7
+            }
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/null_with_message",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "message": {
+            "usage": {
+              "input_tokens": 7,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 0,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/claude/upper_message",
+      "kind": "stream",
+      "from": "claude",
+      "to": "claude",
+      "input": [
+        {
+          "MESSAGE": {
+            "USAGE": {
+              "INPUT_TOKENS": 7
+            }
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "claude",
+      "kind": "stream",
+      "name": "identity/claude/upper_message",
+      "to": "claude",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 7,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "message": {
+            "usage": {
+              "input_tokens": 7,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 0,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/missing",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {}
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/missing",
+      "to": "openai_responses",
+      "usage": null,
+      "value": [
+        {
+          "type": ""
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/null",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "response": null
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/null",
+      "to": "openai_responses",
+      "usage": null,
+      "value": [
+        {
+          "type": ""
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/response_empty",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "response": {}
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/response_empty",
+      "to": "openai_responses",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "response": {
+            "id": "",
+            "object": "",
+            "created_at": 0,
+            "status": null,
+            "instructions": null,
+            "max_output_tokens": 0,
+            "model": "",
+            "output": null,
+            "parallel_tool_calls": false,
+            "previous_response_id": null,
+            "reasoning": null,
+            "store": false,
+            "temperature": 0,
+            "tool_choice": null,
+            "tools": null,
+            "top_p": 0,
+            "truncation": null,
+            "usage": null,
+            "user": null,
+            "metadata": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/usage_null",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "response": {
+            "usage": null
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/usage_null",
+      "to": "openai_responses",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "response": {
+            "id": "",
+            "object": "",
+            "created_at": 0,
+            "status": null,
+            "instructions": null,
+            "max_output_tokens": 0,
+            "model": "",
+            "output": null,
+            "parallel_tool_calls": false,
+            "previous_response_id": null,
+            "reasoning": null,
+            "store": false,
+            "temperature": 0,
+            "tool_choice": null,
+            "tools": null,
+            "top_p": 0,
+            "truncation": null,
+            "usage": null,
+            "user": null,
+            "metadata": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/empty",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "response": {
+            "usage": {}
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/empty",
+      "to": "openai_responses",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "response": {
+            "id": "",
+            "object": "",
+            "created_at": 0,
+            "status": null,
+            "instructions": null,
+            "max_output_tokens": 0,
+            "model": "",
+            "output": null,
+            "parallel_tool_calls": false,
+            "previous_response_id": null,
+            "reasoning": null,
+            "store": false,
+            "temperature": 0,
+            "tool_choice": null,
+            "tools": null,
+            "top_p": 0,
+            "truncation": null,
+            "usage": {
+              "prompt_tokens": 0,
+              "completion_tokens": 0,
+              "total_tokens": 0,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            },
+            "user": null,
+            "metadata": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/canonical",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "response": {
+            "usage": {
+              "input_tokens": 7
+            }
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/canonical",
+      "to": "openai_responses",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "oai_responses",
+          "semantic": "openai",
+          "openai_usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 7,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "response": {
+            "id": "",
+            "object": "",
+            "created_at": 0,
+            "status": null,
+            "instructions": null,
+            "max_output_tokens": 0,
+            "model": "",
+            "output": null,
+            "parallel_tool_calls": false,
+            "previous_response_id": null,
+            "reasoning": null,
+            "store": false,
+            "temperature": 0,
+            "tool_choice": null,
+            "tools": null,
+            "top_p": 0,
+            "truncation": null,
+            "usage": {
+              "prompt_tokens": 0,
+              "completion_tokens": 0,
+              "total_tokens": 0,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 7,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            },
+            "user": null,
+            "metadata": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/upper_top",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "RESPONSE": {
+            "usage": {
+              "input_tokens": 7
+            }
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/upper_top",
+      "to": "openai_responses",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "oai_responses",
+          "semantic": "openai",
+          "openai_usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 7,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "response": {
+            "id": "",
+            "object": "",
+            "created_at": 0,
+            "status": null,
+            "instructions": null,
+            "max_output_tokens": 0,
+            "model": "",
+            "output": null,
+            "parallel_tool_calls": false,
+            "previous_response_id": null,
+            "reasoning": null,
+            "store": false,
+            "temperature": 0,
+            "tool_choice": null,
+            "tools": null,
+            "top_p": 0,
+            "truncation": null,
+            "usage": {
+              "prompt_tokens": 0,
+              "completion_tokens": 0,
+              "total_tokens": 0,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 7,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            },
+            "user": null,
+            "metadata": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/openai_responses/upper_inner",
+      "kind": "stream",
+      "from": "openai_responses",
+      "to": "openai_responses",
+      "input": [
+        {
+          "response": {
+            "USAGE": {
+              "INPUT_TOKENS": 7
+            }
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "openai_responses",
+      "kind": "stream",
+      "name": "identity/openai_responses/upper_inner",
+      "to": "openai_responses",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "oai_responses",
+          "semantic": "openai",
+          "openai_usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0
+            },
+            "completion_tokens_details": {
+              "text_tokens": 0,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0
+            },
+            "input_tokens": 7,
+            "output_tokens": 0,
+            "input_tokens_details": null,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "type": "",
+          "response": {
+            "id": "",
+            "object": "",
+            "created_at": 0,
+            "status": null,
+            "instructions": null,
+            "max_output_tokens": 0,
+            "model": "",
+            "output": null,
+            "parallel_tool_calls": false,
+            "previous_response_id": null,
+            "reasoning": null,
+            "store": false,
+            "temperature": 0,
+            "tool_choice": null,
+            "tools": null,
+            "top_p": 0,
+            "truncation": null,
+            "usage": {
+              "prompt_tokens": 0,
+              "completion_tokens": 0,
+              "total_tokens": 0,
+              "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0
+              },
+              "completion_tokens_details": {
+                "text_tokens": 0,
+                "audio_tokens": 0,
+                "image_tokens": 0,
+                "reasoning_tokens": 0
+              },
+              "input_tokens": 7,
+              "output_tokens": 0,
+              "input_tokens_details": null,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            },
+            "user": null,
+            "metadata": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/gemini/missing",
+      "kind": "stream",
+      "from": "gemini",
+      "to": "gemini",
+      "input": [
+        {}
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "gemini",
+      "kind": "stream",
+      "name": "identity/gemini/missing",
+      "to": "gemini",
+      "usage": null,
+      "value": [
+        {
+          "candidates": null,
+          "usageMetadata": {
+            "promptTokenCount": 0,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": null,
+            "toolUsePromptTokensDetails": null,
+            "candidatesTokensDetails": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/gemini/null",
+      "kind": "stream",
+      "from": "gemini",
+      "to": "gemini",
+      "input": [
+        {
+          "usageMetadata": null
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "gemini",
+      "kind": "stream",
+      "name": "identity/gemini/null",
+      "to": "gemini",
+      "usage": null,
+      "value": [
+        {
+          "candidates": null,
+          "usageMetadata": {
+            "promptTokenCount": 0,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": null,
+            "toolUsePromptTokensDetails": null,
+            "candidatesTokensDetails": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/gemini/empty",
+      "kind": "stream",
+      "from": "gemini",
+      "to": "gemini",
+      "input": [
+        {
+          "usageMetadata": {}
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "gemini",
+      "kind": "stream",
+      "name": "identity/gemini/empty",
+      "to": "gemini",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "candidates": null,
+          "usageMetadata": {
+            "promptTokenCount": 0,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": null,
+            "toolUsePromptTokensDetails": null,
+            "candidatesTokensDetails": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/gemini/canonical",
+      "kind": "stream",
+      "from": "gemini",
+      "to": "gemini",
+      "input": [
+        {
+          "usageMetadata": {
+            "promptTokenCount": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "gemini",
+      "kind": "stream",
+      "name": "identity/gemini/canonical",
+      "to": "gemini",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "gemini_chat",
+          "semantic": "gemini",
+          "gemini_usage_metadata": {
+            "promptTokenCount": 7,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": [],
+            "toolUsePromptTokensDetails": [],
+            "candidatesTokensDetails": []
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 7,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "candidates": null,
+          "usageMetadata": {
+            "promptTokenCount": 7,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": null,
+            "toolUsePromptTokensDetails": null,
+            "candidatesTokensDetails": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/gemini/upper_top",
+      "kind": "stream",
+      "from": "gemini",
+      "to": "gemini",
+      "input": [
+        {
+          "USAGEMETADATA": {
+            "promptTokenCount": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "gemini",
+      "kind": "stream",
+      "name": "identity/gemini/upper_top",
+      "to": "gemini",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "gemini_chat",
+          "semantic": "gemini",
+          "gemini_usage_metadata": {
+            "promptTokenCount": 7,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": [],
+            "toolUsePromptTokensDetails": [],
+            "candidatesTokensDetails": []
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 7,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "candidates": null,
+          "usageMetadata": {
+            "promptTokenCount": 7,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": null,
+            "toolUsePromptTokensDetails": null,
+            "candidatesTokensDetails": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "case": {
+      "name": "identity/gemini/upper_inner",
+      "kind": "stream",
+      "from": "gemini",
+      "to": "gemini",
+      "input": [
+        {
+          "usageMetadata": {
+            "PROMPTTOKENCOUNT": 7
+          }
+        }
+      ],
+      "model": "",
+      "stream_options": {
+        "id": "stream_fixed",
+        "model": "stream-model",
+        "created_at": 1700000000
+      }
+    },
+    "expected": {
+      "diagnostics": null,
+      "from": "gemini",
+      "kind": "stream",
+      "name": "identity/gemini/upper_inner",
+      "to": "gemini",
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "total_tokens": 7,
+        "billing_usage": {
+          "source": "gemini_chat",
+          "semantic": "gemini",
+          "gemini_usage_metadata": {
+            "promptTokenCount": 7,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": [],
+            "toolUsePromptTokensDetails": [],
+            "candidatesTokensDetails": []
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 7,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": [
+        {
+          "candidates": null,
+          "usageMetadata": {
+            "promptTokenCount": 7,
+            "toolUsePromptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+            "thoughtsTokenCount": 0,
+            "cachedContentTokenCount": 0,
+            "promptTokensDetails": null,
+            "toolUsePromptTokensDetails": null,
+            "candidatesTokensDetails": null
+          }
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,423 @@
+[
+  {
+    "case": {
+      "name": "string_arguments/openai_responses_to_claude/float64",
+      "kind": "request",
+      "model": "test",
+      "from": "openai_responses",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_output_tokens": 100,
+        "input": [
+          {
+            "type": "function_call",
+            "call_id": "c",
+            "name": "f",
+            "arguments": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "c",
+            "output": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "string_arguments/openai_responses_to_claude/float64",
+      "quality": "fair",
+      "serialized_value": "{\"model\":\"test\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"...\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"f\",\"input\":{\"html\":\"\\u003ctag\\u003e\\u0026value\\u2028\\u2029\",\"large_integer\":9007199254740992,\"negative_zero\":-0,\"small\":0.000001,\"tiny\":1e-7}}]},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"{\\\"large_integer\\\":9007199254740993,\\\"small\\\":1e-06,\\\"tiny\\\":1e-07,\\\"negative_zero\\\":-0,\\\"html\\\":\\\"\\u003ctag\\u003e\\u0026value\\\\u2028\\\\u2029\\\"}\",\"tool_use_id\":\"c\"}]}],\"max_tokens\":100}",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "c",
+                "name": "f",
+                "input": {
+                  "html": "<tag>&value\u2028\u2029",
+                  "large_integer": 9007199254740992,
+                  "negative_zero": 0,
+                  "small": 1e-06,
+                  "tiny": 1e-07
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}",
+                "tool_use_id": "c"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 100
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "string_arguments/openai_to_claude/float64",
+      "kind": "request",
+      "model": "test",
+      "from": "openai",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_tokens": 100,
+        "messages": [
+          {
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "id": "c",
+                "type": "function",
+                "function": {
+                  "name": "f",
+                  "arguments": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_anthropic_messages",
+      "diagnostics": null,
+      "name": "string_arguments/openai_to_claude/float64",
+      "quality": "fair",
+      "serialized_value": "{\"model\":\"test\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"...\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"...\"},{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"f\",\"input\":{\"html\":\"\\u003ctag\\u003e\\u0026value\\u2028\\u2029\",\"large_integer\":9007199254740992,\"negative_zero\":-0,\"small\":0.000001,\"tiny\":1e-7}}]}],\"max_tokens\":100}",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              },
+              {
+                "type": "tool_use",
+                "id": "c",
+                "name": "f",
+                "input": {
+                  "html": "<tag>&value\u2028\u2029",
+                  "large_integer": 9007199254740992,
+                  "negative_zero": 0,
+                  "small": 1e-06,
+                  "tiny": 1e-07
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 100
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "string_arguments/openai_responses_to_claude/overflow",
+      "kind": "request",
+      "model": "test",
+      "from": "openai_responses",
+      "to": "claude",
+      "input": {
+        "model": "test",
+        "max_output_tokens": 100,
+        "input": [
+          {
+            "type": "function_call",
+            "call_id": "c",
+            "name": "f",
+            "arguments": "{\"overflow\":1e400}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "c",
+            "output": "{\"overflow\":1e400}"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_claude_messages",
+      "diagnostics": null,
+      "name": "string_arguments/openai_responses_to_claude/overflow",
+      "quality": "fair",
+      "serialized_value": "{\"model\":\"test\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"...\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"f\",\"input\":{\"arguments\":\"{\\\"overflow\\\":1e400}\"}}]},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"{\\\"overflow\\\":1e400}\",\"tool_use_id\":\"c\"}]}],\"max_tokens\":100}",
+      "value": {
+        "model": "test",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "c",
+                "name": "f",
+                "input": {
+                  "arguments": "{\"overflow\":1e400}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "content": "{\"overflow\":1e400}",
+                "tool_use_id": "c"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 100
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "string_arguments/openai_responses_to_gemini/float64",
+      "kind": "request",
+      "model": "test",
+      "from": "openai_responses",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_output_tokens": 100,
+        "input": [
+          {
+            "type": "function_call",
+            "call_id": "c",
+            "name": "f",
+            "arguments": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "c",
+            "output": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "string_arguments/openai_responses_to_gemini/float64",
+      "quality": "fair",
+      "serialized_value": "{\"contents\":[{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"id\":\"c\",\"name\":\"f\",\"args\":{\"html\":\"\\u003ctag\\u003e\\u0026value\\u2028\\u2029\",\"large_integer\":9007199254740992,\"negative_zero\":-0,\"small\":0.000001,\"tiny\":1e-7}}}]},{\"role\":\"user\",\"parts\":[{\"functionResponse\":{\"name\":\"f\",\"response\":{\"html\":\"\\u003ctag\\u003e\\u0026value\\u2028\\u2029\",\"large_integer\":9007199254740992,\"negative_zero\":-0,\"small\":0.000001,\"tiny\":1e-7},\"id\":\"c\"}}]}],\"generationConfig\":{\"maxOutputTokens\":100}}",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "c",
+                  "name": "f",
+                  "args": {
+                    "html": "<tag>&value\u2028\u2029",
+                    "large_integer": 9007199254740992,
+                    "negative_zero": 0,
+                    "small": 1e-06,
+                    "tiny": 1e-07
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "parts": [
+              {
+                "functionResponse": {
+                  "name": "f",
+                  "response": {
+                    "html": "<tag>&value\u2028\u2029",
+                    "large_integer": 9007199254740992,
+                    "negative_zero": 0,
+                    "small": 1e-06,
+                    "tiny": 1e-07
+                  },
+                  "id": "c"
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 100
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "string_arguments/openai_to_gemini/float64",
+      "kind": "request",
+      "model": "test",
+      "from": "openai",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_tokens": 100,
+        "messages": [
+          {
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "id": "c",
+                "type": "function",
+                "function": {
+                  "name": "f",
+                  "arguments": "{\"large_integer\":9007199254740993,\"small\":1e-06,\"tiny\":1e-07,\"negative_zero\":-0,\"html\":\"<tag>&value\\u2028\\u2029\"}"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_chat_completions_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "string_arguments/openai_to_gemini/float64",
+      "quality": "fair",
+      "serialized_value": "{\"contents\":[{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"id\":\"c\",\"name\":\"f\",\"args\":{\"html\":\"\\u003ctag\\u003e\\u0026value\\u2028\\u2029\",\"large_integer\":9007199254740992,\"negative_zero\":-0,\"small\":0.000001,\"tiny\":1e-7}}}]}],\"generationConfig\":{\"maxOutputTokens\":100}}",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "c",
+                  "name": "f",
+                  "args": {
+                    "html": "<tag>&value\u2028\u2029",
+                    "large_integer": 9007199254740992,
+                    "negative_zero": 0,
+                    "small": 1e-06,
+                    "tiny": 1e-07
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 100
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "string_arguments/openai_responses_to_gemini/overflow",
+      "kind": "request",
+      "model": "test",
+      "from": "openai_responses",
+      "to": "gemini",
+      "input": {
+        "model": "test",
+        "max_output_tokens": 100,
+        "input": [
+          {
+            "type": "function_call",
+            "call_id": "c",
+            "name": "f",
+            "arguments": "{\"overflow\":1e400}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "c",
+            "output": "{\"overflow\":1e400}"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "openai_responses_to_gemini_generate_content",
+      "diagnostics": null,
+      "name": "string_arguments/openai_responses_to_gemini/overflow",
+      "quality": "fair",
+      "serialized_value": "{\"contents\":[{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"id\":\"c\",\"name\":\"f\",\"args\":{\"arguments\":\"{\\\"overflow\\\":1e400}\"}}}]},{\"role\":\"user\",\"parts\":[{\"functionResponse\":{\"name\":\"f\",\"response\":{\"content\":\"{\\\"overflow\\\":1e400}\"},\"id\":\"c\"}}]}],\"generationConfig\":{\"maxOutputTokens\":100}}",
+      "value": {
+        "contents": [
+          {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "c",
+                  "name": "f",
+                  "args": {
+                    "arguments": "{\"overflow\":1e400}"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "parts": [
+              {
+                "functionResponse": {
+                  "name": "f",
+                  "response": {
+                    "content": "{\"overflow\":1e400}"
+                  },
+                  "id": "c"
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 100
+        }
+      }
+    }
+  }
+]

@@ -7,6 +7,7 @@ members = [
     "crates/control-storage",
     "crates/domain",
     "crates/protocol",
+    "crates/relaykit-rs",
     "crates/router-core",
     "crates/telemetry",
 ]
@@ -24,6 +25,7 @@ halolake-control-plane = { path = "crates/control-plane" }
 halolake-control-storage = { path = "crates/control-storage" }
 halolake-domain = { path = "crates/domain" }
 halolake-protocol = { path = "crates/protocol" }
+relaykit = { package = "relaykit-rs", path = "crates/relaykit-rs" }
 halolake-router-core = { path = "crates/router-core" }
 halolake-telemetry = { path = "crates/telemetry" }
 

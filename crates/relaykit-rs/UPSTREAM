@@ -1,0 +1,9 @@
+Repository: https://github.com/QuantumNous/new-api
+Path: relaykit
+Tag: main (unreleased after relaykit/v0.3.5)
+Commit: c59f6fd553921702cb47dacadc9731fa01548e96
+Module: v0.3.6-0.20261030132816-c59f6fd55392
+Baseline-Tag: relaykit/v0.3.5
+Baseline-Commit: d8e65613c09adf3663f960ea4316414a99694751
+Latest-Path-Commit: a2defd2a8256abe039e5295bd583aeb2d02f111f
+License: AGPL-3.0-only (see LICENSE)

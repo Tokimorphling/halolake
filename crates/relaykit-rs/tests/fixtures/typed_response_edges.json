@@ -1,0 +1,2441 @@
+[
+  {
+    "case": {
+      "name": "typed_edge/thinking_empty_last",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "first"
+          },
+          {
+            "type": "thinking",
+            "thinking": ""
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/thinking_empty_last",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"first\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "reasoning_content": "first"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/first_text_thinking_fallback",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "thinking": "aux"
+          },
+          {
+            "type": "thinking",
+            "thinking": ""
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/first_text_thinking_fallback",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\",\"reasoning_content\":\"aux\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x",
+              "reasoning_content": "aux"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/last_nonempty_thinking_wins",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "first"
+          },
+          {
+            "type": "text",
+            "text": "x"
+          },
+          {
+            "type": "thinking",
+            "thinking": "last"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/last_nonempty_thinking_wins",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\",\"reasoning_content\":\"last\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x",
+              "reasoning_content": "last"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/null_thinking_does_not_clear",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "first"
+          },
+          {
+            "type": "thinking",
+            "thinking": null
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/null_thinking_does_not_clear",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"first\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "reasoning_content": "first"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/first_unknown_thinking_fallback",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "unknown",
+            "thinking": "aux"
+          },
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/first_unknown_thinking_fallback",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\",\"reasoning_content\":\"aux\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x",
+              "reasoning_content": "aux"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/null_scalar_content",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": null,
+        "model": null,
+        "type": null,
+        "role": null,
+        "stop_reason": null,
+        "content": null
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/null_scalar_content",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"\",\"model\":\"\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "",
+        "model": "",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": ""
+            },
+            "finish_reason": ""
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/null_empty_content_blocks",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          null,
+          {},
+          {
+            "type": "text",
+            "text": null
+          },
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/null_empty_content_blocks",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": ""
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/mixed_case_fields",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "iD": "msg_placeholder",
+        "mOdEl": "m",
+        "tYpE": "message",
+        "cOnTeNt": [
+          {
+            "tYpE": "text",
+            "tExT": "casefold"
+          }
+        ],
+        "sToP_rEaSoN": "END_TURN",
+        "uSaGe": {
+          "iNpUt_tOkEnS": 3,
+          "oUtPuT_tOkEnS": 2
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/mixed_case_fields",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"casefold\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5,\"usage_semantic\":\"openai\",\"usage_source\":\"anthropic\",\"billing_usage\":{\"source\":\"claude_messages\",\"semantic\":\"anthropic\",\"claude_usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":2,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":3,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 2,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 3,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "casefold"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 3,
+          "completion_tokens": 2,
+          "total_tokens": 5,
+          "usage_semantic": "openai",
+          "usage_source": "anthropic",
+          "billing_usage": {
+            "source": "claude_messages",
+            "semantic": "anthropic",
+            "claude_usage": {
+              "input_tokens": 3,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 2,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 3,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/stop_reason_no_trim",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": " END_TURN ",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/stop_reason_no_trim",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\" END_TURN \"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": " END_TURN "
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/stop_reason_unknown",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "vendor_pause",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/stop_reason_unknown",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"vendor_pause\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": "vendor_pause"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/tool_args_any_and_encoding",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "c1",
+            "name": "f",
+            "input": null
+          },
+          {
+            "type": "tool_use",
+            "id": "c2",
+            "name": "g",
+            "input": [
+              1,
+              true,
+              "x"
+            ]
+          },
+          {
+            "type": "tool_use",
+            "id": "c3",
+            "name": "h",
+            "input": {
+              "html": "<tag>&\u2028\u2029",
+              "big": 9007199254740993,
+              "float": 1.0,
+              "small": 1e-07
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/tool_args_any_and_encoding",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"null\"}},{\"id\":\"c2\",\"type\":\"function\",\"function\":{\"name\":\"g\",\"arguments\":\"[1,true,\\\"x\\\"]\"}},{\"id\":\"c3\",\"type\":\"function\",\"function\":{\"name\":\"h\",\"arguments\":\"{\\\"big\\\":9007199254740992,\\\"float\\\":1,\\\"html\\\":\\\"\\\\u003ctag\\\\u003e\\\\u0026\\\\u2028\\\\u2029\\\",\\\"small\\\":1e-7}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "c1",
+                  "type": "function",
+                  "function": {
+                    "name": "f",
+                    "arguments": "null"
+                  }
+                },
+                {
+                  "id": "c2",
+                  "type": "function",
+                  "function": {
+                    "name": "g",
+                    "arguments": "[1,true,\"x\"]"
+                  }
+                },
+                {
+                  "id": "c3",
+                  "type": "function",
+                  "function": {
+                    "name": "h",
+                    "arguments": "{\"big\":9007199254740992,\"float\":1,\"html\":\"\\u003ctag\\u003e\\u0026\\u2028\\u2029\",\"small\":1e-7}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/large_integer_shortest_go_float",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "t",
+            "name": "f",
+            "input": {
+              "large": 100000000000000016
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/large_integer_shortest_go_float",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"t\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"{\\\"large\\\":100000000000000020}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "t",
+                  "type": "function",
+                  "function": {
+                    "name": "f",
+                    "arguments": "{\"large\":100000000000000020}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/negative_zero_tool_arg",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "t",
+            "name": "f",
+            "input": {
+              "negative_zero": -0.0
+            }
+          }
+        ],
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/negative_zero_tool_arg",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"t\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"{\\\"negative_zero\\\":-0}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2,\"usage_semantic\":\"openai\",\"usage_source\":\"anthropic\",\"billing_usage\":{\"source\":\"claude_messages\",\"semantic\":\"anthropic\",\"claude_usage\":{\"input_tokens\":1,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":1,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":1,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": {
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+        "total_tokens": 2,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 1,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 1,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 1,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "t",
+                  "type": "function",
+                  "function": {
+                    "name": "f",
+                    "arguments": "{\"negative_zero\":-0}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1,
+          "completion_tokens": 1,
+          "total_tokens": 2,
+          "usage_semantic": "openai",
+          "usage_source": "anthropic",
+          "billing_usage": {
+            "source": "claude_messages",
+            "semantic": "anthropic",
+            "claude_usage": {
+              "input_tokens": 1,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "output_tokens": 1,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 1,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/tool_missing_identity_input",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use"
+          },
+          {
+            "type": "tool_use",
+            "id": null,
+            "name": null
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/tool_missing_identity_input",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"type\":\"function\",\"function\":{\"arguments\":\"null\"}},{\"type\":\"function\",\"function\":{\"arguments\":\"null\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "arguments": "null"
+                  }
+                },
+                {
+                  "type": "function",
+                  "function": {
+                    "arguments": "null"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/unicode_citation_offsets",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "\u4f60\u597d\ud83d\ude42"
+          },
+          {
+            "type": "text",
+            "text": "a\ud83d\ude42\u6587z",
+            "citations": [
+              {
+                "url": " https://example.test/a ",
+                "title": " T ",
+                "cited_text": "\ud83d\ude42\u6587",
+                "encrypted_index": "opaque"
+              },
+              {
+                "url": "https://example.test/b",
+                "cited_text": "absent"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/unicode_citation_offsets",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\u4f60\u597d\ud83d\ude42a\ud83d\ude42\u6587z\",\"annotations\":[{\"type\":\"url_citation\",\"url_citation\":{\"cited_text\":\"\ud83d\ude42\u6587\",\"encrypted_index\":\"opaque\",\"end_index\":6,\"start_index\":4,\"title\":\"T\",\"url\":\"https://example.test/a\"}},{\"type\":\"url_citation\",\"url_citation\":{\"cited_text\":\"absent\",\"url\":\"https://example.test/b\"}}]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "\u4f60\u597d\ud83d\ude42a\ud83d\ude42\u6587z",
+              "annotations": [
+                {
+                  "type": "url_citation",
+                  "url_citation": {
+                    "cited_text": "\ud83d\ude42\u6587",
+                    "encrypted_index": "opaque",
+                    "end_index": 6,
+                    "start_index": 4,
+                    "title": "T",
+                    "url": "https://example.test/a"
+                  }
+                },
+                {
+                  "type": "url_citation",
+                  "url_citation": {
+                    "cited_text": "absent",
+                    "url": "https://example.test/b"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/citation_go_interface_coercion",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "\u4e2d0\u6587",
+            "citations": [
+              {
+                "url": 230,
+                "title": true,
+                "cited_text": 0,
+                "encrypted_index": [
+                  "a",
+                  null,
+                  {
+                    "z": 1000000,
+                    "b": [
+                      false,
+                      1e-05
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/citation_go_interface_coercion",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\u4e2d0\u6587\",\"annotations\":[{\"type\":\"url_citation\",\"url_citation\":{\"cited_text\":\"0\",\"encrypted_index\":\"[a \\u003cnil\\u003e map[b:[false 1e-05] z:1e+06]]\",\"end_index\":2,\"start_index\":1,\"title\":\"true\",\"url\":\"230\"}}]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "\u4e2d0\u6587",
+              "annotations": [
+                {
+                  "type": "url_citation",
+                  "url_citation": {
+                    "cited_text": "0",
+                    "encrypted_index": "[a <nil> map[b:[false 1e-05] z:1e+06]]",
+                    "end_index": 2,
+                    "start_index": 1,
+                    "title": "true",
+                    "url": "230"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/citation_nonarray_ignored",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "citations": {
+              "url": "https://example.test/a"
+            }
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/citation_nonarray_ignored",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/citation_bad_entry_ignores_whole_array",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "citations": [
+              {
+                "url": "https://example.test/a"
+              },
+              5
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/citation_bad_entry_ignores_whole_array",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/citation_null_entry_allowed",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "citations": [
+              null,
+              {
+                "url": "https://example.test/a"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/citation_null_entry_allowed",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\",\"annotations\":[{\"type\":\"url_citation\",\"url_citation\":{\"url\":\"https://example.test/a\"}}]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x",
+              "annotations": [
+                {
+                  "type": "url_citation",
+                  "url_citation": {
+                    "url": "https://example.test/a"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/nested_usage_fallback",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "usage": null,
+        "message": {
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 2,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 5
+          }
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/nested_usage_fallback",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":2,\"total_tokens\":14,\"usage_semantic\":\"openai\",\"usage_source\":\"anthropic\",\"billing_usage\":{\"source\":\"claude_messages\",\"semantic\":\"anthropic\",\"claude_usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":4,\"output_tokens\":2,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":4,\"cached_creation_tokens\":5,\"cache_write_tokens\":5,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":12,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":5,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": {
+        "prompt_tokens": 12,
+        "completion_tokens": 2,
+        "total_tokens": 14,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 5,
+            "cache_read_input_tokens": 4,
+            "output_tokens": 2,
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 4,
+          "cached_creation_tokens": 5,
+          "cache_write_tokens": 5,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 12,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 5,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 12,
+          "completion_tokens": 2,
+          "total_tokens": 14,
+          "usage_semantic": "openai",
+          "usage_source": "anthropic",
+          "billing_usage": {
+            "source": "claude_messages",
+            "semantic": "anthropic",
+            "claude_usage": {
+              "input_tokens": 3,
+              "cache_creation_input_tokens": 5,
+              "cache_read_input_tokens": 4,
+              "output_tokens": 2,
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 4,
+            "cached_creation_tokens": 5,
+            "cache_write_tokens": 5,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 12,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 5,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/top_empty_usage_overrides_nested",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "usage": {},
+        "message": {
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 2
+          }
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/top_empty_usage_overrides_nested",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"usage_semantic\":\"openai\",\"usage_source\":\"anthropic\",\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "usage_semantic": "openai",
+          "usage_source": "anthropic",
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/server_only_no_billing",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 2
+          }
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/server_only_no_billing",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"usage_semantic\":\"openai\",\"usage_source\":\"anthropic\",\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "usage_semantic": "openai",
+          "usage_source": "anthropic",
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/cache_split_aggregate_larger",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "cache_creation_input_tokens": 15,
+          "cache_read_input_tokens": 3,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 2,
+            "ephemeral_1h_input_tokens": 5
+          }
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/cache_split_aggregate_larger",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":28,\"completion_tokens\":2,\"total_tokens\":30,\"usage_semantic\":\"openai\",\"usage_source\":\"anthropic\",\"billing_usage\":{\"source\":\"claude_messages\",\"semantic\":\"anthropic\",\"claude_usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":15,\"cache_read_input_tokens\":3,\"output_tokens\":2,\"cache_creation\":{\"ephemeral_5m_input_tokens\":2,\"ephemeral_1h_input_tokens\":5},\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}},\"prompt_tokens_details\":{\"cached_tokens\":3,\"cached_creation_tokens\":15,\"cache_write_tokens\":15,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":28,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":10,\"claude_cache_creation_1_h_tokens\":5}}",
+      "usage": {
+        "prompt_tokens": 28,
+        "completion_tokens": 2,
+        "total_tokens": 30,
+        "usage_semantic": "openai",
+        "usage_source": "anthropic",
+        "billing_usage": {
+          "source": "claude_messages",
+          "semantic": "anthropic",
+          "claude_usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 15,
+            "cache_read_input_tokens": 3,
+            "output_tokens": 2,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 2,
+              "ephemeral_1h_input_tokens": 5
+            },
+            "claude_cache_creation_5_m_tokens": 0,
+            "claude_cache_creation_1_h_tokens": 0
+          }
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 3,
+          "cached_creation_tokens": 15,
+          "cache_write_tokens": 15,
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0
+        },
+        "completion_tokens_details": {
+          "text_tokens": 0,
+          "audio_tokens": 0,
+          "image_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "input_tokens": 28,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 10,
+        "claude_cache_creation_1_h_tokens": 5
+      },
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 28,
+          "completion_tokens": 2,
+          "total_tokens": 30,
+          "usage_semantic": "openai",
+          "usage_source": "anthropic",
+          "billing_usage": {
+            "source": "claude_messages",
+            "semantic": "anthropic",
+            "claude_usage": {
+              "input_tokens": 10,
+              "cache_creation_input_tokens": 15,
+              "cache_read_input_tokens": 3,
+              "output_tokens": 2,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 2,
+                "ephemeral_1h_input_tokens": 5
+              },
+              "claude_cache_creation_5_m_tokens": 0,
+              "claude_cache_creation_1_h_tokens": 0
+            }
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 3,
+            "cached_creation_tokens": 15,
+            "cache_write_tokens": 15,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 28,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 10,
+          "claude_cache_creation_1_h_tokens": 5
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/unknown_fields_dropped",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "extra": "ignored"
+          }
+        ],
+        "extra": {
+          "ignored": "x"
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/unknown_fields_dropped",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/hosted_filtered_before_thinking",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "pause_turn",
+        "content": [
+          {
+            "type": "server_tool_use",
+            "id": "s",
+            "name": "web_search",
+            "input": {
+              "query": "placeholder"
+            }
+          },
+          {
+            "type": "thinking",
+            "thinking": "fallback"
+          },
+          {
+            "type": "thinking",
+            "thinking": ""
+          },
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": [
+        {
+          "code": "continuation_state_lost",
+          "path": "stop_reason",
+          "message": "Claude pause_turn requires protocol-native continuation state that the target response cannot preserve",
+          "severity": "error",
+          "from": "claude",
+          "to": "openai"
+        },
+        {
+          "code": "hosted_tool_unrepresentable",
+          "path": "content[0]",
+          "message": "openai cannot losslessly represent Claude hosted-tool response block \"server_tool_use\"",
+          "severity": "error",
+          "from": "claude",
+          "to": "openai"
+        },
+        {
+          "code": "hosted_tool_event_omitted",
+          "path": "hosted_tools[0]",
+          "message": "openai cannot represent hosted-tool response \"server_tool_use\"",
+          "severity": "warning",
+          "from": "claude",
+          "to": "openai"
+        }
+      ],
+      "name": "typed_edge/hosted_filtered_before_thinking",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"x\",\"reasoning_content\":\"fallback\"},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "x",
+              "reasoning_content": "fallback"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/redacted_state_diagnostic",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "pause_turn",
+        "content": [
+          {
+            "type": "redacted_thinking",
+            "data": "opaque"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": [
+        {
+          "code": "continuation_state_lost",
+          "path": "stop_reason",
+          "message": "Claude pause_turn requires protocol-native continuation state that the target response cannot preserve",
+          "severity": "error",
+          "from": "claude",
+          "to": "openai"
+        },
+        {
+          "code": "continuation_state_lost",
+          "path": "content[0].data",
+          "message": "Claude encrypted thinking state cannot be represented by the target response",
+          "severity": "error",
+          "from": "claude",
+          "to": "openai"
+        }
+      ],
+      "name": "typed_edge/redacted_state_diagnostic",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": ""
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/null_usage_nested_null",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "usage": null,
+        "message": {
+          "usage": null
+        }
+      }
+    },
+    "expected": {
+      "converter": "anthropic_messages_to_openai_chat_completions",
+      "diagnostics": null,
+      "name": "typed_edge/null_usage_nested_null",
+      "quality": "fair",
+      "serialized_value": "{\"id\":\"msg_placeholder\",\"model\":\"m\",\"object\":\"chat.completion\",\"created\":1793382412,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0,\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0},\"completion_tokens_details\":{\"text_tokens\":0,\"audio_tokens\":0,\"image_tokens\":0,\"reasoning_tokens\":0},\"input_tokens\":0,\"output_tokens\":0,\"input_tokens_details\":null,\"claude_cache_creation_5_m_tokens\":0,\"claude_cache_creation_1_h_tokens\":0}}",
+      "usage": null,
+      "value": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "object": "chat.completion",
+        "created": 1793382412,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 0,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "input_tokens_details": null,
+          "claude_cache_creation_5_m_tokens": 0,
+          "claude_cache_creation_1_h_tokens": 0
+        }
+      }
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/invalid_scalar_rejected",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": 5,
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "error": "json: cannot unmarshal number into Go struct field ClaudeResponse.id of type string",
+      "name": "typed_edge/invalid_scalar_rejected"
+    }
+  },
+  {
+    "case": {
+      "name": "typed_edge/invalid_content_rejected",
+      "kind": "response",
+      "from": "claude",
+      "to": "openai",
+      "input": {
+        "id": "msg_placeholder",
+        "model": "m",
+        "type": "message",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": "text"
+      }
+    },
+    "expected": {
+      "error": "json: cannot unmarshal string into Go struct field ClaudeResponse.content of type []dto.ClaudeMediaMessage",
+      "name": "typed_edge/invalid_content_rejected"
+    }
+  }
+]
